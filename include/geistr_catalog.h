@@ -193,6 +193,12 @@ typedef struct geistr_fit {
     bool                        installed;
 } geistr_fit;
 
+/* The resource fit of one model on this device, without speed (as in
+ * geistr_rank): may it run here at all, and how comfortably. *reason gets a
+ * resource_reason code (static). entry need not come from a parsed catalog. */
+geistr_resource geistr_assess(const geistr_catalog_entry *entry, const geistr_device *device, bool installed,
+                              const char **reason);
+
 typedef struct geistr_ranking geistr_ranking;
 
 /* Rank every catalog model for this device. local is indexed like the

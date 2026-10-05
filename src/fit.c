@@ -240,6 +240,20 @@ static geistr_verdict judge(geistr_resource resource, double seconds, bool estim
     return *reason = "good", GEISTR_VERDICT_GOOD;
 }
 
+geistr_resource geistr_assess(const geistr_catalog_entry *m, const geistr_device *device, bool installed,
+                              const char **reason) {
+    const char   *ignored;
+    geistr_device d = {};
+    if (!reason)
+        reason = &ignored;
+    if (!m || !device || device->size < sizeof(size_t) || device->size > sizeof d) {
+        *reason = "invalid";
+        return GEISTR_RESOURCE_UNAVAILABLE;
+    }
+    memcpy(&d, device, device->size);
+    return assess(&d, m, installed, reason);
+}
+
 /* ---- ranking ------------------------------------------------------------ */
 
 struct candidate {

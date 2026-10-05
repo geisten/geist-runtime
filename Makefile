@@ -1,6 +1,7 @@
 # geist-runtime — embeddable model runner on geistlib.
 #
 #   make             stub library, conformance tests, example (no engine needed)
+#   make core        build/libgeistr-core.a: catalog, fit, templates, text (no engine)
 #   make test        run them
 #   make sanitize    the same under ASan + UBSan
 #   make runtime     the real libgeistr.a on the pinned geistlib engine
@@ -29,15 +30,23 @@ override CXXFLAGS += -std=c++20 $(WARN) -Iinclude
 LDLIBS   += -lpthread
 
 LIB  := $(BUILD)/libgeistr-stub.a
+CORE := $(BUILD)/libgeistr-core.a
 TEXT := $(BUILD)/template.o $(BUILD)/stream.o $(BUILD)/catalog.o $(BUILD)/fit.o $(BUILD)/decision_config.o $(BUILD)/decision_profile.o
 
-all: $(LIB) $(BUILD)/test_api $(BUILD)/test_cxx $(BUILD)/test_template $(BUILD)/test_stream $(BUILD)/test_window $(BUILD)/test_catalog $(BUILD)/test_fit $(BUILD)/test_decision_config $(BUILD)/test_decision_profile $(BUILD)/chat
+all: $(LIB) $(CORE) $(BUILD)/test_api $(BUILD)/test_cxx $(BUILD)/test_template $(BUILD)/test_stream $(BUILD)/test_window $(BUILD)/test_catalog $(BUILD)/test_fit $(BUILD)/test_decision_config $(BUILD)/test_decision_profile $(BUILD)/chat
 
 $(BUILD)/%.o: src/%.c src/*.h include/*.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(LIB): $(BUILD)/stub.o $(TEXT)
 	ar rcs $@ $^
+
+# Everything that needs no engine: templates, text stages, catalog, fit. For
+# processes that never load a model (geist-app): link with this alone.
+$(CORE): $(TEXT)
+	ar rcs $@ $^
+
+core: $(CORE)
 
 $(BUILD)/test_api: tests/test_api.c $(LIB)
 	$(CC) $(CFLAGS) $< $(LIB) $(LDFLAGS) $(LDLIBS) -o $@
@@ -253,4 +262,4 @@ sanitize:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test sanitize parity clean runtime test-real chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python FORCE
+.PHONY: core all test sanitize parity clean runtime test-real chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python FORCE
