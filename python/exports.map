@@ -1,0 +1,4 @@
+{
+    global: geistr_*;
+    local: *;
+};

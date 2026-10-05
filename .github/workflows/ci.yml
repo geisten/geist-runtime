@@ -90,3 +90,22 @@ jobs:
       # #11: the CLI against the reference model, with and without the download module.
       - name: geistr CLI
         run: make test-geistr PULL=1
+      # #9: the Python package. pip install the wheel into a fresh venv; the
+      # 10-line example and the tests. Linux: auditwheel makes it manylinux
+      # (bundles libgomp), and the repaired wheel runs the example again.
+      - name: python wheel
+        run: make test-python
+      - name: manylinux wheel (linux)
+        if: runner.os == 'Linux'
+        run: |
+          python3 -m venv /tmp/tools && /tmp/tools/bin/pip install -q auditwheel patchelf
+          /tmp/tools/bin/auditwheel repair build/wheel/geistr-*.whl -w build/wheelhouse
+          python3 -m venv /tmp/clean && /tmp/clean/bin/pip install -q build/wheelhouse/geistr-*.whl
+          cd /tmp && /tmp/clean/bin/python "$GITHUB_WORKSPACE/examples/chat.py" "$GITHUB_WORKSPACE/geistlib/gguf_artifacts/smollm2-360m-instruct-q8_0.gguf"
+      - name: macOS wheel
+        if: runner.os == 'macOS'
+        run: mkdir -p build/wheelhouse && cp build/wheel/geistr-*.whl build/wheelhouse/
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: geistr-wheel-${{ matrix.runner }}
+          path: build/wheelhouse/geistr-*.whl

@@ -9,6 +9,8 @@
 #   make chat-real   build/chat-real: the example chat on the real runtime
 #   make geistr      build/geistr: the CLI (PULL=0: without the download module)
 #   make test-geistr the CLI against the reference model
+#   make wheel       build/wheel/geistr-*.whl: the Python package (#9)
+#   make test-python pip install it into a venv; example and tests
 #   make parity SERVE_DIR=../geist-serve   templates byte-identical to geist-serve,
 #                    and the same catalog
 #
@@ -22,7 +24,7 @@ BUILD    ?= build
 WARN     := -Wall -Wextra -Wpedantic -Werror -Wshadow -Wconversion -Wno-sign-conversion
 CFLAGS   ?= -O2 -g
 CXXFLAGS ?= -O2 -g
-override CFLAGS   += -std=c23 $(WARN) -Iinclude -D_POSIX_C_SOURCE=200809L -D_DARWIN_C_SOURCE
+override CFLAGS   += -std=c23 $(WARN) -fPIC -Iinclude -D_POSIX_C_SOURCE=200809L -D_DARWIN_C_SOURCE
 override CXXFLAGS += -std=c++20 $(WARN) -Iinclude
 LDLIBS   += -lpthread
 
@@ -78,7 +80,7 @@ test: all
 	  { echo "example chat failed: $$out"; exit 1; }
 
 # ---- the real runtime on geistlib (#4) ---------------------------------------
-ENGINE_GOALS := runtime test-real chat-real fetch-model geistr test-geistr
+ENGINE_GOALS := runtime test-real chat-real fetch-model geistr test-geistr shared wheel test-python
 ifneq (,$(filter $(ENGINE_GOALS),$(MAKECMDGOALS)))
 GEIST_REPO ?= https://github.com/geisten/geistlib.git
 GEIST_REF  ?= 5dd7e1747df86092a320e638c66993afd409e3b6
@@ -89,6 +91,8 @@ ifneq ($(ENGINE),ok)
 $(error engine sync failed — see the messages above)
 endif
 GEMM_PROVIDER ?= native
+# Self-contained binaries and libraries on macOS: libomp linked statically.
+GEIST_STATIC_OMP ?= 1
 ifeq ($(shell uname -s)-$(shell uname -m),Darwin-arm64)
 BACKENDS ?= cpu_neon cpu_scalar metal
 endif
@@ -104,10 +108,12 @@ endif
 RUNTIME := $(BUILD)/libgeistr.a
 
 # Always delegate: the engine's own make is incremental, and a plain file
-# target would go stale on a GEIST_REF bump.
+# target would go stale on a GEIST_REF bump. -fPIC rides on CC so it reaches
+# every engine object (stb has its own rule without EXTRA_CFLAGS): the engine
+# goes into libgeistr.so too.
 $(ENGINE_LIB): FORCE
 	$(MAKE) -C $(GEISTLIB) lib TARGET=$(TARGET) MODE=$(ENGINE_MODE) \
-		GEMM_PROVIDER=$(GEMM_PROVIDER) BACKENDS="$(BACKENDS)"
+		GEMM_PROVIDER=$(GEMM_PROVIDER) BACKENDS="$(BACKENDS)" CC="$(CC) -fPIC"
 
 $(BUILD)/runtime.o: src/runtime.c src/*.h include/geistr.h $(ENGINE_LIB) | $(BUILD)
 	$(CC) $(CFLAGS) -isystem $(GEISTLIB)/include -c $< -o $@
@@ -124,6 +130,37 @@ $(BUILD)/chat-real: examples/chat.c $(RUNTIME) $(ENGINE_LIB)
 	$(CC) $(CFLAGS) -isystem $(GEISTLIB)/include $< $(RUNTIME) $(ENGINE_LINK) $(LDFLAGS) $(LDLIBS) -o $@
 
 chat-real: $(BUILD)/chat-real
+
+# ---- shared library and Python wheel (#9) ---------------------------------------
+# libgeistr.{dylib,so}: runtime and engine in one file that exports only geistr_*.
+ifeq ($(shell uname -s),Darwin)
+SHLIB      := $(BUILD)/libgeistr.dylib
+SHLIB_LINK  = -dynamiclib -install_name @rpath/libgeistr.dylib -Wl,-exported_symbol,_geistr_* \
+              -Wl,-force_load,$(RUNTIME)
+else
+SHLIB      := $(BUILD)/libgeistr.so
+SHLIB_LINK  = -shared -Wl,--version-script=python/exports.map -Wl,--whole-archive $(RUNTIME) -Wl,--no-whole-archive
+endif
+
+$(SHLIB): $(RUNTIME) $(ENGINE_LIB) python/exports.map
+	$(CC) $(SHLIB_LINK) $(ENGINE_LINK) $(LDFLAGS) $(LDLIBS) -o $@
+
+shared: $(SHLIB)
+
+# A platform wheel (ctypes, no extension module) in build/wheel/.
+wheel: $(SHLIB)
+	python3 scripts/build-wheel.py $(SHLIB) $(BUILD)/wheel
+
+$(BUILD)/abi_sizes: tests/abi_sizes.c include/*.h | $(BUILD)
+	$(CC) $(CFLAGS) $< -o $@
+
+# pip install the wheel into a fresh venv; run the example and the tests.
+test-python: wheel $(BUILD)/abi_sizes
+	@test -f "$(GEIST_TEST_MODEL)" || { echo "no reference model at $(GEIST_TEST_MODEL): make fetch-model"; exit 1; }
+	rm -rf $(BUILD)/venv && python3 -m venv $(BUILD)/venv
+	$(BUILD)/venv/bin/pip install -q $(BUILD)/wheel/geistr-*.whl
+	cd $(BUILD) && venv/bin/python ../examples/chat.py "$(abspath $(GEIST_TEST_MODEL))" < /dev/null
+	$(BUILD)/venv/bin/python tests/test_python.py "$(abspath $(GEIST_TEST_MODEL))" $(BUILD)/abi_sizes
 
 # ---- the geistr CLI (#11) -------------------------------------------------------
 # PULL=1 adds the download module (libcurl); PULL=0 builds without network code.
@@ -187,4 +224,4 @@ sanitize:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test sanitize parity clean runtime test-real chat-real fetch-model geistr test-geistr FORCE
+.PHONY: all test sanitize parity clean runtime test-real chat-real fetch-model geistr test-geistr shared wheel test-python FORCE

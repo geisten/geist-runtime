@@ -15,7 +15,7 @@ Status: in are the API (#1), templates (#2), streaming text (#3), the
 runtime on geistlib with context management (#4), the model catalog with
 SHA-256 verification (#5) and device fit with the model ranking (#6), both in
 [`include/geistr_catalog.h`](include/geistr_catalog.h), and the `geistr` CLI
-(#11). `src/stub.c` implements the API without an engine, for the fast
+(#11) and the Python package `geistr` (#9). `src/stub.c` implements the API without an engine, for the fast
 conformance tests.
 
 ```sh
@@ -52,3 +52,26 @@ network code. `--json` is schema 1: `schema`, `models_dir`, and per model
 `id`, `name`, `quantization`, `file`, `url`, `sha256`, `bytes`,
 `recommended_ram_gib`, `state` (available, unverified, installed, mismatch),
 `resource` (fits, limited, unavailable), `resource_reason`.
+
+## Python
+
+```python
+import geistr
+
+for m in geistr.catalog(installed=True):      # the same models as `geistr catalog`
+    print(m.id, m.name, m.state)
+
+with geistr.chat("gemma4-e2b", system="Answer briefly.") as chat:
+    for piece in chat.send("What is the capital of France?"):   # streamed
+        print(piece, end="", flush=True)
+    print(chat.ask("And of Italy?"))           # only the new message is processed
+```
+
+`make wheel` builds `build/wheel/geistr-*.whl`: ctypes over `libgeistr`
+(only `geistr_*` exported), no compiled extension, no dependencies.
+`geistr.open(model)` gives a `Model` (`.info`, `.chat(...)`); a `Chat` has
+`send`, `ask`, `cancel` (any thread), `rewind`, `len()`, `stats`. Leaving a
+`for` over `send()` early, or Ctrl-C, stops the answer; the chat goes on.
+Failures raise `geistr.GeistrError` with `.status` ("io", "context", …).
+CI builds wheels for macOS arm64 and Linux x86_64/arm64 (manylinux via
+auditwheel) and runs `examples/chat.py` from a fresh `pip install`.
