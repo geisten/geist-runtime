@@ -107,9 +107,7 @@ while len(seen) < 40:
     seen += p.stdout.read(1)
 p.send_signal(signal.SIGINT)
 time.sleep(.5)
-p.stdin.write('What is the capital of France? Answer in one word.\n')
-p.stdin.close()
-out, err = p.communicate(timeout=120)
+out, err = p.communicate('What is the capital of France? Answer in one word.\n', timeout=120)
 assert p.returncode == 0 and '[stopped]' in out and 'Paris' in out.split('[stopped]')[1], (out, err)
 print('geistr run/chat: answers, prompt from stdin, Ctrl-C (130 / stopped answer), exit codes passed')
 
