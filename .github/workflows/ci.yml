@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash  # -eo pipefail: a step piped into tee still fails
+
 jobs:
   test:
     strategy:
@@ -37,9 +41,9 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update -q && sudo apt-get install -y -q gcc-14 g++-14 clang-18
       - name: build and test
-        run: make test
+        run: mkdir -p build/logs && make test 2>&1 | tee build/logs/test.log
       - name: sanitizers (ASan, UBSan; leaks on Linux)
-        run: make sanitize
+        run: make sanitize 2>&1 | tee build/logs/sanitize.log
       # #2: the templates render byte-identical to geist-serve's at this commit.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -47,7 +51,17 @@ jobs:
           ref: 3cb514aaf6a0231a4375024548a60c6aee44ffb2
           path: serve
       - name: parity with geist-serve
-        run: make parity SERVE_DIR=serve
+        run: make parity SERVE_DIR=serve 2>&1 | tee build/logs/parity.log
+
+      - name: evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: evidence-test-${{ matrix.runner }}-${{ matrix.cc }}
+          path: |
+            build/logs/
+            build/*.txt
+          if-no-files-found: ignore
 
   # #4: the real runtime on the pinned geistlib, against the reference model.
   real:
@@ -75,7 +89,7 @@ jobs:
         run: brew install libomp
       # The engine checkout first: the model cache restores into it.
       - name: engine and runtime
-        run: make runtime
+        run: mkdir -p build/logs && make runtime 2>&1 | tee build/logs/runtime.log
       - name: cache reference model
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -84,17 +98,17 @@ jobs:
       - name: fetch reference model (SmolLM2 from the catalog, SHA-verified)
         run: make fetch-model
       - name: real runtime tests
-        run: make test-real
+        run: make test-real 2>&1 | tee build/logs/test-real.log
       - name: real runtime tests (ASan, UBSan; leaks on Linux)
-        run: make BUILD=build/san CFLAGS="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all" LDFLAGS="-fsanitize=address,undefined" test-real
+        run: make BUILD=build/san CFLAGS="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all" LDFLAGS="-fsanitize=address,undefined" test-real 2>&1 | tee build/logs/test-real-asan.log
       # #11: the CLI against the reference model, with and without the download module.
       - name: geistr CLI
-        run: make test-geistr PULL=1
+        run: make test-geistr PULL=1 2>&1 | tee build/logs/test-geistr.log
       # #9: the Python package. pip install the wheel into a fresh venv; the
       # 10-line example and the tests. Linux: auditwheel makes it manylinux
       # (bundles libgomp), and the repaired wheel runs the example again.
       - name: python wheel
-        run: make test-python
+        run: make test-python 2>&1 | tee build/logs/test-python.log
       - name: manylinux wheel (linux)
         if: runner.os == 'Linux'
         run: |
@@ -109,3 +123,25 @@ jobs:
         with:
           name: geistr-wheel-${{ matrix.runner }}
           path: build/wheelhouse/geistr-*.whl
+      - name: evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: evidence-real-${{ matrix.runner }}
+          path: |
+            build/logs/
+            build/wheel/
+          if-no-files-found: ignore
+
+  # #10: the one required check. Branch protection names this job, so the
+  # matrix can change without touching the protection rules.
+  ci-ok:
+    if: always()
+    needs: [test, real]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: every platform passed
+        run: |
+          echo "test: ${{ needs.test.result }}, real: ${{ needs.real.result }}"
+          test "${{ needs.test.result }}" = success && test "${{ needs.real.result }}" = success
