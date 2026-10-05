@@ -21,6 +21,11 @@
 #include <sys/auxv.h>
 #endif
 
+/* Names and OS strings are display text: truncation is fine. */
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic ignored "-Wformat-truncation"
+#endif
+
 #define GIB UINT64_C(1073741824)
 #define MIB UINT64_C(1048576)
 #define TYPICAL_ANSWER_TOKENS 200 /* about 150 words */
@@ -162,7 +167,7 @@ geistr_status geistr_device_probe(const char *models_dir, geistr_device *out) {
 /* app_assess: what the hardware allows, before any speed. */
 static geistr_resource assess(const geistr_device *h, const geistr_catalog_entry *m, bool installed,
                               const char **reason) {
-    *reason = "not_measured";
+    *reason = "not_measured"; /* fits, no device profile */
     if (m->unsupported_format || !m->backends)
         return *reason = "unsupported_format", GEISTR_RESOURCE_UNAVAILABLE;
     if (!h->supported)
@@ -177,10 +182,9 @@ static geistr_resource assess(const geistr_device *h, const geistr_catalog_entry
         return *reason = "available_ram", GEISTR_RESOURCE_LIMITED;
     if ((h->kind == GEISTR_DEVICE_PI5 && !strcmp(m->id, "bitnet-2b")) ||
         (h->kind == GEISTR_DEVICE_APPLE_SILICON && h->cores >= 4))
-        return *reason = "fits", GEISTR_RESOURCE_FITS;
-    /* ponytail: as geist-serve; elsewhere an unmeasured model stays LIMITED,
-     * which the verdict reports as tight_memory. */
-    return GEISTR_RESOURCE_LIMITED;
+        *reason = "fits";
+    /* Unknown speed is not a resource limit; the verdict weighs speed. */
+    return GEISTR_RESOURCE_FITS;
 }
 
 static double answer_seconds(double rate, double first) {

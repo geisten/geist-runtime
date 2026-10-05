@@ -89,7 +89,8 @@ static void assess(const geistr_catalog *c) {
     CHECK(resource(c, &h, "bitnet-2b", true) == GEISTR_RESOURCE_LIMITED);
     h.disk_known = h.available_known = false;
     h.kind                           = GEISTR_DEVICE_OTHER;
-    CHECK(resource(c, &h, "bitnet-2b", false) == GEISTR_RESOURCE_LIMITED);
+    /* Unmeasured is not limited: a fast, reliable model on Linux is good. */
+    CHECK(resource(c, &h, "bitnet-2b", false) == GEISTR_RESOURCE_FITS);
     h.ram = GIB;
     CHECK(resource(c, &h, "bitnet-2b", false) == GEISTR_RESOURCE_UNAVAILABLE);
     h.ram  = 16 * GIB;
@@ -106,7 +107,7 @@ static geistr_verdict verdict(geistr_resource res, double seconds, unsigned pass
     uint64_t        bytes = GIB;
     geistr_catalog *c     = synthetic(1, &bytes, &passed, &total);
     geistr_device   d     = {.size = sizeof d, .supported = true, .ram = 64 * GIB, .cores = 8,
-                             .kind = res == GEISTR_RESOURCE_FITS ? GEISTR_DEVICE_APPLE_SILICON : GEISTR_DEVICE_OTHER};
+                             .available_known = res == GEISTR_RESOURCE_LIMITED, .available = 1};
     if (res == GEISTR_RESOURCE_UNAVAILABLE)
         d.supported = false;
     geistr_local local = {.size = sizeof local, .installed = true, .cpu = {seconds > 0 ? 200 / seconds : 0, 0}};

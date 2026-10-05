@@ -28,7 +28,7 @@ static const char *code(const char *reason) {
             {"PQ2_0", "unsupported_format"},  {"instruction set", "platform"},
             {"disk space", "disk"},           {"smaller than the model", "ram"},
             {"Below the RAM", "ram_recommended"}, {"Available RAM is tight", "available_ram"},
-            {"Fits", "fits"}, {"not measured yet.", "not_measured"}};
+            {"Fits", "fits"}, {"No known resource restriction", "not_measured"}};
     for (size_t i = 0; i < sizeof map / sizeof *map; i++)
         if (strstr(reason, map[i][0]))
             return map[i][1];

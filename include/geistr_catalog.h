@@ -148,7 +148,7 @@ typedef struct geistr_local {
 
 typedef enum geistr_resource {
     GEISTR_RESOURCE_FITS = 0,
-    GEISTR_RESOURCE_LIMITED,     /* may run: tight memory, or nothing known that says it fits well */
+    GEISTR_RESOURCE_LIMITED,     /* may run: below the RAM recommendation, or little RAM free now */
     GEISTR_RESOURCE_UNAVAILABLE, /* cannot run here */
 } geistr_resource;
 
