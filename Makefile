@@ -147,15 +147,19 @@ geistr: $(BUILD)/geistr
 # The CLI against the reference model: run, chat, cancellation, catalog
 # (--json schema), pull from a local server (a GEISTR_TESTING build).
 test-geistr:
+	@test -f "$(GEIST_TEST_MODEL)" || { echo "no reference model at $(GEIST_TEST_MODEL): make fetch-model"; exit 1; }
 	$(MAKE) BUILD=$(BUILD)/geistr-test GEISTR_CFLAGS=-DGEISTR_TESTING geistr
 	$(MAKE) BUILD=$(BUILD)/geistr-nonet PULL=0 geistr
 	python3 tests/test_geistr.py $(BUILD)/geistr-test/geistr $(BUILD)/geistr-nonet/geistr "$(GEIST_TEST_MODEL)" $(PULL)
 
+# An explicit target never skips: a missing model is an error, not a pass.
 test-real: $(BUILD)/test_real
+	@test -f "$(GEIST_TEST_MODEL)" || { echo "no reference model at $(GEIST_TEST_MODEL): make fetch-model"; exit 1; }
 	GEIST_TEST_MODEL="$(GEIST_TEST_MODEL)" $(BUILD)/test_real
 
+# The reference model of the real tests: SmolLM2 360M from the catalog, verified.
 fetch-model:
-	$(MAKE) -C $(GEISTLIB) fetch-model
+	sh scripts/fetch-model.sh models/catalog.json smollm2-360m $(dir $(GEIST_TEST_MODEL))
 
 FORCE:
 
