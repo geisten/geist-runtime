@@ -1075,6 +1075,13 @@ geistr_status geistr_chat_run(geistr_chat         *c,
 
 /* ---- rewind ---------------------------------------------------------------- */
 
+geistr_status geistr_chat_limit(geistr_chat *c, uint32_t max_tokens) {
+    if (!c || c->answering)
+        return GEISTR_INVALID;
+    c->opts.max_tokens = max_tokens;
+    return GEISTR_OK;
+}
+
 geistr_status geistr_chat_rewind(geistr_chat *c, size_t keep) {
     if (!c || keep > c->n_turns)
         return GEISTR_INVALID;
