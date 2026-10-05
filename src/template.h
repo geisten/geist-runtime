@@ -55,6 +55,12 @@ void tpl_free(struct tpl_state *state);
  * messages again into a fresh state and discarding the text. */
 char *tpl_render_send(struct tpl_state *state, size_t n, const geistr_message msgs[]);
 
+/* The generation prompt alone (opens the assistant turn): the suffix of
+ * every tpl_render_send. The chat tokenizes it apart from the turns before
+ * it, so a rewind can cut the context in front of it (#4). "" for
+ * TPL_UNKNOWN. */
+const char *tpl_generation_prompt(enum tpl_family family);
+
 /* Text that closes an answer turn, before the next send. If the model ended
  * the answer with an end marker of its own (end_marker, its text), only the
  * rest of the close is returned; otherwise (length, stop string, cancel, an

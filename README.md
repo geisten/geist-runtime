@@ -11,14 +11,19 @@ Users:
 - [geist-serve](https://github.com/geisten/geist-serve) (geist-serve#148),
 - apps that embed models directly.
 
-Status: **API draft** ([geist-runtime#1](https://github.com/geisten/geist-runtime/issues/1)).
-Until the code moves from geist-serve (#2–#6) the library is a stub that
-implements the contract without geistlib.
+Status: the API (#1), templates (#2), streaming text (#3) and the runtime on
+geistlib with context management (#4) are in; catalog and device fit (#5, #6)
+are next. `src/stub.c` implements the API without an engine, for the fast
+conformance tests.
 
 ```sh
 make test        # conformance tests (C and C++) and the example chat, against the stub
 make sanitize    # the same under ASan + UBSan
 printf 'Hello\n' | build/chat stub:echo
+
+make runtime     # the real libgeistr.a on the pinned geistlib
+make fetch-model && make test-real   # the real runtime against SmolLM2
+make chat-real && build/chat-real model.gguf
 ```
 
 - [docs/API.md](docs/API.md): usage, design decisions, thread and ABI rules,

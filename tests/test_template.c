@@ -184,6 +184,17 @@ static void incremental_equals_whole(void) {
             }
 }
 
+static void generation_prompts(void) {
+    for (enum tpl_family f = TPL_GEMMA3; f <= TPL_BITNET; f++) {
+        char        *p = whole(f, N, CONV);
+        const char  *g = tpl_generation_prompt(f);
+        const size_t n = strlen(p), k = strlen(g);
+        check(p && k > 0 && n >= k && !strcmp(p + n - k, g), "every render ends with the generation prompt");
+        free(p);
+    }
+    check(!strcmp(tpl_generation_prompt(TPL_UNKNOWN), ""), "unknown family: no prompt");
+}
+
 static void close_texts(void) {
     eq("chatml close", "<|im_end|>\n", tpl_answer_close(TPL_CHATML, nullptr));
     eq("chatml close after marker", "\n", tpl_answer_close(TPL_CHATML, "<|im_end|>"));
@@ -233,6 +244,7 @@ static void stops(void) {
 int main(void) {
     goldens();
     incremental_equals_whole();
+    generation_prompts();
     close_texts();
     detection();
     stops();
@@ -240,6 +252,6 @@ int main(void) {
         fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;
     }
-    puts("templates: geist-serve goldens, incremental = whole for 5 families, closes, detection, stops passed");
+    puts("templates: geist-serve goldens, incremental = whole for 5 families, generation prompts, closes, detection, stops passed");
     return 0;
 }
