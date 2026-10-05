@@ -8,11 +8,13 @@
  * conversation kept across sends, rewind, context limits and ABI-sized options.
  *
  * Models: "stub:echo" answers "Echo: <last user message>"; "stub:slow" is
- * the same, repeated, at 1 ms per token; "stub:noformat" has no chat
- * format. A token is 3 bytes of the answer, so tokens cut UTF-8 apart. Input
+ * the same, repeated, at 1 ms per token; "stub:raw" generates the last
+ * message verbatim, markers included (for the text stages); "stub:noformat"
+ * has no chat format. A token is 3 bytes of the answer, so tokens cut UTF-8 apart. Input
  * costs (bytes + 3) / 4 tokens per message plus 4 for its markers.
  */
 #include "geistr.h"
+#include "stream.h"
 #include "template.h"
 
 #include <stdatomic.h>
@@ -81,7 +83,7 @@ static void put_error(char *error, size_t cap, const char *text) {
 struct geistr_model {
     atomic_int        refs;
     geistr_model_opts opts;
-    bool              slow, has_format;
+    bool              slow, raw, has_format;
     const char       *format; /* a static family name */
     uint32_t          context;
     char              error[256];
@@ -98,9 +100,9 @@ static geistr_status model_new(const char              *name,
         return GEISTR_INVALID;
     }
     bool echo = !strcmp(name, "stub:echo"), slow = !strcmp(name, "stub:slow"),
-         noformat = !strcmp(name, "stub:noformat");
-    if (!echo && !slow && !noformat) {
-        put_error(error, cap, "the stub opens only stub:echo, stub:slow and stub:noformat");
+         noformat = !strcmp(name, "stub:noformat"), raw = !strcmp(name, "stub:raw");
+    if (!echo && !slow && !noformat && !raw) {
+        put_error(error, cap, "the stub opens only stub:echo, stub:slow, stub:raw and stub:noformat");
         return GEISTR_FORMAT;
     }
     if (o.chat_format && tpl_family_from_name(o.chat_format) == TPL_UNKNOWN) {
@@ -113,6 +115,7 @@ static geistr_status model_new(const char              *name,
     atomic_init(&m->refs, 1);
     m->opts       = o;
     m->slow       = slow;
+    m->raw        = raw;
     m->has_format = !noformat || o.chat_format;
     m->format     = o.chat_format ? tpl_family_name(tpl_family_from_name(o.chat_format)) : "chatml";
     m->context    = o.context ? o.context : DEFAULT_CONTEXT;
@@ -194,8 +197,6 @@ const char *geistr_model_error(const geistr_model *m) {
 /* Chat                                                                      */
 /* ------------------------------------------------------------------------ */
 
-enum phase { PHASE_START, PHASE_THINK, PHASE_ANSWER };
-
 struct turn {
     bool     system;
     uint32_t tokens; /* in the context, markers included */
@@ -215,13 +216,16 @@ struct geistr_chat {
     char    *raw;
     size_t   raw_len, raw_pos;
     uint32_t limit; /* tokens allowed for this answer */
-    /* decoding: an incomplete UTF-8 tail, decoded text not yet delivered */
-    unsigned char carry[4];
-    size_t        n_carry;
-    char         *text;
-    size_t        text_len, text_cap;
-    enum phase    phase;
-    char         *piece; /* storage behind the last returned piece */
+    /* the real text stages (src/stream.c) and the pieces they produced */
+    struct str_utf8   utf8;
+    struct str_output output;
+    struct str_stops  stop;
+    struct queued {
+        geistr_part part;
+        char       *text;
+    }      *queue;
+    size_t  n_queue, head, cap_queue;
+    char   *piece; /* storage behind the last returned piece */
     geistr_stats  stats;
     double        started;
     char          error[256];
@@ -274,13 +278,49 @@ geistr_status geistr_chat_open(geistr_model *m, const geistr_chat_opts *opts, ge
     return GEISTR_OK;
 }
 
+static void queue_clear(geistr_chat *c) {
+    for (size_t i = c->head; i < c->n_queue; i++)
+        free(c->queue[i].text);
+    c->n_queue = c->head = 0;
+}
+
+/* Stage outputs land here as pieces, in order. */
+static bool enqueue(geistr_chat *c, geistr_part part, const char *text) {
+    if (!*text)
+        return true;
+    if (c->n_queue == c->cap_queue) {
+        size_t         cap  = c->cap_queue ? c->cap_queue * 2 : 8;
+        struct queued *grow = realloc(c->queue, cap * sizeof *grow);
+        if (!grow)
+            return false;
+        c->queue     = grow;
+        c->cap_queue = cap;
+    }
+    char *copy = strdup(text);
+    if (!copy)
+        return false;
+    c->queue[c->n_queue++] = (struct queued) {part, copy};
+    return true;
+}
+static bool queue_answer(void *c, const char *text) {
+    return enqueue(c, GEISTR_PART_ANSWER, text);
+}
+static bool queue_thinking(void *c, const char *text) {
+    return enqueue(c, GEISTR_PART_THINKING, text);
+}
+static bool to_stops(void *c, const char *text) {
+    return str_stops_feed(&((geistr_chat *) c)->stop, text, queue_answer, c);
+}
+
 void geistr_chat_close(geistr_chat *c) {
     if (!c)
         return;
     stops_free(c->stops, c->opts.n_stop);
     free(c->turns);
     free(c->raw);
-    free(c->text);
+    queue_clear(c);
+    free(c->queue);
+    str_stops_free(&c->stop);
     free(c->piece);
     model_release(c->model);
     free(c);
@@ -350,7 +390,7 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
 
     /* The "model": optional thinking, then an echo of the last message. */
     const char *last  = messages[count - 1].content;
-    const char *think = c->opts.reasoning == GEISTR_REASONING_THINK_TAGS ? "<think>Weighing the question.</think>\n" : "";
+    const char *think = c->opts.reasoning == GEISTR_REASONING_THINK_TAGS && !c->model->raw ? "<think>Weighing the question.</think>" : "";
     size_t      reps  = c->model->slow ? 400 : 1;
     size_t      need  = strlen(think) + reps * (strlen(last) + 8) + 1;
     char       *raw   = malloc(need);
@@ -358,7 +398,7 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
         return fail(c, GEISTR_NO_MEMORY, "out of memory");
     size_t at = (size_t) snprintf(raw, need, "%s", think);
     for (size_t r = 0; r < reps; r++)
-        at += (size_t) snprintf(raw + at, need - at, "%sEcho: %s", r ? " " : "", last);
+        at += (size_t) snprintf(raw + at, need - at, c->model->raw ? "%s%s" : "%sEcho: %s", r ? " " : "", last);
     free(c->raw);
     c->raw     = raw;
     c->raw_len = at;
@@ -376,9 +416,12 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
 
     uint32_t room      = context - c->used - 1;
     c->limit           = c->opts.max_tokens && c->opts.max_tokens < room ? c->opts.max_tokens : room;
-    c->n_carry         = 0;
-    c->text_len        = 0;
-    c->phase           = c->opts.reasoning == GEISTR_REASONING_THINK_TAGS ? PHASE_START : PHASE_ANSWER;
+    queue_clear(c);
+    c->utf8 = (struct str_utf8) {};
+    str_output_init(&c->output, c->opts.reasoning == GEISTR_REASONING_THINK_TAGS);
+    str_output_thinking(&c->output, c->opts.thinking ? queue_thinking : nullptr);
+    str_stops_free(&c->stop);
+    str_stops_init(&c->stop, c->opts.n_stop, (const char *const *) c->stops);
     c->sent            = true;
     c->ended           = false;
     c->stopped         = false;
@@ -396,111 +439,6 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
     return GEISTR_OK;
 }
 
-static bool text_append(geistr_chat *c, const char *bytes, size_t n) {
-    if (c->text_len + n + 1 > c->text_cap) {
-        size_t cap  = (c->text_len + n + 1) * 2;
-        char  *grow = realloc(c->text, cap);
-        if (!grow)
-            return false;
-        c->text     = grow;
-        c->text_cap = cap;
-    }
-    memcpy(c->text + c->text_len, bytes, n);
-    c->text_len += n;
-    c->text[c->text_len] = 0;
-    return true;
-}
-
-/* One token of raw bytes → complete code points appended to text. */
-static bool decode_token(geistr_chat *c) {
-    size_t        n = c->raw_len - c->raw_pos < TOKEN_BYTES ? c->raw_len - c->raw_pos : TOKEN_BYTES;
-    unsigned char buf[4 + TOKEN_BYTES];
-    memcpy(buf, c->carry, c->n_carry);
-    memcpy(buf + c->n_carry, c->raw + c->raw_pos, n);
-    size_t total = c->n_carry + n, done = 0;
-    c->raw_pos += n;
-    while (done < total) {
-        unsigned char b    = buf[done];
-        size_t        need = b < 0x80 ? 1 : (b >> 5) == 6 ? 2 : (b >> 4) == 14 ? 3 : 4;
-        if (done + need > total)
-            break;
-        done += need;
-    }
-    c->n_carry = total - done;
-    memcpy(c->carry, buf + done, c->n_carry);
-    return text_append(c, (const char *) buf, done);
-}
-
-/* Length of the longest suffix of text[0..len) that starts tag. */
-static size_t partial_tag(const char *text, size_t len, const char *tag) {
-    size_t t = strlen(tag);
-    for (size_t k = t - 1; k > 0; k--)
-        if (len >= k && !memcmp(text + len - k, tag, k))
-            return k;
-    return 0;
-}
-
-static void consume(geistr_chat *c, size_t n) {
-    memmove(c->text, c->text + n, c->text_len - n + 1);
-    c->text_len -= n;
-}
-
-/* Take the next deliverable piece out of text; false if none yet. */
-static bool classify(geistr_chat *c, geistr_part *part, size_t *len, size_t *skip, bool final) {
-    static const char open[] = "<think>", close[] = "</think>";
-    *skip = 0;
-    if (c->text_len == 0) /* nothing decoded yet; text may still be nullptr */
-        return false;
-    if (c->phase == PHASE_START) {
-        size_t ws = 0;
-        while (ws < c->text_len && strchr(" \n\r\t", c->text[ws]))
-            ws++;
-        size_t rest = c->text_len - ws;
-        if (rest >= sizeof open - 1 && !memcmp(c->text + ws, open, sizeof open - 1)) {
-            consume(c, ws + sizeof open - 1);
-            c->phase = PHASE_THINK;
-        } else if (!final && rest < sizeof open - 1 && !memcmp(c->text + ws, open, rest))
-            return false; /* could still become <think> */
-        else
-            c->phase = PHASE_ANSWER;
-    }
-    if (c->phase == PHASE_THINK) {
-        char *end = strstr(c->text, close);
-        if (end) {
-            *part = GEISTR_PART_THINKING;
-            *len  = (size_t) (end - c->text);
-            *skip = sizeof close - 1;
-            while (*len + *skip < c->text_len && c->text[*len + *skip] == '\n')
-                (*skip)++;
-            c->phase = PHASE_ANSWER;
-            return true;
-        }
-        if (final) { /* unfinished thinking is discarded, never shown as answer */
-            c->text_len = 0;
-            return false;
-        }
-        *part = GEISTR_PART_THINKING;
-        *len  = c->text_len - partial_tag(c->text, c->text_len, close);
-        return *len > 0;
-    }
-    /* Answer: end before the first stop string; hold back a possible start of one. */
-    *part       = GEISTR_PART_ANSWER;
-    size_t hold = 0;
-    for (size_t i = 0; i < c->opts.n_stop; i++) {
-        char *hit = strstr(c->text, c->stops[i]);
-        if (hit) {
-            *len       = (size_t) (hit - c->text);
-            c->stopped = true;
-            c->text_len = *len; /* the stop string and anything after it are dropped */
-            c->text[*len] = 0;
-            return *len > 0;
-        }
-        size_t k = partial_tag(c->text, c->text_len, c->stops[i]);
-        hold     = k > hold ? k : hold;
-    }
-    *len = c->text_len - (final ? 0 : hold);
-    return *len > 0;
-}
 
 static geistr_status end(geistr_chat *c, geistr_piece *piece, geistr_finish finish) {
     if (!c->ended) {
@@ -516,6 +454,16 @@ static geistr_status end(geistr_chat *c, geistr_piece *piece, geistr_finish fini
     return GEISTR_OK;
 }
 
+/* One token of the "model" through the text stages. */
+static bool feed_token(geistr_chat *c) {
+    char   token[TOKEN_BYTES + 1], text[TOKEN_BYTES + 8];
+    size_t n = c->raw_len - c->raw_pos < TOKEN_BYTES ? c->raw_len - c->raw_pos : TOKEN_BYTES;
+    memcpy(token, c->raw + c->raw_pos, n);
+    token[n] = 0;
+    c->raw_pos += n;
+    return str_utf8_feed(&c->utf8, token, text, sizeof text) && str_output_feed(&c->output, text, to_stops, c);
+}
+
 geistr_status geistr_chat_next(geistr_chat *c, geistr_piece *piece) {
     if (!c || !piece || piece->size < sizeof(geistr_piece))
         return GEISTR_INVALID;
@@ -526,39 +474,36 @@ geistr_status geistr_chat_next(geistr_chat *c, geistr_piece *piece) {
             c->cancel_reported = true;
             return GEISTR_CANCELLED;
         }
-        if (c->ended)
-            return end(c, piece, c->stats.finish);
-        if (atomic_load(&c->cancel)) {
+        if (!c->ended && atomic_load(&c->cancel)) {
+            queue_clear(c);
             end(c, piece, GEISTR_FINISH_CANCELLED);
             snprintf(c->error, sizeof c->error, "cancelled");
             continue;
         }
-        bool        exhausted = c->stopped || c->raw_pos >= c->raw_len || c->stats.output_tokens >= c->limit;
-        geistr_part part;
-        size_t      len, skip;
-        if (classify(c, &part, &len, &skip, exhausted)) {
+        if (c->head < c->n_queue) {
+            struct queued q = c->queue[c->head++];
             free(c->piece);
-            c->piece = malloc(len + 1);
-            if (!c->piece)
-                return fail(c, GEISTR_NO_MEMORY, "out of memory");
-            memcpy(c->piece, c->text, len);
-            c->piece[len] = 0;
-            consume(c, len + skip);
-            if (part == GEISTR_PART_THINKING && !c->opts.thinking)
-                continue;
-            if (part == GEISTR_PART_ANSWER && c->stats.first_answer_ms < 0)
+            c->piece = q.text;
+            if (q.part == GEISTR_PART_ANSWER && c->stats.first_answer_ms < 0)
                 c->stats.first_answer_ms = now_ms() - c->started;
-            piece->part = part;
-            piece->text = c->piece;
-            piece->len  = len;
+            piece->part = q.part;
+            piece->text = q.text;
+            piece->len  = strlen(q.text);
             return GEISTR_OK;
         }
-        exhausted = c->stopped || exhausted;
-        if (exhausted) {
-            geistr_finish f = c->stopped || c->raw_pos >= c->raw_len ? GEISTR_FINISH_STOP
-                              : c->limit == c->opts.max_tokens       ? GEISTR_FINISH_LENGTH
-                                                                     : GEISTR_FINISH_CONTEXT;
-            return end(c, piece, f);
+        if (c->ended)
+            return end(c, piece, c->stats.finish);
+        bool stopped = c->stop.stopped;
+        if (stopped || c->raw_pos >= c->raw_len || c->stats.output_tokens >= c->limit) {
+            /* Incomplete thinking or prefixes are dropped; held answer text is released. */
+            str_output_finish(&c->output);
+            if (!str_stops_finish(&c->stop, queue_answer, c))
+                return fail(c, GEISTR_NO_MEMORY, "out of memory");
+            c->stats.finish = stopped || c->raw_pos >= c->raw_len ? GEISTR_FINISH_STOP
+                              : c->limit == c->opts.max_tokens   ? GEISTR_FINISH_LENGTH
+                                                                 : GEISTR_FINISH_CONTEXT;
+            end(c, piece, c->stats.finish);
+            continue; /* deliver what the finish released, then END */
         }
         if (c->model->slow) {
             struct timespec ms = {.tv_nsec = 1000000};
@@ -567,8 +512,11 @@ geistr_status geistr_chat_next(geistr_chat *c, geistr_piece *piece) {
         c->stats.output_tokens++;
         c->turns[c->n_turns - 1].tokens++;
         c->used++;
-        if (!decode_token(c))
-            return fail(c, GEISTR_NO_MEMORY, "out of memory");
+        if (!feed_token(c)) {
+            end(c, piece, GEISTR_FINISH_ERROR);
+            return fail(c, c->utf8.failed ? GEISTR_BACKEND : GEISTR_NO_MEMORY,
+                        c->utf8.failed ? "the model produced invalid UTF-8" : "out of memory");
+        }
     }
 }
 
