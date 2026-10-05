@@ -1,0 +1,517 @@
+{
+  "schema": 2,
+  "revision": 9,
+  "models": [
+    {
+      "id": "bitnet-2b",
+      "name": "BitNet b1.58 2B",
+      "file": "bitnet-b1.58-2B-4T-i2_s.gguf",
+      "url": "https://huggingface.co/microsoft/bitnet-b1.58-2B-4T-gguf/resolve/main/ggml-model-i2_s.gguf",
+      "sha256": "4221b252fdd5fd25e15847adfeb5ee88886506ba50b8a34548374492884c2162",
+      "bytes": 1187801280,
+      "working_mib": 2304,
+      "recommended_ram_gib": 4,
+      "backends": [
+        "cpu"
+      ],
+      "group_id": "bitnet-2b",
+      "group_name": "BitNet b1.58 2B",
+      "quantization": "I2_S",
+      "quality": {
+        "suite": "e6c9808edde3",
+        "date": "2026-10-04",
+        "engine": "33db79d7764b",
+        "evidence": "c84865a924b01d5b82329d687d8db395c0b1838667ba6829c80c53a8b7288ea7",
+        "tasks": {
+          "classify": {
+            "de": [
+              5,
+              20
+            ],
+            "en": [
+              8,
+              20
+            ]
+          },
+          "extract": {
+            "de": [
+              3,
+              20
+            ],
+            "en": [
+              0,
+              20
+            ]
+          },
+          "format": {
+            "de": [
+              0,
+              20
+            ],
+            "en": [
+              18,
+              20
+            ]
+          },
+          "context": {
+            "de": [
+              11,
+              20
+            ],
+            "en": [
+              18,
+              20
+            ]
+          }
+        }
+      },
+      "reference": [
+        {
+          "platform": "Apple M1 Max",
+          "backend": "cpu",
+          "answer_ms": 6019,
+          "tokens_per_s": 39,
+          "memory_mib": 1892,
+          "date": "2026-10-04",
+          "engine": "33db79d7764b"
+        }
+      ]
+    },
+    {
+      "id": "smollm2-360m",
+      "name": "SmolLM2 360M",
+      "file": "smollm2-360m-instruct-q8_0.gguf",
+      "url": "https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct-GGUF/resolve/main/smollm2-360m-instruct-q8_0.gguf",
+      "sha256": "48ab3034d0dd401fbc721eb1df3217902fee7dab9078992d66431f09b7750201",
+      "bytes": 386404992,
+      "working_mib": 768,
+      "recommended_ram_gib": 2,
+      "backends": [
+        "cpu",
+        "metal"
+      ],
+      "group_id": "smollm2-360m",
+      "group_name": "SmolLM2 360M",
+      "quantization": "Q8_0",
+      "quality": {
+        "suite": "e6c9808edde3",
+        "date": "2026-10-03",
+        "engine": "33db79d7764b",
+        "evidence": "784a8d093ac3b58a428febed1af27d42b4f8c5dc5aff94695f3b8481d199f7f7",
+        "tasks": {
+          "classify": {
+            "de": [
+              0,
+              20
+            ],
+            "en": [
+              0,
+              20
+            ]
+          },
+          "extract": {
+            "de": [
+              0,
+              20
+            ],
+            "en": [
+              0,
+              20
+            ]
+          },
+          "format": {
+            "de": [
+              3,
+              20
+            ],
+            "en": [
+              13,
+              20
+            ]
+          },
+          "context": {
+            "de": [
+              5,
+              20
+            ],
+            "en": [
+              10,
+              20
+            ]
+          }
+        }
+      },
+      "reference": [
+        {
+          "platform": "Apple M1 Max",
+          "backend": "gpu",
+          "answer_ms": 2729,
+          "tokens_per_s": 76,
+          "memory_mib": 637,
+          "date": "2026-10-04",
+          "engine": "33db79d7764b"
+        }
+      ]
+    },
+    {
+      "id": "qwen3-0.6b",
+      "name": "Qwen3 0.6B",
+      "file": "Qwen3-0.6B-Q8_0.gguf",
+      "url": "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf",
+      "sha256": "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031",
+      "bytes": 639446688,
+      "working_mib": 1280,
+      "recommended_ram_gib": 4,
+      "backends": [
+        "cpu",
+        "metal"
+      ],
+      "group_id": "qwen3-0.6b",
+      "group_name": "Qwen3 0.6B",
+      "quantization": "Q8_0",
+      "reasoning_format": "think_tags",
+      "quality": {
+        "suite": "e6c9808edde3",
+        "date": "2026-10-03",
+        "engine": "33db79d7764b",
+        "evidence": "4d7cf3d4a3dba36c6b154c62859e0527a2e64d916ce0527b10cc28d06a82b287",
+        "tasks": {
+          "classify": {
+            "de": [
+              3,
+              20
+            ],
+            "en": [
+              3,
+              20
+            ]
+          },
+          "extract": {
+            "de": [
+              13,
+              20
+            ],
+            "en": [
+              14,
+              20
+            ]
+          },
+          "format": {
+            "de": [
+              15,
+              20
+            ],
+            "en": [
+              17,
+              20
+            ]
+          },
+          "context": {
+            "de": [
+              16,
+              20
+            ],
+            "en": [
+              19,
+              20
+            ]
+          }
+        }
+      },
+      "reference": [
+        {
+          "platform": "Apple M1 Max",
+          "backend": "gpu",
+          "answer_ms": 1275,
+          "tokens_per_s": 174,
+          "memory_mib": 1184,
+          "date": "2026-10-04",
+          "engine": "33db79d7764b"
+        }
+      ]
+    },
+    {
+      "id": "qwen35-0.8b",
+      "name": "Qwen3.5 0.8B",
+      "file": "Qwen3.5-0.8B-Q8_0.gguf",
+      "url": "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-Q8_0.gguf",
+      "sha256": "0ad885ffd4bb022fc4f0d33a3308fa108ef8613159d3b3a67e23abca056b7a6c",
+      "bytes": 811843840,
+      "working_mib": 2048,
+      "recommended_ram_gib": 4,
+      "backends": [
+        "cpu",
+        "metal"
+      ],
+      "group_id": "qwen35-0.8b",
+      "group_name": "Qwen3.5 0.8B",
+      "quantization": "Q8_0",
+      "reasoning_format": "think_tags",
+      "quality": {
+        "suite": "e6c9808edde3",
+        "date": "2026-10-03",
+        "engine": "33db79d7764b",
+        "evidence": "82704578f2bc29ef7cbbd3852a7d53e0119c430eaff62fbbf4d7e1aacf982db2",
+        "tasks": {
+          "classify": {
+            "de": [
+              3,
+              20
+            ],
+            "en": [
+              4,
+              20
+            ]
+          },
+          "extract": {
+            "de": [
+              0,
+              20
+            ],
+            "en": [
+              0,
+              20
+            ]
+          },
+          "format": {
+            "de": [
+              0,
+              20
+            ],
+            "en": [
+              4,
+              20
+            ]
+          },
+          "context": {
+            "de": [
+              4,
+              20
+            ],
+            "en": [
+              19,
+              20
+            ]
+          }
+        }
+      },
+      "reference": [
+        {
+          "platform": "Apple M1 Max",
+          "backend": "gpu",
+          "answer_ms": 1301,
+          "tokens_per_s": 164,
+          "memory_mib": 1728,
+          "date": "2026-10-04",
+          "engine": "33db79d7764b"
+        }
+      ]
+    },
+    {
+      "id": "gemma4-e2b",
+      "name": "Gemma 4 E2B",
+      "file": "gemma-4-E2B-it-Q4_K_M.gguf",
+      "url": "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf",
+      "sha256": "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
+      "bytes": 3106738272,
+      "working_mib": 5120,
+      "recommended_ram_gib": 8,
+      "backends": [
+        "cpu",
+        "metal"
+      ],
+      "group_id": "gemma4-e2b",
+      "group_name": "Gemma 4 E2B",
+      "quantization": "Q4_K_M",
+      "quality": {
+        "suite": "e6c9808edde3",
+        "date": "2026-10-03",
+        "engine": "33db79d7764b",
+        "evidence": "06c1ffa719bfb967bc5dd4a09042511eee5f0f7ed1694f64ee5fa0b0dfcc3fe1",
+        "tasks": {
+          "classify": {
+            "de": [
+              19,
+              20
+            ],
+            "en": [
+              20,
+              20
+            ]
+          },
+          "extract": {
+            "de": [
+              20,
+              20
+            ],
+            "en": [
+              20,
+              20
+            ]
+          },
+          "format": {
+            "de": [
+              14,
+              20
+            ],
+            "en": [
+              14,
+              20
+            ]
+          },
+          "context": {
+            "de": [
+              20,
+              20
+            ],
+            "en": [
+              19,
+              20
+            ]
+          }
+        }
+      },
+      "reference": [
+        {
+          "platform": "Apple M1 Max",
+          "backend": "gpu",
+          "answer_ms": 5004,
+          "tokens_per_s": 74,
+          "memory_mib": 3269,
+          "date": "2026-10-04",
+          "engine": "33db79d7764b"
+        }
+      ]
+    },
+    {
+      "id": "gemma4-e4b",
+      "name": "Gemma 4 E4B",
+      "file": "gemma-4-E4B-it-Q4_K_M.gguf",
+      "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf",
+      "sha256": "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87",
+      "bytes": 4977171584,
+      "working_mib": 8192,
+      "recommended_ram_gib": 16,
+      "backends": [
+        "cpu",
+        "metal"
+      ],
+      "group_id": "gemma4-e4b",
+      "group_name": "Gemma 4 E4B",
+      "quantization": "Q4_K_M",
+      "quality": {
+        "suite": "e6c9808edde3",
+        "date": "2026-10-03",
+        "engine": "33db79d7764b",
+        "evidence": "c350010ab7d33e6aab311d0c780064803c09c4f9edf90d41ea719953690341aa",
+        "tasks": {
+          "classify": {
+            "de": [
+              18,
+              20
+            ],
+            "en": [
+              19,
+              20
+            ]
+          },
+          "extract": {
+            "de": [
+              20,
+              20
+            ],
+            "en": [
+              20,
+              20
+            ]
+          },
+          "format": {
+            "de": [
+              15,
+              20
+            ],
+            "en": [
+              15,
+              20
+            ]
+          },
+          "context": {
+            "de": [
+              20,
+              20
+            ],
+            "en": [
+              20,
+              20
+            ]
+          }
+        }
+      },
+      "reference": [
+        {
+          "platform": "Apple M1 Max",
+          "backend": "gpu",
+          "answer_ms": 8638,
+          "tokens_per_s": 46,
+          "memory_mib": 5233,
+          "date": "2026-10-04",
+          "engine": "33db79d7764b"
+        }
+      ]
+    },
+    {
+      "id": "bonsai2-27b-pq2",
+      "name": "Bonsai 2 27B (ternary)",
+      "file": "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+      "url": "https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf/resolve/b072e1d3b35a0a630cece372c2127528e0994386/Ternary-Bonsai-2-27B-PQ2_0.gguf",
+      "sha256": "3907dc1658db1f78a9826bf8d5bcb8dc65db0d466388937af57f2294fae62ec1",
+      "bytes": 7206168928,
+      "working_mib": 20480,
+      "recommended_ram_gib": 24,
+      "backends": [
+        "cpu",
+        "metal"
+      ],
+      "group_id": "bonsai2-27b",
+      "group_name": "Bonsai 2 27B",
+      "quantization": "PQ2_0",
+      "reasoning_format": "think_tags"
+    },
+    {
+      "id": "qwen38-27b-q4",
+      "name": "Qwen3.8 27B Q4_0",
+      "file": "Qwen3.8-27B-Q4_0.gguf",
+      "url": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/4ca720788d1e01f1bff70c033e0d0028fd02e502/Qwen3.8-27B-Q4_0.gguf",
+      "sha256": "ede16c7b36e578ca87a8c70e011e4b4633a32c831c0ce76d0f474582384e671d",
+      "bytes": 16056478688,
+      "working_mib": 20480,
+      "recommended_ram_gib": 32,
+      "backends": [
+        "cpu",
+        "metal"
+      ],
+      "group_id": "qwen38-27b",
+      "group_name": "Qwen3.8 27B",
+      "quantization": "Q4_0",
+      "reasoning_format": "think_tags"
+    },
+    {
+      "id": "qwen38-27b-q8",
+      "name": "Qwen3.8 27B Q8_0",
+      "file": "Qwen3.8-27B-Q8_0.gguf",
+      "url": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/4ca720788d1e01f1bff70c033e0d0028fd02e502/Qwen3.8-27B-Q8_0.gguf",
+      "sha256": "a680f44a06920e5d689774823782006aa3acc8db95750323373b24139b67e348",
+      "bytes": 29047086048,
+      "working_mib": 34816,
+      "recommended_ram_gib": 48,
+      "backends": [
+        "cpu",
+        "metal"
+      ],
+      "group_id": "qwen38-27b",
+      "group_name": "Qwen3.8 27B",
+      "quantization": "Q8_0",
+      "reasoning_format": "think_tags"
+    }
+  ]
+}

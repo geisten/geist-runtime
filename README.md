@@ -12,8 +12,9 @@ Users:
 - apps that embed models directly.
 
 Status: the API (#1), templates (#2), streaming text (#3) and the runtime on
-geistlib with context management (#4) are in; catalog and device fit (#5, #6)
-are next. `src/stub.c` implements the API without an engine, for the fast
+geistlib with context management (#4) and the model catalog with SHA-256
+verification (#5, [`include/geistr_catalog.h`](include/geistr_catalog.h)) are in;
+device fit (#6) is next. `src/stub.c` implements the API without an engine, for the fast
 conformance tests.
 
 ```sh
