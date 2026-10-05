@@ -19,6 +19,7 @@ SHA-256 verification (#5) and device fit with the model ranking (#6), both in
 conformance tests.
 
 ```sh
+make core        # build/libgeistr-core.a: catalog, fit, templates, text — no engine
 make test        # conformance tests (C and C++) and the example chat, against the stub
 make sanitize    # the same under ASan + UBSan
 printf 'Hello\n' | build/chat stub:echo
