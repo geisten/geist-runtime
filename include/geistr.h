@@ -8,9 +8,11 @@
  *
  *   geistr_model_open → geistr_chat_open → geistr_chat_send → geistr_chat_next … END
  *
- * Every call to geistr_chat_send carries the whole conversation (stateless,
- * like the OpenAI chat API). The runtime keeps the KV cache of the unchanged
- * prefix, so a follow-up turn only pays for what is new.
+ * A chat holds its conversation. geistr_chat_send takes only the new
+ * messages; the answer becomes part of the conversation by itself. So every
+ * token is processed once, and a turn costs only what it adds.
+ * geistr_chat_rewind goes back to an earlier message, e.g. to regenerate or
+ * to follow a client that edited its history.
  *
  * Conventions
  * - Status codes, never errno. Text for a status: geistr_status_text; detail
@@ -73,7 +75,8 @@ typedef struct geistr_model_opts {
     size_t           size;      /* sizeof(geistr_model_opts) */
     geistr_processor processor; /* default AUTO */
     uint32_t         threads;   /* CPU threads; 0 = engine default */
-    uint32_t         context;   /* context window in tokens; 0 = model default */
+    uint32_t         context;   /* tokens; 0 = the model's full window, reduced to
+                                   what fits into memory (see info.context) */
 } geistr_model_opts;
 
 #define GEISTR_MODEL_OPTS_INIT {sizeof(geistr_model_opts), GEISTR_PROCESSOR_AUTO, 0, 0}
@@ -108,7 +111,7 @@ typedef struct geistr_model_info {
     const char *arch;        /* "gemma4", "qwen3", … */
     const char *chat_format; /* "gemma4", "chatml", "llama3", "bitnet", … */
     const char *backend;     /* the processor in use: "cpu", "metal", "vulkan" */
-    uint32_t    context;     /* context window in tokens */
+    uint32_t    context;     /* the context window in use, in tokens */
 } geistr_model_info;
 
 /* Fill *info. Its strings are borrowed until the model is released.
@@ -141,10 +144,14 @@ typedef struct geistr_chat_opts {
     geistr_overflow  overflow;    /* default REFUSE */
     int              thinking;    /* nonzero: deliver thinking as GEISTR_PART_THINKING;
                                      default 0: thinking is discarded, never kept */
+    const char *const *stop;      /* extra stop strings for the answer (copied at open);
+                                     the answer ends before the first match */
+    size_t             n_stop;
 } geistr_chat_opts;
 
 #define GEISTR_CHAT_OPTS_INIT                                                                      \
-    {sizeof(geistr_chat_opts), 0.0f, 1.0f, 0, GEISTR_REASONING_NONE, GEISTR_OVERFLOW_REFUSE, 0}
+    {sizeof(geistr_chat_opts), 0.0f, 1.0f, 0, GEISTR_REASONING_NONE, GEISTR_OVERFLOW_REFUSE, 0,       \
+     nullptr, 0}
 
 typedef struct geistr_message {
     const char *role;    /* "system", "user" or "assistant"; anything else counts as user */
@@ -165,14 +172,25 @@ geistr_chat_open(geistr_model *model, const geistr_chat_opts *opts, geistr_chat 
  * Must not run concurrently with another call on the same chat. */
 void geistr_chat_close(geistr_chat *chat);
 
-/* Start an answer to messages[0..count): render with the model's template,
- * reuse the cached prefix, process the rest of the input. The messages are
- * copied; the caller may free them on return. An unfinished previous answer
- * is abandoned.
- * GEISTR_CONTEXT: too long (REFUSE), or even the last message alone does not
- * fit (DROP_OLDEST). GEISTR_INVALID: count is 0 or the last message is from
- * the assistant. GEISTR_CANCELLED: cancelled during input processing. */
+/* Append messages[0..count) to the conversation and start the answer: only
+ * these messages are rendered and processed. A system message belongs first,
+ * in the first send. The messages are copied; the caller may free them on
+ * return. An unfinished previous answer is ended and kept as it is.
+ * GEISTR_CONTEXT: the conversation would not fit (REFUSE), or not even after
+ * dropping the oldest turns (DROP_OLDEST); the chat is then unchanged.
+ * GEISTR_INVALID: count is 0 or the last message is from the assistant.
+ * GEISTR_CANCELLED: cancelled during input processing; the new messages are
+ * then not part of the conversation. */
 geistr_status geistr_chat_send(geistr_chat *chat, size_t count, const geistr_message messages[]);
+
+/* Messages in the conversation: every sent message and every answer (an
+ * answer counts once it has started). Turns dropped by DROP_OLDEST are gone. */
+size_t geistr_chat_length(const geistr_chat *chat);
+
+/* Go back to the first keep messages; later ones and their cache are
+ * dropped, an unfinished answer is ended. rewind(chat, 0) starts a new
+ * conversation. GEISTR_INVALID if keep > geistr_chat_length. */
+geistr_status geistr_chat_rewind(geistr_chat *chat, size_t keep);
 
 typedef enum geistr_part {
     GEISTR_PART_ANSWER = 0,
@@ -188,7 +206,8 @@ typedef struct geistr_piece {
 } geistr_piece;
 
 /* Produce the next piece of the answer (pull model; one token or more).
- * text is borrowed until the next call on this chat.
+ * text is borrowed until the next call on this chat. The answer ends at the
+ * model's end of turn, max_tokens, a full context or a stop string.
  * After END, further calls return END again until the next send.
  * GEISTR_CANCELLED once after a cancel; the chat stays usable for a new send.
  * GEISTR_INVALID before the first send. */
@@ -210,7 +229,7 @@ geistr_status geistr_chat_run(geistr_chat         *chat,
 
 typedef enum geistr_finish {
     GEISTR_FINISH_NONE = 0,  /* still running, or nothing sent yet */
-    GEISTR_FINISH_STOP,      /* the model ended its turn */
+    GEISTR_FINISH_STOP,      /* the model ended its turn, or a stop string matched */
     GEISTR_FINISH_LENGTH,    /* max_tokens reached */
     GEISTR_FINISH_CONTEXT,   /* the context window is full */
     GEISTR_FINISH_CANCELLED, /* geistr_chat_cancel or emit */
@@ -220,8 +239,9 @@ typedef enum geistr_finish {
 typedef struct geistr_stats {
     size_t        size; /* sizeof(geistr_stats), set by the caller */
     geistr_finish finish;
-    uint32_t      prompt_tokens;    /* input tokens of the last send */
-    uint32_t      reused_tokens;    /* of those, taken from the KV cache */
+    uint32_t      input_tokens;     /* processed by the last send (only what was new;
+                                       all kept turns again after a DROP_OLDEST) */
+    uint32_t      context_tokens;   /* in the context now, the answer included */
     uint32_t      dropped_messages; /* removed by GEISTR_OVERFLOW_DROP_OLDEST */
     uint32_t      output_tokens;    /* generated, thinking included */
     double        prefill_ms;       /* input processing; -1 if not reached */

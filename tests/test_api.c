@@ -151,7 +151,7 @@ static void test_answer(void) {
     CHECK(!strcmp(got.answer, "Echo: Grüße aus Köln 🌍 – ok?"), "answer text intact");
     CHECK(got.utf8_ok && got.nul_ok && got.pieces > 1, "every piece is complete UTF-8, NUL-terminated");
     geistr_stats st = {.size = sizeof st};
-    CHECK(geistr_chat_stats(chat, &st) == GEISTR_OK && st.finish == GEISTR_FINISH_STOP && st.prompt_tokens > 0 &&
+    CHECK(geistr_chat_stats(chat, &st) == GEISTR_OK && st.finish == GEISTR_FINISH_STOP && st.input_tokens > 0 &&
               st.output_tokens > 0 && st.first_answer_ms >= 0 && st.prefill_ms >= 0 && st.total_ms >= st.first_answer_ms,
           "stats of a finished answer");
     CHECK(geistr_chat_next(chat, &piece) == GEISTR_OK && piece.part == GEISTR_PART_END, "END repeats");
@@ -197,43 +197,90 @@ static void test_limits(void) {
     geistr_chat_close(chat);
     geistr_model_close(model);
 
-    /* A 30-token window: the conversation needs 38 tokens, without the long turn 20. */
-    model                  = open_model("stub:echo", 30);
+    /* A 60-token window. Turn 1 (system + a long question + answer) takes 52;
+     * turn 2 needs 12 more: refused, or the long question is dropped. */
+    model                 = open_model("stub:echo", 60);
     const char     long1[] = "first question that takes a fair number of tokens to say";
-    geistr_message conv[]  = {{"system", "Be brief."}, {"user", long1}, {"assistant", "ok"}, {"user", "and now?"}};
+    geistr_message turn1[] = {{"system", "Be brief."}, {"user", long1}};
+    geistr_message turn2   = {"user", "and now?"};
     chat                   = open_chat(model, (geistr_chat_opts) GEISTR_CHAT_OPTS_INIT);
-    CHECK(geistr_chat_send(chat, 4, conv) == GEISTR_CONTEXT, "REFUSE: too long is GEISTR_CONTEXT");
+    CHECK(geistr_chat_send(chat, 2, turn1) == GEISTR_OK && drain(chat, &got) == GEISTR_OK, "turn 1 fits");
+    CHECK(geistr_chat_send(chat, 1, &turn2) == GEISTR_CONTEXT && geistr_chat_length(chat) == 3,
+          "REFUSE: GEISTR_CONTEXT, the conversation is unchanged");
     geistr_chat_close(chat);
 
     opts          = (geistr_chat_opts) GEISTR_CHAT_OPTS_INIT;
     opts.overflow = GEISTR_OVERFLOW_DROP_OLDEST;
     chat          = open_chat(model, opts);
-    CHECK(geistr_chat_send(chat, 4, conv) == GEISTR_OK && drain(chat, &got) == GEISTR_OK, "DROP_OLDEST answers");
-    CHECK(geistr_chat_stats(chat, &st) == GEISTR_OK && st.dropped_messages > 0 && st.prompt_tokens < 30,
-          "oldest turns dropped to fit");
-    char           huge[400];
+    CHECK(geistr_chat_send(chat, 2, turn1) == GEISTR_OK && drain(chat, &got) == GEISTR_OK, "turn 1 again");
+    CHECK(geistr_chat_send(chat, 1, &turn2) == GEISTR_OK && drain(chat, &got) == GEISTR_OK &&
+              !strcmp(got.answer, "Echo: and now?"),
+          "DROP_OLDEST answers");
+    CHECK(geistr_chat_stats(chat, &st) == GEISTR_OK && st.dropped_messages == 1 && st.context_tokens < 60 &&
+              geistr_chat_length(chat) == 4,
+          "the oldest turn is dropped, the system message stays");
+    char huge[400];
     memset(huge, 'x', sizeof huge - 1);
     huge[sizeof huge - 1] = 0;
     geistr_message alone  = {"user", huge};
-    CHECK(geistr_chat_send(chat, 1, &alone) == GEISTR_CONTEXT, "a single message too long even after dropping");
+    CHECK(geistr_chat_send(chat, 1, &alone) == GEISTR_CONTEXT && geistr_chat_length(chat) == 4,
+          "too long even after dropping: refused, unchanged");
     geistr_chat_close(chat);
     geistr_model_close(model);
 }
 
-static void test_reuse(void) {
+static void test_stop_strings(void) {
+    geistr_model      *model  = open_model("stub:echo", 0);
+    const char *const  stop[] = {"zzz", "Köln"};
+    geistr_chat_opts   opts   = GEISTR_CHAT_OPTS_INIT;
+    opts.stop                 = stop;
+    opts.n_stop               = 2;
+    geistr_chat       *chat   = open_chat(model, opts);
+    geistr_message     msg    = {"user", "Grüße aus Köln und Bonn"};
+    struct collected   got;
+    CHECK(geistr_chat_send(chat, 1, &msg) == GEISTR_OK && drain(chat, &got) == GEISTR_OK, "answer with stops");
+    CHECK(!strcmp(got.answer, "Echo: Grüße aus ") && got.utf8_ok,
+          "the answer ends before a stop string split across tokens");
+    geistr_stats st = {.size = sizeof st};
+    CHECK(geistr_chat_stats(chat, &st) == GEISTR_OK && st.finish == GEISTR_FINISH_STOP, "a stop string ends with STOP");
+    geistr_chat_close(chat);
+
+    const char *const empty[] = {""};
+    opts.stop                 = empty;
+    opts.n_stop               = 1;
+    CHECK(geistr_chat_open(model, &opts, &chat) == GEISTR_INVALID, "an empty stop string is refused");
+    opts.stop = nullptr;
+    CHECK(geistr_chat_open(model, &opts, &chat) == GEISTR_INVALID, "n_stop without a list is refused");
+    geistr_model_close(model);
+}
+
+static void test_conversation(void) {
     geistr_model    *model   = open_model("stub:echo", 0);
     geistr_chat     *chat    = open_chat(model, (geistr_chat_opts) GEISTR_CHAT_OPTS_INIT);
     geistr_message   turn1[] = {{"system", "You are terse."}, {"user", "Name a colour."}};
-    geistr_message   turn2[] = {{"system", "You are terse."}, {"user", "Name a colour."}, {"assistant", "Blue."}, {"user", "Another?"}};
+    geistr_message   turn2   = {"user", "Another?"};
     struct collected got;
     geistr_stats     st = {.size = sizeof st};
+    CHECK(geistr_chat_length(chat) == 0, "a new chat is empty");
     CHECK(geistr_chat_send(chat, 2, turn1) == GEISTR_OK && drain(chat, &got) == GEISTR_OK, "turn 1");
-    CHECK(geistr_chat_stats(chat, &st) == GEISTR_OK && st.reused_tokens == 0, "nothing to reuse at first");
-    uint32_t first = st.prompt_tokens;
-    CHECK(geistr_chat_send(chat, 4, turn2) == GEISTR_OK && drain(chat, &got) == GEISTR_OK, "turn 2");
-    CHECK(geistr_chat_stats(chat, &st) == GEISTR_OK && st.reused_tokens > 0 && st.reused_tokens <= first &&
-              st.reused_tokens < st.prompt_tokens,
-          "the unchanged prefix is reused");
+    CHECK(geistr_chat_stats(chat, &st) == GEISTR_OK && geistr_chat_length(chat) == 3, "two messages and the answer");
+    uint32_t first = st.input_tokens, context = st.context_tokens;
+    CHECK(geistr_chat_send(chat, 1, &turn2) == GEISTR_OK && drain(chat, &got) == GEISTR_OK &&
+              !strcmp(got.answer, "Echo: Another?"),
+          "turn 2 sends only the new message");
+    CHECK(geistr_chat_stats(chat, &st) == GEISTR_OK && st.input_tokens < first && st.context_tokens > context &&
+              st.context_tokens > st.input_tokens && geistr_chat_length(chat) == 5,
+          "only the new message is processed; the context grows");
+
+    geistr_piece piece = {.size = sizeof piece};
+    CHECK(geistr_chat_rewind(chat, 9) == GEISTR_INVALID, "rewind past the end");
+    CHECK(geistr_chat_rewind(chat, 2) == GEISTR_OK && geistr_chat_length(chat) == 2, "rewind to before the answer");
+    CHECK(geistr_chat_next(chat, &piece) == GEISTR_INVALID, "after a rewind, send first");
+    geistr_message again = {"user", "Name a fruit."};
+    CHECK(geistr_chat_send(chat, 1, &again) == GEISTR_OK && drain(chat, &got) == GEISTR_OK &&
+              !strcmp(got.answer, "Echo: Name a fruit.") && geistr_chat_length(chat) == 4,
+          "continue from the rewound point");
+    CHECK(geistr_chat_rewind(chat, 0) == GEISTR_OK && geistr_chat_length(chat) == 0, "rewind(0) starts over");
     geistr_chat_close(chat);
     geistr_model_close(model);
 }
@@ -299,13 +346,14 @@ int main(void) {
     test_answer();
     test_thinking();
     test_limits();
-    test_reuse();
+    test_stop_strings();
+    test_conversation();
     test_cancel();
     test_lifetime();
     if (failures) {
         fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;
     }
-    puts("geistr API: basics, ABI sizes, answer, thinking, limits, reuse, cancellation, lifetime passed");
+    puts("geistr API: basics, ABI sizes, answer, thinking, limits, stop strings, conversation, rewind, cancellation, lifetime passed");
     return 0;
 }

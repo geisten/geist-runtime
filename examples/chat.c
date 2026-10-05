@@ -1,16 +1,15 @@
 /*
- * chat.c — a terminal chat in about 80 lines: the whole embedding story.
+ * chat.c — a terminal chat: the whole embedding story.
  *
  *   build/chat <model.gguf | stub:echo>
  *
- * Each line is a user turn; the conversation is sent in full every time and
- * the runtime reuses what it already processed. Ctrl-C stops the answer.
+ * The chat holds the conversation: each line is sent on its own, and the
+ * runtime processes only that line. Ctrl-C stops the answer, not the chat.
  */
 #include "geistr.h"
 
 #include <signal.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 static geistr_chat *volatile running; /* for the Ctrl-C handler */
@@ -20,20 +19,7 @@ static void on_interrupt(int) {
         geistr_chat_cancel(running); /* an atomic store: safe in a handler */
 }
 
-struct answer {
-    char  *text;
-    size_t len;
-};
-
-/* Print the piece and keep it: the answer is the next turn's history. */
-static int print_piece(void *context, const geistr_piece *piece) {
-    struct answer *a    = context;
-    char          *grow = realloc(a->text, a->len + piece->len + 1);
-    if (!grow)
-        return 0; /* stop the answer rather than lose part of it */
-    memcpy(grow + a->len, piece->text, piece->len + 1);
-    a->text = grow;
-    a->len += piece->len;
+static int print_piece(void *, const geistr_piece *piece) {
     fwrite(piece->text, 1, piece->len, stdout);
     fflush(stdout);
     return 1;
@@ -62,32 +48,16 @@ int main(int argc, char **argv) {
     signal(SIGINT, on_interrupt);
     running = chat;
 
-    geistr_message turns[64];
-    char          *owned[64];
-    size_t         n = 0;
-    char           line[2048];
-    while (n + 2 <= 64 && fputs("> ", stdout) >= 0 && fgets(line, sizeof line, stdin)) {
+    char line[2048];
+    while (fputs("> ", stdout) >= 0 && fgets(line, sizeof line, stdin)) {
         line[strcspn(line, "\n")] = 0;
-        owned[n]                  = strdup(line);
-        turns[n]                  = (geistr_message) {"user", owned[n]};
-        n++;
-        struct answer answer = {};
-        s = geistr_chat_run(chat, n, turns, print_piece, &answer);
+        geistr_message turn       = {"user", line};
+        s = geistr_chat_run(chat, 1, &turn, print_piece, nullptr);
         puts(s == GEISTR_CANCELLED ? " [stopped]" : "");
-        if (s != GEISTR_OK && s != GEISTR_CANCELLED) {
+        if (s != GEISTR_OK && s != GEISTR_CANCELLED)
             fprintf(stderr, "%s: %s\n", geistr_status_text(s), geistr_chat_error(chat));
-            n--; /* drop the turn that failed */
-            free(owned[n]);
-            free(answer.text);
-            continue;
-        }
-        owned[n] = answer.text ? answer.text : strdup("");
-        turns[n] = (geistr_message) {"assistant", owned[n]};
-        n++;
     }
     running = nullptr;
     geistr_chat_close(chat);
-    for (size_t i = 0; i < n; i++)
-        free(owned[i]);
     return 0;
 }
