@@ -13,8 +13,8 @@ Users:
 
 Status: the API (#1), templates (#2), streaming text (#3) and the runtime on
 geistlib with context management (#4) and the model catalog with SHA-256
-verification (#5, [`include/geistr_catalog.h`](include/geistr_catalog.h)) are in;
-device fit (#6) is next. `src/stub.c` implements the API without an engine, for the fast
+verification (#5) and device fit with the model ranking (#6), both in
+[`include/geistr_catalog.h`](include/geistr_catalog.h), are in; the `geistr` CLI (#11) is next. `src/stub.c` implements the API without an engine, for the fast
 conformance tests.
 
 ```sh

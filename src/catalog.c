@@ -25,8 +25,15 @@
 #define MAX_MODELS 1024
 #define GIB        UINT64_C(1073741824)
 
+struct quality_tasks {
+    char     name[8][33];
+    uint32_t passed[8], total[8];
+    unsigned n;
+};
+
 struct geistr_catalog {
     geistr_catalog_entry *models;
+    struct quality_tasks *tasks; /* parallel to models */
     size_t                count;
     uint32_t              revision;
     char                 *strings; /* every entry string, NUL-separated */
@@ -198,10 +205,15 @@ static const char *quality(geistr_catalog *c, const struct json *j, int object, 
         if (j->tok[i].type != JSMN_STRING || !n || n >= sizeof name)
             return nullptr;
         memcpy(name, j->src + j->tok[i].start, n);
-        name[n] = 0;
+        name[n]                 = 0;
+        struct quality_tasks *q = &c->tasks[m - c->models];
+        uint32_t before[2]      = {m->quality_passed, m->quality_total};
         if (!component(name, false) || !keys(j, i + 1, language_keys) || !counts(j, i + 1, "de", m) ||
-            !counts(j, i + 1, "en", m))
+            !counts(j, i + 1, "en", m) || q->n == 8)
             return nullptr;
+        memcpy(q->name[q->n], name, n + 1);
+        q->passed[q->n]  = m->quality_passed - before[0];
+        q->total[q->n++] = m->quality_total - before[1];
     }
     return keep(c, j->src + j->tok[object].start, (size_t) (j->tok[object].end - j->tok[object].start));
 }
@@ -373,7 +385,8 @@ geistr_status geistr_catalog_parse(const char *text, size_t len, geistr_catalog 
         goto bad;
     }
     c->models = calloc((size_t) j.tok[list].size, sizeof *c->models);
-    if (!c->models) {
+    c->tasks  = calloc((size_t) j.tok[list].size, sizeof *c->tasks);
+    if (!c->models || !c->tasks) {
         status = GEISTR_NO_MEMORY;
         why    = "out of memory";
         goto bad;
@@ -403,6 +416,7 @@ bad:
 void geistr_catalog_free(geistr_catalog *c) {
     if (c) {
         free(c->models);
+        free(c->tasks);
         free(c->strings);
         free(c);
     }
@@ -425,6 +439,23 @@ const geistr_catalog_entry *geistr_catalog_find(const geistr_catalog *c, const c
         if (!strcmp(id, c->models[i].id))
             return &c->models[i];
     return nullptr;
+}
+
+void geistr_catalog_quality(const geistr_catalog *c, const geistr_catalog_entry *m, const char *task,
+                            uint32_t *passed, uint32_t *total) {
+    uint32_t p = 0, t = 0;
+    if (c && m >= c->models && m < c->models + c->count) {
+        const struct quality_tasks *q = &c->tasks[m - c->models];
+        p = task ? 0 : m->quality_passed;
+        t = task ? 0 : m->quality_total;
+        for (unsigned k = 0; task && k < q->n; k++)
+            if (!strcmp(task, q->name[k]))
+                p = q->passed[k], t = q->total[k];
+    }
+    if (passed)
+        *passed = p;
+    if (total)
+        *total = t;
 }
 
 /* ---- SHA-256 ------------------------------------------------------------ */

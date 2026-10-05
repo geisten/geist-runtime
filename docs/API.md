@@ -265,12 +265,30 @@ network needed:
 - Family, template and context are not in the catalog: the GGUF is their
   source (`geistr_model_info`).
 
-Still to come with #6:
+## Device fit and ranking (#6)
 
-```c
-geistr_status geistr_device_probe(geistr_device *out);
-geistr_status geistr_fit(const geistr_catalog *, const geistr_device *, const geistr_measurements *, geistr_ranking *out);
-```
+Also in `geistr_catalog.h`, without an engine:
+
+- `geistr_device_probe(models_dir)`: RAM, available RAM, free disk, cores,
+  OS and whether the engine's CPU baseline is met; `gpu` is Metal on Apple
+  Silicon (Vulkan is not probed yet; set it from the engine's backends).
+- `geistr_rank(catalog, device, local, opts)`: per model the resource fit
+  (fits / limited / unavailable), the verdict (good / usable / not
+  recommended / unknown) with a reason code, seconds per typical answer on
+  CPU and GPU, measured or estimated from the other models measured here,
+  and the faster processor. `geistr_ranking_get` is the suitability order,
+  `geistr_ranking_best` the one recommendation (installed wins a tie).
+- `local` carries what only the caller knows: installed, partial download,
+  measured speed per processor. Thresholds and the quality task are options.
+- Logic moved unchanged from geist-serve (`app_assess`, `app_judge`,
+  `app_estimate_seconds`, `app_candidate_better`, the ranking in
+  `status.c`). Reasons are codes, the wording stays with the app.
+  `make parity` runs geist-serve's own functions and the runtime on 20,000
+  random devices, catalogs and measurements and requires identical fits,
+  verdicts, seconds, processors, order and recommendation.
+- Not moved: the app's first-run default (`app_recommend`: fixed model ids
+  per platform) and the speed hint from the last replies
+  (`app_assess_device`); both are app policy.
 
 This is what `geistr catalog` (#11) prints: installed (✓), available (↓), fit (⚠).
 
@@ -292,6 +310,7 @@ another thread, lifetime),
 `tests/test_cxx.cpp` (the header as C++), the catalog
 (`tests/test_catalog.c`: SHA-256 vectors, geist-serve's catalog, install
 states, tampering, receipts; `tests/test_catalog.py`: geist-serve's invalid
-catalogs) and the example. `make sanitize`
+catalogs), the fit (`tests/test_fit.c`: geist-serve's assessment, verdict,
+estimate and ranking fixtures) and the example. `make sanitize`
 repeats them under ASan and UBSan (leak checks on Linux). The conformance
 tests use only the header; the real runtime must pass them unchanged.
