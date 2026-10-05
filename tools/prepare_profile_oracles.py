@@ -58,6 +58,11 @@ def main():
         linked = sorted({p.resolve() for p in args.reference_libraries.glob('*.so*')})
     if not linked:
         raise ValueError('missing independent reference libraries')
+    native_version = subprocess.run([str(args.reference_libraries / 'llama-cli'), '--version'],
+        capture_output=True, text=True, check=True)
+    native_build = (native_version.stdout + native_version.stderr).strip()
+    if args.reference_revision[:9] not in native_build:
+        raise ValueError('reference build identity does not match pinned source')
     r = MetadataReader(str(args.model))
     template = r.fields['tokenizer.chat_template'].contents()
     compiled = _compile_jinja_template(template)
@@ -105,6 +110,7 @@ def main():
                 'template_sha256': hashlib.sha256(template.encode()).hexdigest(),
                 'reference_revision': args.reference_revision, 'reference_binary_sha256': digest(args.reference),
                 'reference_source_sha256': digest(Path(__file__).with_name('reference_tokenize.cpp')),
+                'reference_build_version': native_build,
                 'reference_library_sha256': {p.name: digest(p) for p in linked},
                 'command': ['python3', 'tools/prepare_profile_oracles.py', '--model', '<artifact>',
                     '--sha256', args.sha256, '--profile', args.profile, '--reference', '<reference_tokenize>',

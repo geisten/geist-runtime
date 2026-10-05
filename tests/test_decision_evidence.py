@@ -21,12 +21,12 @@ corrupt[0]['logits'][0] = float('nan')
 try:
     module.numerical(plan, fixture, reference, corrupt)
     raise RuntimeError('accepted non-finite score')
-except AssertionError:
+except ValueError:
     pass
 truncated = correct[:-1]
 try:
     module.numerical(plan, fixture, reference, truncated)
     raise RuntimeError('accepted incomplete population')
-except AssertionError:
+except ValueError:
     pass
 print('evidence verifier: independent Gemma drift FAIL preserved; finite complete output required')

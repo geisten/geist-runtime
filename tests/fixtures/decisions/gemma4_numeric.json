@@ -46,9 +46,24 @@
       ]
     }
   ],
-  "actual_sha256": "a19f47c29ee6fe55cf3e13f58a9833e60942183dfeec2fe71323cf5d40b1d18c",
-  "actual_binary_sha256": "c1d85248661fdf4b266d7b884d257881d18130ae2a0ab6240c9efdfe3b8ff084",
+  "actual_sha256": "7f3f55c8737154493df7fcedfdeeacc72b3db26e88e4abed1ebcf55a6b66878b",
+  "actual_binary_sha256": "841a8ef251aa0ce8578fe332f73013603d2aa3321ccc0dea652cc4767eab9b9a",
   "reference_command": "reference_score <exact Gemma GGUF> < canonical integer prompt/candidate input",
   "execution": "CPU only (empty offload-device list, n_gpu_layers=0, offload_kqv=false, op_offload=false), F32 KV, flash attention disabled, six threads, last prompt logits only",
-  "limitations": "not a quality baseline; other modes/backends require their own numeric policy"
+  "limitations": "not a quality baseline; other modes/backends require their own numeric policy",
+  "actual_source_sha256": {
+    "src/runtime.c": "6c56beaf2796412fd75528effe4ce9e207b46515697a3e5edd917b3602323b82",
+    "src/decision_config.c": "1731d2e3989df22feffc5694dbb3f84f859697d1a8ebe72344024aee3f8c6032",
+    "src/decision_profile.c": "063bb0b6eeb760a03a91c730c776a135c109c369f146f19c3d7122dd637e70b2",
+    "src/decision_profile.h": "29853976e4ea8b737c1c588665c50dc0a1aed564a486300d033c9ea11f7220a9",
+    "src/file_identity.h": "788cc771484f53fe2bf56b3640057fe650400da07e8faddc736dcb2f8471f75d",
+    "tests/test_decision_real.c": "b865c3e12a3811ff12c1927981e2846f43a383cca3ae7a0ce2a46d7d708c1e77",
+    "tests/native_cases.h": "542141a998c2f733795e637f6851a32aeb15f691ec14b919cc893253dbf10f89",
+    "include/geistr_catalog.h": "d2946aa63af39a814a5d5d9ad61ac5c2fd0f10c6afc161ec83659406fb126c15",
+    "include/geistr.h": "6587818b19b0319d3b21c1cef2cd23c61bc9459a9ae10149a60bba13d2fa490d",
+    "include/geistr_decision.h": "3f7e7574af8ab7b2df80c2b2ff5abcedb343197ff6a221e2ae643b00677d5493",
+    "tests/fixtures/decisions/gemma4.h": "58db537421ab26c782dda8c28d499a51b0e61b245ca2db1114b8f1df0929ee6f",
+    "tests/fixtures/decisions/bonsai2.h": "1c1c571e7f7f8af6cf12df9496969518e23793b6efaca725479f9c18d1e1bcad"
+  },
+  "reference_build_version": "0.2.0-dev, build 10724, commit 01ae597e3, AppleClang 21.0.0.21000334, Darwin arm64"
 }
