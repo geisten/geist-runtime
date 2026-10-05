@@ -1,0 +1,15 @@
+/* Generated ONLY from the independent native oracle JSON. */
+static const int32_t gemma4_0_ids[] = {2,105,9731,107,11323,7121,886,17686,5086,236761,25685,1186,607,1061,2307,236761,3574,711,8082,236761,106,107,105,2364,107,14977,236787,107,24249,5086,14339,236743,236812,236881,107,8755,236787,107,236776,870,19025,9414,236743,236812,107,236799,870,21716,9414,236743,236810,107,24852,886,2307,236761,106,107,105,4368,107};
+static const int32_t gemma4_0_candidates[] = {236776,236799};
+static const char gemma4_0_prompt[] = "<bos><|turn>system\012Select exactly one supplied option. Answer only with its key. Do not explain.<turn|>\012<|turn>user\012Question:\012Which option equals 4?\012Options:\012A [four]: 4\012B [five]: 5\012Choose one key.<turn|>\012<|turn>model\012";
+static const int32_t gemma4_1_ids[] = {2,105,9731,107,11323,7121,886,17686,5086,236761,25685,1186,607,1061,2307,236761,3574,711,8082,236761,106,107,105,2364,107,3637,236787,107,43662,755,236743,236770,107,43662,755,236743,236778,107,14977,236787,107,138,62288,943,113236,236881,107,240731,138,107,8755,236787,107,236776,870,236750,25827,9414,138,7482,138,107,236799,870,173283,9414,101119,107,26908,107,24852,886,2307,236761,106,107,105,4368,107};
+static const int32_t gemma4_1_candidates[] = {236776,236799};
+static const char gemma4_1_prompt[] = "<bos><|turn>system\012Select exactly one supplied option. Answer only with its key. Do not explain.<turn|>\012<|turn>user\012Context:\012Zeile 1\012Zeile 2\012Question:\012  Welche Farbe?\012\360\237\231\202  \012Options:\012A [r\303\266t]:  rot  \012B [blau]: blau\012hell\012Choose one key.<turn|>\012<|turn>model\012";
+static const int32_t gemma4_2_ids[] = {2,105,9731,107,11323,7121,886,17686,5086,236761,25685,1186,607,1061,2307,236761,3574,711,8082,236761,106,107,105,2364,107,14977,236787,107,24852,506,1581,1548,236761,107,8755,236787,107,236776,870,21716,9414,236743,236810,107,236799,870,13498,9414,236743,236778,107,236780,870,19891,9414,236743,236800,107,236796,870,19025,9414,236743,236812,107,24852,886,2307,236761,106,107,105,4368,107};
+static const int32_t gemma4_2_candidates[] = {236776,236799,236780,236796};
+static const char gemma4_2_prompt[] = "<bos><|turn>system\012Select exactly one supplied option. Answer only with its key. Do not explain.<turn|>\012<|turn>user\012Question:\012Choose the even number.\012Options:\012A [five]: 5\012B [two]: 2\012C [three]: 3\012D [four]: 4\012Choose one key.<turn|>\012<|turn>model\012";
+static const struct native_case gemma4_cases[] = {
+{"Which option equals 4?","",2,{{"four","4"},{"five","5"}},gemma4_0_prompt,gemma4_0_ids,sizeof gemma4_0_ids / sizeof gemma4_0_ids[0],gemma4_0_candidates},
+{"  Welche Farbe?\012\360\237\231\202  ","Zeile 1\012Zeile 2",2,{{"r\303\266t"," rot  "},{"blau","blau\012hell"}},gemma4_1_prompt,gemma4_1_ids,sizeof gemma4_1_ids / sizeof gemma4_1_ids[0],gemma4_1_candidates},
+{"Choose the even number.","",4,{{"five","5"},{"two","2"},{"three","3"},{"four","4"}},gemma4_2_prompt,gemma4_2_ids,sizeof gemma4_2_ids / sizeof gemma4_2_ids[0],gemma4_2_candidates},
+};

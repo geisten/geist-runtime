@@ -16,7 +16,25 @@ for c_name, py in [("geistr_model_opts", geistr._ModelOpts), ("geistr_model_info
                    ("geistr_catalog_entry", geistr._Entry), ("geistr_device", geistr._Device),
                    ("geistr_fit", geistr._Fit)]:
     assert int(sizes[c_name]) == ctypes.sizeof(py), (c_name, sizes[c_name], ctypes.sizeof(py))
-print("python: ctypes layout = C headers")
+from geistr import decision as decision_bindings
+for c_name, py in [("geistr_decision_policy", decision_bindings._Policy),
+                   ("geistr_decision_opts", decision_bindings._Opts),
+                   ("geistr_decision_option", decision_bindings._Option),
+                   ("geistr_decision_request", decision_bindings._Request),
+                   ("geistr_decision_result", decision_bindings._Result),
+                   ("geistr_decision_capability", decision_bindings._Capability),
+                   ("geistr_decision_resources", decision_bindings._Resources),
+                   ("geistr_decision_plan", decision_bindings._Plan)]:
+    assert int(sizes[c_name]) == ctypes.sizeof(py), (c_name, sizes[c_name], ctypes.sizeof(py))
+with geistr.DecisionConfig(b'{"schema":1,"models":[]}') as cfg:
+    with geistr.open(model, processor="cpu", context=512, decision_config=cfg) as disabled:
+        assert not disabled.decision_capability["configured"]
+        try:
+            disabled.decision()
+            raise AssertionError("default-off model allowed a decision")
+        except geistr.GeistrError as exc:
+            assert exc.status == "format"
+print("python: ctypes layout = C headers; decision configuration and default-off")
 
 # ---- catalog: packaged copy, a folder of our own, installed vs available ------------
 assert len(geistr.catalog(folder=tempfile.mkdtemp())) >= 1  # the packaged catalog

@@ -1,2 +1,4 @@
 build/
 geistlib/
+
+__pycache__/

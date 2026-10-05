@@ -75,3 +75,8 @@ with geistr.chat("gemma4-e2b", system="Answer briefly.") as chat:
 Failures raise `geistr.GeistrError` with `.status` ("io", "context", …).
 CI builds wheels for macOS arm64 and Linux x86_64/arm64 (manylinux via
 auditwheel) and runs `examples/chat.py` from a fresh `pip install`.
+
+The optional fixed-option decision contract (#13) is documented in
+[docs/DECISIONS.md](docs/DECISIONS.md). It is default-off and EXPERIMENTAL;
+configuration support alone establishes neither backend decision support nor
+quality-matched speedups.

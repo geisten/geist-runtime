@@ -11,16 +11,24 @@
  * rendered and prefilled again.
  */
 #include "geistr.h"
+#include "geistr_catalog.h"
+#include "geistr_decision.h"
+#include "decision_profile.h"
+#include "file_identity.h"
 #include "stream.h"
 #include "template.h"
 #include "window.h"
 
 #include <geist.h>
 #include <geist_util.h>
+#include <geist_decision.h>
 
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdatomic.h>
+#include <stdckdint.h>
+#include <math.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -141,20 +149,42 @@ struct geistr_model {
     geist_token_t         bos;
     bool                  add_bos;
     uint32_t              context;
+    geistr_decision_policy decision;
+    atomic_size_t decision_allocations, decision_bytes;
     /* GPU backends run one engine call at a time on a model (geistlib#576);
      * CPU sessions run in parallel. */
     bool            serialize;
     pthread_mutex_t engine;
+    pthread_rwlock_t setup;
     char            error[256];
 };
 
 static void engine_lock(geistr_model *m) {
+    if (m->decision.enabled)
+        pthread_rwlock_rdlock(&m->setup);
     if (m->serialize)
         pthread_mutex_lock(&m->engine);
 }
 static void engine_unlock(geistr_model *m) {
     if (m->serialize)
         pthread_mutex_unlock(&m->engine);
+    if (m->decision.enabled)
+        pthread_rwlock_unlock(&m->setup);
+}
+
+/* Engine setup mutates model/backend caches. Exclude it from all operations,
+ * while independent CPU sessions may continue running concurrently. */
+static void engine_setup_lock(geistr_model *m) {
+    if (m->decision.enabled)
+        pthread_rwlock_wrlock(&m->setup);
+    if (m->serialize)
+        pthread_mutex_lock(&m->engine);
+}
+static void engine_setup_unlock(geistr_model *m) {
+    if (m->serialize)
+        pthread_mutex_unlock(&m->engine);
+    if (m->decision.enabled)
+        pthread_rwlock_unlock(&m->setup);
 }
 
 static struct geist_backend *backend_create(bool gpu, uint32_t threads) {
@@ -200,9 +230,37 @@ static geistr_status model_open(const char              *path,
                                 char                    *error,
                                 size_t                   cap) {
     geistr_model_opts o = GEISTR_MODEL_OPTS_INIT;
-    if (!opts_copy(&o, opts, sizeof o)) {
+    if (!opts_copy(&o, opts, sizeof o) ||
+        (opts && opts->size > offsetof(geistr_model_opts, decision) && opts->size < sizeof o)) {
         put_error(error, cap, "model options: unknown size");
         return GEISTR_INVALID;
+    }
+    geistr_decision_policy decision = {.mode = GEISTR_DECISION_DENSE};
+    struct file_identity identity = {};
+    if ((o.processor != GEISTR_PROCESSOR_AUTO && o.processor != GEISTR_PROCESSOR_CPU &&
+         o.processor != GEISTR_PROCESSOR_GPU) || o.threads > INT_MAX) {
+        put_error(error, cap, "invalid processor or thread count");
+        return GEISTR_INVALID;
+    }
+    if (o.decision) {
+        if (geistr_decision_policy_validate(o.decision) != GEISTR_OK) {
+            put_error(error, cap, "invalid decision policy or checkpoint/profile binding");
+            return GEISTR_INVALID;
+        }
+        decision = *o.decision;
+        if (decision.enabled) {
+            if (path && !file_identity_read(path, &identity)) {
+                put_error(error, cap, "enabled decision model must be a readable regular file");
+                return GEISTR_IO;
+            }
+            char sha[65];
+            geistr_status verified = path ? geistr_sha256_file(path, sha)
+                                         : geistr_sha256_memory(len, data, sha);
+            if (verified != GEISTR_OK || strcmp(sha, decision.sha256)) {
+                put_error(error, cap, "decision artifact verification failed");
+                return verified != GEISTR_OK ? verified : GEISTR_FORMAT;
+            }
+        }
     }
     enum tpl_family forced = TPL_UNKNOWN;
     if (o.chat_format && (forced = tpl_family_from_name(o.chat_format)) == TPL_UNKNOWN) {
@@ -259,6 +317,15 @@ static geistr_status model_open(const char              *path,
         geist_backend_destroy(be);
         return from_engine(s);
     }
+    if (decision.enabled && path) {
+        struct file_identity after = {};
+        if (!file_identity_read(path, &after) || !file_identity_same(&identity, &after)) {
+            put_error(error, cap, "decision artifact changed during verification/loading");
+            geist_model_destroy(gm);
+            geist_backend_destroy(be);
+            return GEISTR_FORMAT;
+        }
+    }
     geistr_model *m = calloc(1, sizeof *m);
     if (m == nullptr) {
         geist_model_destroy(gm);
@@ -266,9 +333,12 @@ static geistr_status model_open(const char              *path,
         return GEISTR_NO_MEMORY;
     }
     atomic_init(&m->refs, 1);
+    atomic_init(&m->decision_allocations, 0);
+    atomic_init(&m->decision_bytes, 0);
     m->be      = be;
     m->m       = gm;
     m->context = window;
+    m->decision = decision;
     m->family  = forced != TPL_UNKNOWN
                          ? forced
                          : tpl_family_detect(geist_model_metadata_str(gm, "tokenizer.chat_template", nullptr),
@@ -278,7 +348,17 @@ static geistr_status model_open(const char              *path,
     m->add_bos   = geist_model_add_bos(gm);
     const char *name = geist_backend_name(be);
     m->serialize = name && (!strcmp(name, "metal") || !strcmp(name, "vulkan"));
-    pthread_mutex_init(&m->engine, nullptr);
+    if (pthread_mutex_init(&m->engine, nullptr) != 0) {
+        geist_model_destroy(gm); geist_backend_destroy(be); free(m);
+        put_error(error, cap, "model synchronization setup failed");
+        return GEISTR_BACKEND;
+    }
+    if (decision.enabled && pthread_rwlock_init(&m->setup, nullptr) != 0) {
+        pthread_mutex_destroy(&m->engine);
+        geist_model_destroy(gm); geist_backend_destroy(be); free(m);
+        put_error(error, cap, "decision synchronization setup failed");
+        return GEISTR_BACKEND;
+    }
     *out = m;
     return GEISTR_OK;
 }
@@ -317,6 +397,7 @@ static void model_release(geistr_model *m) {
         geist_model_destroy(m->m);
         geist_backend_destroy(m->be);
         pthread_mutex_destroy(&m->engine);
+        if (m->decision.enabled) pthread_rwlock_destroy(&m->setup);
         free(m);
     }
 }
@@ -432,9 +513,9 @@ geistr_status geistr_chat_open(geistr_model *m, const geistr_chat_opts *opts, ge
         return s;
     }
     struct geist_session_opts so = {.max_seq_len = m->context, .temperature = o.temperature, .top_p = o.top_p};
-    engine_lock(m);
+    engine_setup_lock(m);
     enum geist_status es = geist_session_create(m->m, m->be, &so, &c->s);
-    engine_unlock(m);
+    engine_setup_unlock(m);
     if (es != GEIST_OK) {
         stops_free(stops, o.n_stop);
         free(c);
@@ -471,9 +552,9 @@ void geistr_chat_close(geistr_chat *c) {
     if (!c)
         return;
     geistr_model *m = c->model;
-    engine_lock(m);
+    engine_setup_lock(m);
     geist_session_destroy(c->s);
-    engine_unlock(m);
+    engine_setup_unlock(m);
     turns_drop(c, 0);
     free(c->turns);
     tpl_free(&c->tpl);
@@ -1085,4 +1166,308 @@ geistr_status geistr_chat_stats(const geistr_chat *c, geistr_stats *stats) {
 
 const char *geistr_chat_error(const geistr_chat *c) {
     return c ? c->error : "no chat";
+}
+
+#ifndef GEISTR_ENGINE_REVISION
+#define GEISTR_ENGINE_REVISION "unknown"
+#endif
+
+/* Fixed-option decisions: owned state, shared immutable model weights. */
+struct geistr_decision {
+    geistr_model *model;
+    struct geist_decision *scorer;
+    struct geist_session *tokenizer;
+    atomic_bool cancel;
+    geistr_decision_mode mode;
+    size_t token_capacity;
+    size_t owned_allocations, owned_bytes;
+    size_t n_prompt, n_candidates;
+    char *text;
+    int32_t *prompt, *scratch;
+    int32_t candidates[GEISTR_DECISION_MAX_OPTIONS];
+    float logits[GEISTR_DECISION_MAX_OPTIONS];
+    double probabilities[GEISTR_DECISION_MAX_OPTIONS];
+    char error[256];
+};
+
+bool geistr_decision_available(void) { return geist_decision_available(); }
+
+geistr_status geistr_decision_capability_get(const geistr_model *m, geistr_decision_capability *out) {
+    if (!out || out->size != sizeof *out)
+        return GEISTR_INVALID;
+    *out = (geistr_decision_capability){.size = sizeof *out};
+    if (!m)
+        return GEISTR_INVALID;
+    out->configured = m->decision.enabled;
+    out->profile = m->decision.profile;
+    out->backend = geist_backend_name(m->be);
+    out->engine_version = geist_version_string();
+    out->engine_revision = GEISTR_ENGINE_REVISION;
+    out->available = geist_decision_available() && geist_decision_supported(m->m);
+    out->dense = out->available && geist_decision_mode_supported(m->m, GEIST_DECISION_DENSE);
+    out->selected_rows = out->available && geist_decision_mode_supported(m->m, GEIST_DECISION_SELECTED_ROWS);
+    return GEISTR_OK;
+}
+
+geistr_status geistr_decision_resources_get(const geistr_model *m, geistr_decision_resources *out) {
+    if (!out || out->size != sizeof *out)
+        return GEISTR_INVALID;
+    *out = (geistr_decision_resources){.size = sizeof *out};
+    if (!m)
+        return GEISTR_INVALID;
+    out->live_allocations = atomic_load(&m->decision_allocations);
+    out->live_bytes = atomic_load(&m->decision_bytes);
+    struct geist_backend_resources provider = {};
+    const enum geist_status status = geist_backend_resources_snapshot(m->be, &provider);
+    if (status == GEIST_OK) {
+        out->provider_known = true;
+        out->provider_allocated_bytes = provider.allocated_bytes;
+        out->unified_memory = provider.unified_memory;
+    } else if (status != GEIST_E_UNSUPPORTED)
+        return from_engine(status);
+    return GEISTR_OK;
+}
+
+static void *decision_buffer(geistr_decision *d, size_t bytes) {
+    void *buffer = malloc(bytes);
+    if (buffer) {
+        ++d->owned_allocations;
+        d->owned_bytes += bytes;
+        atomic_fetch_add(&d->model->decision_allocations, 1);
+        atomic_fetch_add(&d->model->decision_bytes, bytes);
+    }
+    return buffer;
+}
+
+void geistr_decision_close(geistr_decision *d) {
+    if (!d)
+        return;
+    geistr_model *m = d->model;
+    engine_setup_lock(m);
+    if (d->scorer)
+        geist_decision_destroy(d->scorer);
+    if (d->tokenizer)
+        geist_session_destroy(d->tokenizer);
+    engine_setup_unlock(m);
+    free(d->text);
+    free(d->prompt);
+    free(d->scratch);
+    atomic_fetch_sub(&m->decision_allocations, d->owned_allocations);
+    atomic_fetch_sub(&m->decision_bytes, d->owned_bytes);
+    free(d);
+    model_release(m);
+}
+
+geistr_status geistr_decision_open(geistr_model *m, size_t error_cap, const geistr_decision_opts *opts,
+                                   geistr_decision **out, char *error) {
+    if (error && error_cap)
+        error[0] = 0;
+    if (out)
+        *out = nullptr;
+    if (!m || !out)
+        return GEISTR_INVALID;
+    geistr_decision_opts o = GEISTR_DECISION_OPTS_INIT;
+    if (!opts_copy(&o, opts, sizeof o) ||
+        (opts && opts->size != sizeof(size_t) &&
+         opts->size != offsetof(geistr_decision_opts, max_prompt_tokens) && opts->size != sizeof o)) {
+        put_error(error, error_cap, "decision options: unknown or partial field size");
+        return GEISTR_INVALID;
+    }
+    const geistr_decision_mode mode = o.mode == GEISTR_DECISION_DEFAULT ? m->decision.mode : o.mode;
+    if (mode != GEISTR_DECISION_DENSE && mode != GEISTR_DECISION_SELECTED_ROWS) {
+        put_error(error, error_cap, "unknown decision numeric mode");
+        return GEISTR_INVALID;
+    }
+    const enum geist_decision_mode numeric =
+        mode == GEISTR_DECISION_DENSE ? GEIST_DECISION_DENSE : GEIST_DECISION_SELECTED_ROWS;
+    if (!m->decision.enabled || !geist_decision_available() || !geist_decision_supported(m->m) ||
+        !geist_decision_mode_supported(m->m, numeric)) {
+        put_error(error, error_cap, "decision permission disabled or linked engine/model/mode unsupported");
+        return GEISTR_FORMAT;
+    }
+    const size_t max_prompt =
+        o.max_prompt_tokens ? o.max_prompt_tokens : (m->context < 512 ? m->context : 512);
+    size_t token_cap, bytes, owned_max;
+    if (!max_prompt || max_prompt > m->context || ckd_add(&token_cap, max_prompt, 1) ||
+        ckd_mul(&bytes, token_cap, sizeof(int32_t)) || ckd_mul(&owned_max, bytes, 2) ||
+        ckd_add(&owned_max, owned_max, DECISION_PROMPT_CAP) ||
+        ckd_add(&owned_max, owned_max, sizeof(geistr_decision)))
+        return GEISTR_CONTEXT;
+    geistr_decision *d = calloc(1, sizeof *d);
+    if (!d)
+        return GEISTR_NO_MEMORY;
+    d->model = m;
+    d->mode = mode;
+    d->token_capacity = token_cap;
+    atomic_init(&d->cancel, false);
+    d->owned_allocations = 1;
+    d->owned_bytes = sizeof *d;
+    atomic_fetch_add(&m->decision_allocations, 1);
+    atomic_fetch_add(&m->decision_bytes, sizeof *d);
+    atomic_fetch_add(&m->refs, 1);
+    d->text = decision_buffer(d, DECISION_PROMPT_CAP);
+    d->prompt = decision_buffer(d, bytes);
+    d->scratch = decision_buffer(d, bytes);
+    if (!d->text || !d->prompt || !d->scratch) {
+        geistr_decision_close(d);
+        return GEISTR_NO_MEMORY;
+    }
+    struct geist_decision_opts so = {
+        .mode = numeric, .max_prompt_tokens = max_prompt, .max_candidates = GEISTR_DECISION_MAX_OPTIONS};
+    struct geist_session_opts to = {.max_seq_len = 1, .top_p = 1.0f};
+    engine_setup_lock(m);
+    enum geist_status es = geist_decision_create(m->m, m->be, &so, &d->scorer);
+    if (es == GEIST_OK)
+        es = geist_session_create(m->m, m->be, &to, &d->tokenizer);
+    if (es != GEIST_OK)
+        put_error(error, error_cap, "decision setup: %s", geist_last_create_error());
+    engine_setup_unlock(m);
+    if (es != GEIST_OK) {
+        geistr_decision_close(d);
+        return from_engine(es);
+    }
+    *out = d;
+    return GEISTR_OK;
+}
+
+static geistr_status decision_tokenize(size_t *written, size_t cap, const char *text, int32_t *ids,
+                                       void *context) {
+    geistr_decision *d = context;
+    if (atomic_load(&d->cancel))
+        return GEISTR_CANCELLED;
+    engine_lock(d->model);
+    const enum geist_status es = geist_session_tokenize(d->tokenizer, text, cap, ids, written);
+    if (es != GEIST_OK)
+        snprintf(d->error, sizeof d->error, "decision tokenize: %s", geist_session_errmsg(d->tokenizer));
+    engine_unlock(d->model);
+    return es == GEIST_E_TOO_MANY_TOKENS ? GEISTR_CONTEXT : from_engine(es);
+}
+
+geistr_status geistr_decision_score(geistr_decision *d, const geistr_decision_request *r,
+                                    geistr_decision_result *out) {
+    if (d) {
+        memset(d->logits, 0, sizeof d->logits);
+        memset(d->probabilities, 0, sizeof d->probabilities);
+        d->error[0] = 0;
+        d->n_prompt = d->n_candidates = 0;
+    }
+    if (!out || out->size != sizeof *out)
+        return GEISTR_INVALID;
+    *out = (geistr_decision_result){.size = sizeof *out, .best_index = SIZE_MAX};
+    if (!d)
+        return GEISTR_INVALID;
+    out->mode = d->mode;
+    out->profile = d->model->decision.profile;
+    if (atomic_exchange(&d->cancel, false)) {
+        snprintf(d->error, sizeof d->error, "decision cancelled before preparation");
+        return GEISTR_CANCELLED;
+    }
+    const double start = now_ms();
+    size_t written = 0, n_prompt = 0;
+    geistr_status s = decision_render(&written, DECISION_PROMPT_CAP, d->model->decision.profile, r, d->text);
+    if (s == GEISTR_OK)
+        s = decision_map(&n_prompt, d->token_capacity, r->n_options, DECISION_PROMPT_CAP, decision_tokenize,
+                         d->text, d->prompt, d->scratch, d->candidates, d);
+    out->preparation_ms = now_ms() - start;
+    if (s != GEISTR_OK) {
+        if (!d->error[0])
+            snprintf(d->error, sizeof d->error, "decision preparation: %s", geistr_status_text(s));
+        if (s == GEISTR_CANCELLED)
+            atomic_store(&d->cancel, false);
+        return s;
+    }
+    d->n_prompt = n_prompt;
+    d->n_candidates = r->n_options;
+    if (atomic_exchange(&d->cancel, false)) {
+        snprintf(d->error, sizeof d->error, "decision cancelled after preparation");
+        return GEISTR_CANCELLED;
+    }
+    const double scoring = now_ms();
+    struct geist_decision_result result = {};
+    engine_lock(d->model);
+    if (atomic_exchange(&d->cancel, false)) {
+        engine_unlock(d->model);
+        out->scoring_ms = now_ms() - scoring;
+        snprintf(d->error, sizeof d->error, "decision cancelled before scoring dispatch");
+        return GEISTR_CANCELLED;
+    }
+    out->model_calls = 1;
+    const enum geist_status es =
+        geist_decision_score(d->scorer, n_prompt, r->n_options, d->prompt, d->candidates, &result);
+    if (es != GEIST_OK)
+        snprintf(d->error, sizeof d->error, "decision score: %s", geist_decision_errmsg(d->scorer));
+    /* Private arrays are copied while the engine output is still borrowed. */
+    bool valid = es == GEIST_OK &&
+                 result.mode == (d->mode == GEISTR_DECISION_DENSE ? GEIST_DECISION_DENSE
+                                                                  : GEIST_DECISION_SELECTED_ROWS) &&
+                 result.n_candidates == r->n_options && result.best_index < r->n_options && result.logits &&
+                 result.probabilities;
+    for (size_t i = 0; valid && i < r->n_options; ++i)
+        valid = isfinite(result.logits[i]) && isfinite(result.probabilities[i]);
+    if (valid)
+        for (size_t i = 0; i < r->n_options; ++i) {
+            d->logits[i] = result.logits[i];
+            d->probabilities[i] = result.probabilities[i];
+        }
+    engine_unlock(d->model);
+    out->scoring_ms = now_ms() - scoring;
+    if (atomic_exchange(&d->cancel, false)) {
+        memset(d->logits, 0, sizeof d->logits);
+        memset(d->probabilities, 0, sizeof d->probabilities);
+        snprintf(d->error, sizeof d->error, "decision cancelled after synchronous scoring");
+        return GEISTR_CANCELLED;
+    }
+    if (es != GEIST_OK)
+        return from_engine(es);
+    if (!valid) {
+        snprintf(d->error, sizeof d->error, "decision returned incomplete/non-finite candidates");
+        return GEISTR_BACKEND;
+    }
+    out->n_options = r->n_options;
+    out->best_index = result.best_index;
+    out->prompt_tokens = n_prompt;
+    out->logits = d->logits;
+    out->selection_probabilities = d->probabilities;
+    const geistr_decision_option *selected = &r->options[result.best_index];
+    memcpy(out->external_id, selected->id, selected->id_len);
+    out->external_id[selected->id_len] = 0;
+    return GEISTR_OK;
+}
+
+geistr_status geistr_decision_reset(geistr_decision *d) {
+    if (!d)
+        return GEISTR_INVALID;
+    atomic_store(&d->cancel, false);
+    d->n_prompt = d->n_candidates = 0;
+    memset(d->logits, 0, sizeof d->logits);
+    memset(d->probabilities, 0, sizeof d->probabilities);
+    engine_lock(d->model);
+    const enum geist_status es = geist_decision_reset(d->scorer);
+    engine_unlock(d->model);
+    d->error[0] = 0;
+    return from_engine(es);
+}
+geistr_status geistr_decision_cancel(geistr_decision *d) {
+    if (!d)
+        return GEISTR_INVALID;
+    atomic_store(&d->cancel, true);
+    return GEISTR_OK;
+}
+const char *geistr_decision_error(const geistr_decision *d) { return d ? d->error : "no decision"; }
+
+geistr_status geistr_decision_plan_get(const geistr_decision *d, geistr_decision_plan *out) {
+    if (!out || out->size != sizeof *out)
+        return GEISTR_INVALID;
+    *out = (geistr_decision_plan){.size = sizeof *out};
+    if (!d)
+        return GEISTR_INVALID;
+    if (d->n_prompt)
+        *out = (geistr_decision_plan){.size = sizeof *out,
+                                      .n_prompt = d->n_prompt,
+                                      .n_candidates = d->n_candidates,
+                                      .prompt = d->text,
+                                      .prompt_ids = d->prompt,
+                                      .candidate_ids = d->candidates,
+                                      .template_sha256 = decision_template_hash(d->model->decision.profile)};
+    return GEISTR_OK;
 }

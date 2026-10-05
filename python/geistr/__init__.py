@@ -21,6 +21,7 @@ import ctypes as C
 import json
 import os
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -39,7 +40,7 @@ _status = C.c_int
 
 class _ModelOpts(C.Structure):
     _fields_ = [("size", C.c_size_t), ("processor", C.c_int), ("threads", C.c_uint32), ("context", C.c_uint32),
-                ("chat_format", _str)]
+                ("chat_format", _str), ("decision", _p)]
 
 
 class _ModelInfo(C.Structure):
@@ -268,10 +269,15 @@ class Model:
     """An open model. Chats keep it alive, so closing order does not matter."""
 
     def __init__(self, model: str, *, processor: str = "auto", context: int = 0, threads: int = 0,
-                 chat_format: str | None = None, folder: str | None = None, catalog_file: str | None = None):
+                 chat_format: str | None = None, folder: str | None = None, catalog_file: str | None = None,
+                 decision_config: "DecisionConfig | None" = None):
+        self._h = _p()
+        self._guard = threading.RLock()
         path, self._reasoning = _resolve(model, folder, catalog_file)
-        opts = _ModelOpts(C.sizeof(_ModelOpts), ["auto", "cpu", "gpu"].index(processor), threads, context,
-                          _b(chat_format))
+        policy = decision_config._policy(path) if decision_config is not None else None
+        opts_size = C.sizeof(_ModelOpts) if hasattr(_lib, "geistr_decision_open") else _ModelOpts.decision.offset
+        opts = _ModelOpts(opts_size, ["auto", "cpu", "gpu"].index(processor), threads, context,
+                          _b(chat_format), C.cast(C.pointer(policy), _p) if policy else None)
         self._h, error = _p(), C.create_string_buffer(256)
         _check(_model_open(path.encode(), C.byref(opts), C.byref(self._h), error, len(error)), error.value.decode())
         self.path = path
@@ -279,8 +285,20 @@ class Model:
     @property
     def info(self) -> dict:
         i = _ModelInfo(size=C.sizeof(_ModelInfo))
-        _check(_model_info(self._handle(), C.byref(i)))
+        with self._guard:
+            _check(_model_info(self._handle(), C.byref(i)))
         return {"arch": _s(i.arch), "chat_format": _s(i.chat_format), "backend": _s(i.backend), "context": i.context}
+
+    @property
+    def decision_capability(self) -> dict:
+        return model_capability(self)
+
+    @property
+    def decision_resources(self) -> dict:
+        return model_resources(self)
+
+    def decision(self, *, mode: str = "default", max_prompt_tokens: int = 0) -> "Decision":
+        return Decision(self, mode=mode, max_prompt_tokens=max_prompt_tokens)
 
     def chat(self, system: str | None = None, *, temperature: float = 0.0, top_p: float = 1.0, max_tokens: int = 0,
              overflow: str = "refuse", thinking: bool = False, stop: tuple[str, ...] = ()) -> "Chat":
@@ -293,9 +311,10 @@ class Model:
         return self._h
 
     def close(self):
-        if getattr(self, "_h", None):
-            _model_close(self._h)
-            self._h = None
+        with getattr(self, "_guard", threading.RLock()):
+            if getattr(self, "_h", None):
+                _model_close(self._h)
+                self._h = None
 
     __del__ = close
 
@@ -323,7 +342,8 @@ class Chat:
                          1 if model._reasoning == "think_tags" else 0, ["refuse", "drop_oldest"].index(overflow),
                          int(thinking), stops if stop else None, len(stop))
         self._h = _p()
-        _check(_chat_open(model._handle(), C.byref(opts), C.byref(self._h)))
+        with model._guard:
+            _check(_chat_open(model._handle(), C.byref(opts), C.byref(self._h)))
         self._system = system
         self._turn = 0  # a newer send ends an older answer's iterator
 
@@ -416,3 +436,7 @@ def chat(model: str, system: str | None = None, *, processor: str = "auto", cont
     """Open a model and a chat on it in one step; the chat owns the model."""
     with Model(model, processor=processor, context=context, folder=folder, catalog_file=catalog_file) as m:
         return m.chat(system, **chat_opts)
+
+
+from .decision import DecisionConfig, Decision, DecisionResult, decision_available, model_capability, model_resources
+__all__ += ["DecisionConfig", "Decision", "DecisionResult", "decision_available"]

@@ -1,0 +1,13 @@
+/Applications/Xcode.app/Contents/Developer/usr/bin/make -C geistlib lib TARGET=mac-omp MODE=release \
+		GEMM_PROVIDER=native BACKENDS="cpu_neon cpu_scalar metal" CC="cc -fPIC" DECISION=1
+python3 scripts/build-wheel.py build/libgeistr.dylib build/wheel
+build/wheel/geistr-0.1.0-py3-none-macosx_27_0_arm64.whl
+cc -O2 -g -std=c23 -Wall -Wextra -Wpedantic -Werror -Wshadow -Wconversion -Wno-sign-conversion -fPIC -Iinclude -D_POSIX_C_SOURCE=200809L -D_DARWIN_C_SOURCE -Isrc -isystem geistlib/include tests/test_decision_real.c build/template.o build/stream.o build/catalog.o build/fit.o build/decision_config.o build/decision_profile.o geistlib/lib/mac-omp/release/libgeist.a -framework Accelerate /opt/homebrew/opt/libomp/lib/libomp.a -lm   -lpthread -o build/test_decision_real
+build/test_decision_real "/Users/germar/workspace/geistlib/gguf_artifacts/gemma4-e2b-Q4_K_M.gguf" "gemma4" "cpu"
+{"profile":"gemma4","backend":"cpu_neon","mode":1,"fixture":0,"native_ids":true,"direct_bit_identical":true,"model_calls":1}
+{"profile":"gemma4","backend":"cpu_neon","mode":1,"fixture":0,"best_index":0,"logits":[17.0570831,6.80047798]}
+{"profile":"gemma4","backend":"cpu_neon","mode":1,"fixture":1,"native_ids":true,"direct_bit_identical":true,"model_calls":1}
+{"profile":"gemma4","backend":"cpu_neon","mode":1,"fixture":1,"best_index":1,"logits":[7.55574417,8.69741821]}
+{"profile":"gemma4","backend":"cpu_neon","mode":1,"fixture":2,"native_ids":true,"direct_bit_identical":true,"model_calls":1}
+{"profile":"gemma4","backend":"cpu_neon","mode":1,"fixture":2,"best_index":3,"logits":[-4.89911985,8.51646519,-1.46662605,11.5871334]}
+{"selected_rows":"unsupported_explicit_error"}
