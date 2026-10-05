@@ -11,6 +11,7 @@
  * rendered and prefilled again.
  */
 #include "geistr.h"
+#include "geistr_engine.h"
 #include "stream.h"
 #include "template.h"
 #include "window.h"
@@ -145,6 +146,7 @@ struct geistr_model {
      * CPU sessions run in parallel. */
     bool            serialize;
     pthread_mutex_t engine;
+    bool            borrowed; /* geistr_model_wrap: the caller owns m and be */
     char            error[256];
 };
 
@@ -190,6 +192,25 @@ static geistr_status choose_window(const struct geist_model_plan *plan,
         return GEISTR_NO_MEMORY;
     }
     return GEISTR_OK;
+}
+
+/* The model's chat format, stops and engine rules, from the loaded engine. */
+static void model_describe(geistr_model *m, struct geist_model *gm, struct geist_backend *be, uint32_t window,
+                           enum tpl_family forced) {
+    atomic_init(&m->refs, 1);
+    m->be      = be;
+    m->m       = gm;
+    m->context = window;
+    m->family  = forced != TPL_UNKNOWN
+                         ? forced
+                         : tpl_family_detect(geist_model_metadata_str(gm, "tokenizer.chat_template", nullptr),
+                                             geist_model_arch(gm));
+    m->n_stops   = tpl_stop_ids(token_lookup, gm, geist_model_eos_token(gm), MAX_STOPS, m->stops);
+    m->bos       = geist_model_bos_token(gm);
+    m->add_bos   = geist_model_add_bos(gm);
+    const char *name = geist_backend_name(be);
+    m->serialize = name && (!strcmp(name, "metal") || !strcmp(name, "vulkan"));
+    pthread_mutex_init(&m->engine, nullptr);
 }
 
 static geistr_status model_open(const char              *path,
@@ -265,20 +286,7 @@ static geistr_status model_open(const char              *path,
         geist_backend_destroy(be);
         return GEISTR_NO_MEMORY;
     }
-    atomic_init(&m->refs, 1);
-    m->be      = be;
-    m->m       = gm;
-    m->context = window;
-    m->family  = forced != TPL_UNKNOWN
-                         ? forced
-                         : tpl_family_detect(geist_model_metadata_str(gm, "tokenizer.chat_template", nullptr),
-                                             geist_model_arch(gm));
-    m->n_stops   = tpl_stop_ids(token_lookup, gm, geist_model_eos_token(gm), MAX_STOPS, m->stops);
-    m->bos       = geist_model_bos_token(gm);
-    m->add_bos   = geist_model_add_bos(gm);
-    const char *name = geist_backend_name(be);
-    m->serialize = name && (!strcmp(name, "metal") || !strcmp(name, "vulkan"));
-    pthread_mutex_init(&m->engine, nullptr);
+    model_describe(m, gm, be, window, forced);
     *out = m;
     return GEISTR_OK;
 }
@@ -312,10 +320,49 @@ geistr_status geistr_model_open_memory(const void              *data,
     return model_open(nullptr, data, len, opts, out, error, cap);
 }
 
+geistr_status geistr_model_wrap(struct geist_model     *gm,
+                                struct geist_backend   *be,
+                                const geistr_model_opts *opts,
+                                geistr_model           **out,
+                                char                    *error,
+                                size_t                   cap) {
+    if (out)
+        *out = nullptr;
+    geistr_model_opts o = GEISTR_MODEL_OPTS_INIT;
+    if (!gm || !be || !out) {
+        put_error(error, cap, "model, backend and out are required");
+        return GEISTR_INVALID;
+    }
+    if (!opts_copy(&o, opts, sizeof o)) {
+        put_error(error, cap, "model options: unknown size");
+        return GEISTR_INVALID;
+    }
+    enum tpl_family forced = TPL_UNKNOWN;
+    if (o.chat_format && (forced = tpl_family_from_name(o.chat_format)) == TPL_UNKNOWN) {
+        put_error(error, cap, "unknown chat_format override \"%s\"", o.chat_format);
+        return GEISTR_INVALID;
+    }
+    /* The caller chose the memory when it loaded the model: the window is
+     * the trained one, or opts.context if smaller. */
+    uint64_t trained = geist_model_context_length(gm);
+    uint32_t window  = trained ? (uint32_t) (trained < UINT32_MAX ? trained : UINT32_MAX) : 4096;
+    if (o.context && o.context < window)
+        window = o.context;
+    geistr_model *m = calloc(1, sizeof *m);
+    if (m == nullptr)
+        return GEISTR_NO_MEMORY;
+    model_describe(m, gm, be, window, forced);
+    m->borrowed = true;
+    *out        = m;
+    return GEISTR_OK;
+}
+
 static void model_release(geistr_model *m) {
     if (m && atomic_fetch_sub(&m->refs, 1) == 1) {
-        geist_model_destroy(m->m);
-        geist_backend_destroy(m->be);
+        if (!m->borrowed) {
+            geist_model_destroy(m->m);
+            geist_backend_destroy(m->be);
+        }
         pthread_mutex_destroy(&m->engine);
         free(m);
     }
@@ -1027,6 +1074,13 @@ geistr_status geistr_chat_run(geistr_chat         *c,
 }
 
 /* ---- rewind ---------------------------------------------------------------- */
+
+geistr_status geistr_chat_limit(geistr_chat *c, uint32_t max_tokens) {
+    if (!c || c->answering)
+        return GEISTR_INVALID;
+    c->opts.max_tokens = max_tokens;
+    return GEISTR_OK;
+}
 
 geistr_status geistr_chat_rewind(geistr_chat *c, size_t keep) {
     if (!c || keep > c->n_turns)

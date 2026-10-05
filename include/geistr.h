@@ -195,6 +195,11 @@ size_t geistr_chat_length(const geistr_chat *chat);
  * conversation. GEISTR_INVALID if keep > geistr_chat_length. */
 geistr_status geistr_chat_rewind(geistr_chat *chat, size_t keep);
 
+/* Answer limit for the following sends, as opts.max_tokens (0 = the rest of
+ * the context). For callers whose limit differs per request. Not while an
+ * answer is running: GEISTR_INVALID then. */
+geistr_status geistr_chat_limit(geistr_chat *chat, uint32_t max_tokens);
+
 typedef enum geistr_part {
     GEISTR_PART_ANSWER = 0,
     GEISTR_PART_THINKING, /* only with opts.thinking */
