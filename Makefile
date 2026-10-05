@@ -142,7 +142,7 @@ parity: $(TEXT)
 	@echo "parity with geist-serve: $$(grep -c '^== ' $(BUILD)/parity_serve.txt) renders identical"
 	sed 's|#include "../../build/app_tasks.h"|static const struct app_task task_registry[1]; static const char task_catalog[] = ""; static const struct app_quality_record quality_registry[1];|' \
 	  $(SERVE_DIR)/src/app/tasks.c > $(BUILD)/serve_tasks.c
-	$(CC) $(CFLAGS) -Wno-conversion -Wno-shadow -Wno-missing-field-initializers -I$(SERVE_DIR)/src/app tools/parity/fit.c \
+	$(CC) $(CFLAGS) -Wno-error -I$(SERVE_DIR)/src/app tools/parity/fit.c \
 	  $(SERVE_DIR)/src/app/core.c $(BUILD)/serve_tasks.c $(TEXT) -lm -o $(BUILD)/parity_fit
 	$(BUILD)/parity_fit
 	cmp models/catalog.json $(SERVE_DIR)/models/catalog.json
