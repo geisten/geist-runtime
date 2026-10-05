@@ -77,9 +77,12 @@ typedef struct geistr_model_opts {
     uint32_t         threads;   /* CPU threads; 0 = engine default */
     uint32_t         context;   /* tokens; 0 = the model's full window, reduced to
                                    what fits into memory (see info.context) */
+    const char      *chat_format; /* override the detected template: "gemma3", "gemma4",
+                                     "chatml", "llama3", "bitnet"; nullptr = detect from
+                                     the model file. An unknown name is GEISTR_INVALID. */
 } geistr_model_opts;
 
-#define GEISTR_MODEL_OPTS_INIT {sizeof(geistr_model_opts), GEISTR_PROCESSOR_AUTO, 0, 0}
+#define GEISTR_MODEL_OPTS_INIT {sizeof(geistr_model_opts), GEISTR_PROCESSOR_AUTO, 0, 0, nullptr}
 
 typedef struct geistr_model geistr_model;
 

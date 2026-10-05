@@ -117,6 +117,37 @@ Catalog and fit run in geist-app through `geistr_catalog.h`, without an engine.
 The legacy `geist-serve` executable either uses the same chat calls or is
 retired; that is decided in #148.
 
+## Chat templates (#2)
+
+`src/template.c` (internal) renders messages per model family: Gemma 3
+(system folded into the first user turn), Gemma 4, ChatML (Qwen, SmolLM2),
+Llama 3 and BitNet (model-card turns). The family comes from the GGUF's
+`tokenizer.chat_template` markers, with `general.architecture` as the
+fallback; anything else is `GEISTR_FORMAT`. `geistr_model_opts.chat_format`
+overrides the detection by name (`"chatml"`, …) for models whose file carries
+no or a wrong template.
+
+Rendering is incremental, for the stateful chat (D2):
+
+- a send renders only its new messages, then the generation prompt;
+- after an answer the runtime appends the turn's close: the remainder after
+  the end marker if the model generated it, the whole close otherwise
+  (max_tokens, a stop string, a cancel);
+- after a rewind the state is rebuilt from the kept messages (#4).
+
+Guarantees, checked in CI:
+- `tests/test_template.c`: geist-serve's goldens, and *incremental = whole*
+  for every family (turn by turn, with and without the model's end marker,
+  equals rendering the conversation at once);
+- `make parity SERVE_DIR=…`: 40 renders byte-identical to geist-serve's own
+  `src/template.c` at a pinned commit.
+
+Stop tokens: EOS plus the end-of-turn markers of all families
+(`<end_of_turn>`, `<turn|>`, `<|im_end|>`, `<|eot_id|>`, `<|end_of_text|>`),
+resolved through the vocabulary, as geist-serve does. geist-serve's
+`chat_render_fit` (drop the oldest turns) is not moved: dropping is the chat's
+job in the stateful design (#4, `GEISTR_OVERFLOW_DROP_OLDEST`).
+
 ## What the runtime needs from geistlib (input for geistlib#622)
 
 Used today by geist-serve and needed by the runtime, to be STABLE:

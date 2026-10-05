@@ -13,6 +13,7 @@
  * costs (bytes + 3) / 4 tokens per message plus 4 for its markers.
  */
 #include "geistr.h"
+#include "template.h"
 
 #include <stdatomic.h>
 #include <stdio.h>
@@ -81,6 +82,7 @@ struct geistr_model {
     atomic_int        refs;
     geistr_model_opts opts;
     bool              slow, has_format;
+    const char       *format; /* a static family name */
     uint32_t          context;
     char              error[256];
 };
@@ -101,13 +103,18 @@ static geistr_status model_new(const char              *name,
         put_error(error, cap, "the stub opens only stub:echo, stub:slow and stub:noformat");
         return GEISTR_FORMAT;
     }
+    if (o.chat_format && tpl_family_from_name(o.chat_format) == TPL_UNKNOWN) {
+        put_error(error, cap, "unknown chat_format override");
+        return GEISTR_INVALID;
+    }
     geistr_model *m = calloc(1, sizeof *m);
     if (!m)
         return GEISTR_NO_MEMORY;
     atomic_init(&m->refs, 1);
     m->opts       = o;
     m->slow       = slow;
-    m->has_format = !noformat;
+    m->has_format = !noformat || o.chat_format;
+    m->format     = o.chat_format ? tpl_family_name(tpl_family_from_name(o.chat_format)) : "chatml";
     m->context    = o.context ? o.context : DEFAULT_CONTEXT;
     *out          = m;
     return GEISTR_OK;
@@ -167,7 +174,7 @@ geistr_status geistr_model_info_get(const geistr_model *m, geistr_model_info *in
     geistr_model_info full = {
         .size        = sizeof full,
         .arch        = "stub",
-        .chat_format = m->has_format ? "chatml" : "unknown",
+        .chat_format = m->has_format ? m->format : "unknown",
         .backend     = m->opts.processor == GEISTR_PROCESSOR_GPU ? "stub-gpu" : "cpu",
         .context     = m->context,
     };

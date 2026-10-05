@@ -40,3 +40,11 @@ jobs:
         run: make test
       - name: sanitizers (ASan, UBSan; leaks on Linux)
         run: make sanitize
+      # #2: the templates render byte-identical to geist-serve's at this commit.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: geisten/geist-serve
+          ref: 3b27041bfbdcb94fcb6bb49f96e3737dc09e3e1c
+          path: serve
+      - name: parity with geist-serve
+        run: make parity SERVE_DIR=serve

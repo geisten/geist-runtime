@@ -96,6 +96,18 @@ static void test_basics(void) {
     CHECK(geistr_chat_open(model, nullptr, &chat) == GEISTR_FORMAT && !chat && geistr_model_error(model)[0],
           "unknown chat format: FORMAT on chat open");
     geistr_model_close(model);
+    geistr_model_opts forced = GEISTR_MODEL_OPTS_INIT;
+    forced.chat_format       = "gemma4";
+    CHECK(geistr_model_open("stub:noformat", &forced, &model, nullptr, 0) == GEISTR_OK, "open with a format override");
+    geistr_model_info info = {.size = sizeof info};
+    CHECK(geistr_model_info_get(model, &info) == GEISTR_OK && !strcmp(info.chat_format, "gemma4") &&
+              geistr_chat_open(model, nullptr, &chat) == GEISTR_OK,
+          "the override replaces the detected format");
+    geistr_chat_close(chat);
+    geistr_model_close(model);
+    forced.chat_format = "jinja";
+    CHECK(geistr_model_open("stub:echo", &forced, &model, error, sizeof error) == GEISTR_INVALID && !model && error[0],
+          "an unknown override is refused");
     geistr_model_close(nullptr);
     geistr_chat_close(nullptr);
 
