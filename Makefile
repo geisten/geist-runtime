@@ -108,10 +108,12 @@ endif
 RUNTIME := $(BUILD)/libgeistr.a
 
 # Always delegate: the engine's own make is incremental, and a plain file
-# target would go stale on a GEIST_REF bump.
+# target would go stale on a GEIST_REF bump. -fPIC rides on CC so it reaches
+# every engine object (stb has its own rule without EXTRA_CFLAGS): the engine
+# goes into libgeistr.so too.
 $(ENGINE_LIB): FORCE
 	$(MAKE) -C $(GEISTLIB) lib TARGET=$(TARGET) MODE=$(ENGINE_MODE) \
-		GEMM_PROVIDER=$(GEMM_PROVIDER) BACKENDS="$(BACKENDS)" EXTRA_CFLAGS=-fPIC
+		GEMM_PROVIDER=$(GEMM_PROVIDER) BACKENDS="$(BACKENDS)" CC="$(CC) -fPIC"
 
 $(BUILD)/runtime.o: src/runtime.c src/*.h include/geistr.h $(ENGINE_LIB) | $(BUILD)
 	$(CC) $(CFLAGS) -isystem $(GEISTLIB)/include -c $< -o $@
