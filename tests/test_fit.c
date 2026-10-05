@@ -98,6 +98,15 @@ static void assess(const geistr_catalog *c) {
     CHECK(resource(c, &h, "gemma4-e2b", false) == GEISTR_RESOURCE_FITS);
     h.supported = false;
     CHECK(resource(c, &h, "gemma4-e2b", true) == GEISTR_RESOURCE_UNAVAILABLE);
+    /* geistr_assess: the same answer for one entry, without a ranking. */
+    const char *why = nullptr;
+    h.supported     = true;
+    CHECK(geistr_assess(geistr_catalog_find(c, "gemma4-e2b"), &h, false, &why) == GEISTR_RESOURCE_FITS &&
+          !strcmp(why, "fits"));
+    geistr_catalog_entry copy = *geistr_catalog_find(c, "gemma4-e2b");
+    h.ram                     = GIB;
+    CHECK(geistr_assess(&copy, &h, false, &why) == GEISTR_RESOURCE_UNAVAILABLE && !strcmp(why, "ram"));
+    CHECK(geistr_assess(nullptr, &h, false, &why) == GEISTR_RESOURCE_UNAVAILABLE && !strcmp(why, "invalid"));
 }
 
 /* One model with the given resource, seconds per answer (< 0 unmeasured)
