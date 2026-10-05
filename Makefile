@@ -7,6 +7,8 @@
 #   make test-real   the real runtime against the reference model (GEIST_TEST_MODEL,
 #                    default: the engine's fetched SmolLM2; make fetch-model)
 #   make chat-real   build/chat-real: the example chat on the real runtime
+#   make geistr      build/geistr: the CLI (PULL=0: without the download module)
+#   make test-geistr the CLI against the reference model
 #   make parity SERVE_DIR=../geist-serve   templates byte-identical to geist-serve,
 #                    and the same catalog
 #
@@ -76,7 +78,7 @@ test: all
 	  { echo "example chat failed: $$out"; exit 1; }
 
 # ---- the real runtime on geistlib (#4) ---------------------------------------
-ENGINE_GOALS := runtime test-real chat-real fetch-model
+ENGINE_GOALS := runtime test-real chat-real fetch-model geistr test-geistr
 ifneq (,$(filter $(ENGINE_GOALS),$(MAKECMDGOALS)))
 GEIST_REPO ?= https://github.com/geisten/geistlib.git
 GEIST_REF  ?= 5dd7e1747df86092a320e638c66993afd409e3b6
@@ -123,11 +125,41 @@ $(BUILD)/chat-real: examples/chat.c $(RUNTIME) $(ENGINE_LIB)
 
 chat-real: $(BUILD)/chat-real
 
+# ---- the geistr CLI (#11) -------------------------------------------------------
+# PULL=1 adds the download module (libcurl); PULL=0 builds without network code.
+PULL ?= $(shell curl-config --libs >/dev/null 2>&1 && echo 1 || echo 0)
+ifeq ($(PULL),1)
+GEISTR_PULL := tools/geistr/pull.c
+GEISTR_LIBS := $(shell curl-config --libs)
+else
+GEISTR_PULL := tools/geistr/nopull.c
+endif
+
+$(BUILD)/catalog_json.h: models/catalog.json | $(BUILD)
+	python3 -c 'import sys; d = open(sys.argv[1], "rb").read(); print("static const unsigned char embedded_catalog[] = {" + ",".join(map(str, d)) + "};")' $< > $@
+
+$(BUILD)/geistr: tools/geistr/geistr.c $(GEISTR_PULL) tools/geistr/pull.h $(BUILD)/catalog_json.h $(RUNTIME) $(ENGINE_LIB)
+	$(CC) $(CFLAGS) $(GEISTR_CFLAGS) -I$(BUILD) -Itools/geistr tools/geistr/geistr.c $(GEISTR_PULL) $(RUNTIME) \
+		$(ENGINE_LINK) $(GEISTR_LIBS) $(LDFLAGS) $(LDLIBS) -o $@
+
+geistr: $(BUILD)/geistr
+
+# The CLI against the reference model: run, chat, cancellation, catalog
+# (--json schema), pull from a local server (a GEISTR_TESTING build).
+test-geistr:
+	@test -f "$(GEIST_TEST_MODEL)" || { echo "no reference model at $(GEIST_TEST_MODEL): make fetch-model"; exit 1; }
+	$(MAKE) BUILD=$(BUILD)/geistr-test GEISTR_CFLAGS=-DGEISTR_TESTING geistr
+	$(MAKE) BUILD=$(BUILD)/geistr-nonet PULL=0 geistr
+	python3 tests/test_geistr.py $(BUILD)/geistr-test/geistr $(BUILD)/geistr-nonet/geistr "$(GEIST_TEST_MODEL)" $(PULL)
+
+# An explicit target never skips: a missing model is an error, not a pass.
 test-real: $(BUILD)/test_real
+	@test -f "$(GEIST_TEST_MODEL)" || { echo "no reference model at $(GEIST_TEST_MODEL): make fetch-model"; exit 1; }
 	GEIST_TEST_MODEL="$(GEIST_TEST_MODEL)" $(BUILD)/test_real
 
+# The reference model of the real tests: SmolLM2 360M from the catalog, verified.
 fetch-model:
-	$(MAKE) -C $(GEISTLIB) fetch-model
+	sh scripts/fetch-model.sh models/catalog.json smollm2-360m $(dir $(GEIST_TEST_MODEL))
 
 FORCE:
 
@@ -155,4 +187,4 @@ sanitize:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test sanitize parity clean runtime test-real chat-real fetch-model FORCE
+.PHONY: all test sanitize parity clean runtime test-real chat-real fetch-model geistr test-geistr FORCE

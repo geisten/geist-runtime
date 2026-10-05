@@ -69,7 +69,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: deps (linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update -q && sudo apt-get install -y -q gcc-14
+        run: sudo apt-get update -q && sudo apt-get install -y -q gcc-14 libcurl4-openssl-dev
       - name: deps (macos)
         if: runner.os == 'macOS'
         run: brew install libomp
@@ -81,10 +81,12 @@ jobs:
         with:
           path: geistlib/gguf_artifacts/smollm2-360m-instruct-q8_0.gguf
           key: geist-model-smollm2-360m-q8-48ab3034d0dd
-      - name: fetch reference model (SHA-verified)
+      - name: fetch reference model (SmolLM2 from the catalog, SHA-verified)
         run: make fetch-model
       - name: real runtime tests
         run: make test-real
       - name: real runtime tests (ASan, UBSan; leaks on Linux)
         run: make BUILD=build/san CFLAGS="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all" LDFLAGS="-fsanitize=address,undefined" test-real
-
+      # #11: the CLI against the reference model, with and without the download module.
+      - name: geistr CLI
+        run: make test-geistr PULL=1

@@ -25,6 +25,7 @@
 #include <geist_util.h>
 
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -145,11 +146,18 @@ static void recurrent(const char *path) {
 struct cancel_after {
     geistr_chat *c;
     unsigned     ms;
+    atomic_int  *pieces; /* if set: cancel once this many pieces arrived, not after ms */
+    double       at;     /* when the cancel was called */
 };
 static void *cancel_later(void *arg) {
     struct cancel_after *a  = arg;
     struct timespec      ts = {.tv_sec = a->ms / 1000, .tv_nsec = (long) (a->ms % 1000) * 1000000};
-    nanosleep(&ts, nullptr);
+    if (a->pieces)
+        for (int i = 0; i < 10000 && atomic_load(a->pieces) < 3; i++)
+            nanosleep(&(struct timespec) {.tv_nsec = 1000000}, nullptr);
+    else
+        nanosleep(&ts, nullptr);
+    a->at = now_ms();
     geistr_chat_cancel(a->c);
     return nullptr;
 }
@@ -243,20 +251,23 @@ int main(void) {
     /* ---- cancel during generation ---- */
     {
         geistr_chat   *cc  = chat(m, 2000, GEISTR_OVERFLOW_REFUSE);
-        geistr_message q[] = {SYSTEM, {"user", "Count from one to five hundred in words."}};
+        geistr_message q[] = {SYSTEM, {"user", "Write a long story about a lighthouse keeper, at least 1000 words."}};
         CHECK(geistr_chat_send(cc, 2, q) == GEISTR_OK, "long answer");
-        struct cancel_after ca = {cc, 200};
+        /* Cancel from another thread once the answer streams: no timing guess
+         * about how long the model would talk on this machine. */
+        atomic_int          pieces = 0;
+        struct cancel_after ca     = {cc, 0, &pieces, 0};
         pthread_t           th;
         pthread_create(&th, nullptr, cancel_later, &ca);
         geistr_piece  p = {.size = sizeof p};
         geistr_status s;
-        const double  t0 = now_ms();
-        while ((s = geistr_chat_next(cc, &p)) == GEISTR_OK && p.part != GEISTR_PART_END) {
-        }
+        while ((s = geistr_chat_next(cc, &p)) == GEISTR_OK && p.part != GEISTR_PART_END)
+            atomic_fetch_add(&pieces, 1);
+        const double done = now_ms();
         pthread_join(th, nullptr);
-        const double took = now_ms() - t0;
-        printf("  cancel during generation: %.0f ms after 200 ms\n", took);
-        CHECK(s == GEISTR_CANCELLED && took < 1500, "cancelled promptly while generating");
+        printf("  cancel during generation: stopped %.0f ms after the cancel, %d pieces\n", done - ca.at,
+               atomic_load(&pieces));
+        CHECK(s == GEISTR_CANCELLED && done - ca.at < 1000, "cancelled promptly while generating");
         CHECK(stats(cc).finish == GEISTR_FINISH_CANCELLED, "finish CANCELLED");
         geistr_message next = {"user", "Say hi."};
         CHECK(ask(cc, 1, &next, again, sizeof again) == GEISTR_OK && again[0], "the chat continues after a cancel");
@@ -269,7 +280,7 @@ int main(void) {
         text[big]              = 0;
         geistr_chat   *pc      = chat(m, 8, GEISTR_OVERFLOW_REFUSE);
         geistr_message long_q  = {"user", text};
-        struct cancel_after cb = {pc, 30};
+        struct cancel_after cb = {pc, 30, nullptr, 0};
         pthread_create(&th, nullptr, cancel_later, &cb);
         const double t_send = now_ms();
         s               = geistr_chat_send(pc, 1, &long_q);
