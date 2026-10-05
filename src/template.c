@@ -218,6 +218,19 @@ char *tpl_render_send(struct tpl_state *st, size_t n, const geistr_message msgs[
     return o.p;
 }
 
+const char *tpl_generation_prompt(enum tpl_family family) {
+    /* open + assistant role + role_end, as render_turns ends; BitNet's own. */
+    static const char *const prompts[] = {
+            [TPL_UNKNOWN] = "",
+            [TPL_GEMMA3]  = "<start_of_turn>model\n",
+            [TPL_GEMMA4]  = "<|turn>model\n",
+            [TPL_CHATML]  = "<|im_start|>assistant\n",
+            [TPL_LLAMA3]  = "<|start_header_id|>assistant<|end_header_id|>\n\n",
+            [TPL_BITNET]  = "Assistant: ",
+    };
+    return family >= TPL_UNKNOWN && family <= TPL_BITNET ? prompts[family] : "";
+}
+
 const char *tpl_answer_close(enum tpl_family family, const char *end_marker) {
     const struct turn_fmt *f     = turn_fmt(family);
     const char            *close = family == TPL_BITNET ? "<|eot_id|>" : f ? f->close : "";

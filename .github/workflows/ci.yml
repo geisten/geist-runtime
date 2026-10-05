@@ -48,3 +48,43 @@ jobs:
           path: serve
       - name: parity with geist-serve
         run: make parity SERVE_DIR=serve
+
+  # #4: the real runtime on the pinned geistlib, against the reference model.
+  real:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            cc: gcc-14
+          - runner: ubuntu-24.04-arm
+            cc: gcc-14
+          - runner: macos-15
+            cc: clang
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      CC: ${{ matrix.cc }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: deps (linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y -q gcc-14
+      - name: deps (macos)
+        if: runner.os == 'macOS'
+        run: brew install libomp
+      # The engine checkout first: the model cache restores into it.
+      - name: engine and runtime
+        run: make runtime
+      - name: cache reference model
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: geistlib/gguf_artifacts/smollm2-360m-instruct-q8_0.gguf
+          key: geist-model-smollm2-360m-q8-48ab3034d0dd
+      - name: fetch reference model (SHA-verified)
+        run: make fetch-model
+      - name: real runtime tests
+        run: make test-real
+      - name: real runtime tests (ASan, UBSan; leaks on Linux)
+        run: make BUILD=build/san CFLAGS="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all" LDFLAGS="-fsanitize=address,undefined" test-real
+

@@ -173,6 +173,51 @@ a 6 MB bounded discard, 1 MB of thinking on character boundaries).
 geist-serve's reasoning cases (`tests/app/reasoning_test.py`) also run
 through the API (`tests/test_api.c`, model `stub:raw`).
 
+## The runtime on geistlib (#4)
+
+`src/runtime.c` implements `geistr.h` on the pinned geistlib (`make runtime`).
+
+**Opening a model.** `geist_model_plan` reads the header (milliseconds, no
+weights), then the window is chosen (`src/window.h`) and the model is loaded
+**once** with it:
+- an explicit `opts.context` is used as given, capped at the trained window;
+- otherwise the trained window (`<arch>.context_length`, 4096 if unknown),
+  reduced to what fits into three quarters of physical memory after the
+  weights, at the KV + model bytes per position the plan reports, in steps
+  of 256; below 512 positions the open fails with `GEISTR_NO_MEMORY`;
+- `PROCESSOR_AUTO` takes the GPU (Metal, Vulkan) for models of 1 GiB and
+  more, as geist-serve does.
+Measured on an M1 Max (64 GiB): SmolLM2 gets its trained 8192, Qwen3.8 27B
+its full 262144 (35.6 GB of a 51.5 GB budget).
+
+**A send** tokenizes three parts apart: the previous answer's turn close,
+the new turns, the generation prompt. So it processes only what is new (a
+follow-up turn with SmolLM2: 14 tokens instead of 34 for the first), and
+every message knows where it starts in the session.
+
+**Rewind** truncates the session at that position
+(`geist_session_truncate`). Where geistlib refuses (recurrent DeltaNet
+layers such as Qwen3.5) or a position inside a multi-message send is not
+known, the kept messages are rendered and prefilled again; both paths are
+tested (same answer, same context as before).
+
+**Overflow**: `REFUSE` leaves the chat as it was; `DROP_OLDEST` drops the
+oldest turns (a leading system message stays) until the conversation,
+rendered again, fits, and prefills it again (`input_tokens` says so).
+
+**Cancellation** is checked between decode steps and between prefill
+chunks. geistlib cannot interrupt a prefill call, so the runtime slices it:
+the first chunk is 32 tokens, later ones aim at 200 ms each and grow at most
+fourfold per step. Measured: cancel during a 5,000-token prefill lands
+after 15 ms on an M1 Max CPU and 546 ms in a slow Linux container; prefill
+throughput stays within measurement noise of one unsliced call (157 vs
+151-162 tokens/s on the CPU). A cancel inside geistlib would make the
+slicing unnecessary (geistlib#628).
+
+**Threads**: chats on one model run in parallel on the CPU (tested: two
+chats answer as one alone). On GPU backends the runtime serialises the engine
+calls of a model's chats (geistlib#576).
+
 ## What the runtime needs from geistlib (input for geistlib#622)
 
 Used today by geist-serve and needed by the runtime, to be STABLE:
