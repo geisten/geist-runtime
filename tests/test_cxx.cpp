@@ -1,5 +1,6 @@
 // test_cxx.cpp — the header compiles and links as C++ (extern "C", no C-only syntax).
 #include "geistr.h"
+#include "geistr_catalog.h"
 
 #include <cstdio>
 #include <string>

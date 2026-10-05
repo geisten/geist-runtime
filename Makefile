@@ -7,7 +7,8 @@
 #   make test-real   the real runtime against the reference model (GEIST_TEST_MODEL,
 #                    default: the engine's fetched SmolLM2; make fetch-model)
 #   make chat-real   build/chat-real: the example chat on the real runtime
-#   make parity SERVE_DIR=../geist-serve   templates byte-identical to geist-serve
+#   make parity SERVE_DIR=../geist-serve   templates byte-identical to geist-serve,
+#                    and the same catalog
 #
 # src/template.c and src/stream.c are the runtime's text side; src/runtime.c
 # binds them to geistlib (#4). src/stub.c implements include/geistr.h without
@@ -24,11 +25,11 @@ override CXXFLAGS += -std=c++20 $(WARN) -Iinclude
 LDLIBS   += -lpthread
 
 LIB  := $(BUILD)/libgeistr-stub.a
-TEXT := $(BUILD)/template.o $(BUILD)/stream.o
+TEXT := $(BUILD)/template.o $(BUILD)/stream.o $(BUILD)/catalog.o
 
-all: $(LIB) $(BUILD)/test_api $(BUILD)/test_cxx $(BUILD)/test_template $(BUILD)/test_stream $(BUILD)/test_window $(BUILD)/chat
+all: $(LIB) $(BUILD)/test_api $(BUILD)/test_cxx $(BUILD)/test_template $(BUILD)/test_stream $(BUILD)/test_window $(BUILD)/test_catalog $(BUILD)/chat
 
-$(BUILD)/%.o: src/%.c src/*.h include/geistr.h | $(BUILD)
+$(BUILD)/%.o: src/%.c src/*.h include/*.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(LIB): $(BUILD)/stub.o $(TEXT)
@@ -49,6 +50,9 @@ $(BUILD)/test_stream: tests/test_stream.c $(TEXT)
 $(BUILD)/test_window: tests/test_window.c src/window.h | $(BUILD)
 	$(CC) $(CFLAGS) -Isrc $< $(LDFLAGS) -o $@
 
+$(BUILD)/test_catalog: tests/test_catalog.c $(TEXT)
+	$(CC) $(CFLAGS) $< $(TEXT) $(LDFLAGS) $(LDLIBS) -o $@
+
 $(BUILD)/chat: examples/chat.c $(LIB)
 	$(CC) $(CFLAGS) $< $(LIB) $(LDFLAGS) $(LDLIBS) -o $@
 
@@ -61,6 +65,8 @@ test: all
 	$(BUILD)/test_template
 	$(BUILD)/test_stream
 	$(BUILD)/test_window
+	$(BUILD)/test_catalog
+	python3 tests/test_catalog.py $(BUILD)/test_catalog models/catalog.json
 	@out=$$(printf 'Hallo Welt\nnoch einmal\n' | $(BUILD)/chat stub:echo) && \
 	  echo "$$out" | grep -q 'Echo: noch einmal' && echo "example chat: two turns passed" || \
 	  { echo "example chat failed: $$out"; exit 1; }
@@ -130,6 +136,8 @@ parity: $(TEXT)
 	$(BUILD)/parity_geistr > $(BUILD)/parity_geistr.txt
 	cmp $(BUILD)/parity_serve.txt $(BUILD)/parity_geistr.txt
 	@echo "parity with geist-serve: $$(grep -c '^== ' $(BUILD)/parity_serve.txt) renders identical"
+	cmp models/catalog.json $(SERVE_DIR)/models/catalog.json
+	$(BUILD)/test_catalog --validate < $(SERVE_DIR)/models/catalog.json
 
 SAN := -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all
 sanitize:

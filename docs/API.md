@@ -238,14 +238,36 @@ Used today by geist-serve and needed by the runtime, to be STABLE:
 - the model's trained context length and the KV bytes per token, so the
   runtime can choose the largest window that fits into memory (D8).
 
-## Draft for #5/#6 (not binding)
+## Catalog and verification (#5)
+
+[`include/geistr_catalog.h`](../include/geistr_catalog.h), no engine and no
+network needed:
+
+- `geistr_catalog_parse` reads geist-serve's `models/catalog.json` format
+  (schema 1 and 2) with geist-serve's rules: strict keys, safe file names,
+  only `https://huggingface.co/…/resolve/` URLs, validated quality and speed
+  evidence. A bad catalog is refused as a whole, with the reason.
+  `models/catalog.json` is the same file as geist-serve's (`make parity` compares them).
+- `geistr_catalog_check(entry, models_dir, hash)` gives the install state:
+  `MISSING`, `UNVERIFIED` (right size, not hashed yet), `OK` (SHA-256
+  matches) or `MISMATCH` (wrong size or hash, or not a regular file: never
+  load it). Nothing is deleted.
+- Receipts: a match writes `<models>/.verified/<sha256>` with the file's
+  device, inode, size, mode, owner, links, mtime and ctime (geist-serve's
+  stamp). While these are unchanged, `check` answers without hashing; so
+  `check(…, hash=false)` lists a folder instantly, and only new or changed
+  files cost a hash.
+- `geistr_models_dir` is the folder shared with the geisten app.
+- SHA-256: CommonCrypto on Apple (790 MB/s on M1), portable C elsewhere
+  (about 140 MB/s). Hardware SHA instructions follow if first-time checks
+  of large models get slow on Linux.
+- Download stays out of the library (`geistr pull`, #11).
+- Family, template and context are not in the catalog: the GGUF is their
+  source (`geistr_model_info`).
+
+Still to come with #6:
 
 ```c
-/* geistr_catalog.h — no engine needed */
-geistr_status geistr_catalog_parse(const char *json, size_t len, geistr_catalog **out, char *error, size_t cap);
-size_t        geistr_catalog_count(const geistr_catalog *);
-geistr_status geistr_catalog_entry(const geistr_catalog *, size_t i, geistr_catalog_entry *out);
-geistr_status geistr_catalog_scan(geistr_catalog *, const char *models_dir);   /* installed = present + SHA-256 */
 geistr_status geistr_device_probe(geistr_device *out);
 geistr_status geistr_fit(const geistr_catalog *, const geistr_device *, const geistr_measurements *, geistr_ranking *out);
 ```
@@ -267,6 +289,9 @@ This is what `geistr catalog` (#11) prints: installed (✓), available (↓), fi
 `make test` runs `tests/test_api.c` (conformance: basics, ABI sizes, answer,
 thinking, limits, stop strings, conversation, rewind, cancellation from
 another thread, lifetime),
-`tests/test_cxx.cpp` (the header as C++) and the example. `make sanitize`
+`tests/test_cxx.cpp` (the header as C++), the catalog
+(`tests/test_catalog.c`: SHA-256 vectors, geist-serve's catalog, install
+states, tampering, receipts; `tests/test_catalog.py`: geist-serve's invalid
+catalogs) and the example. `make sanitize`
 repeats them under ASan and UBSan (leak checks on Linux). The conformance
 tests use only the header; the real runtime must pass them unchanged.
