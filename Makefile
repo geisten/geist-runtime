@@ -25,9 +25,9 @@ override CXXFLAGS += -std=c++20 $(WARN) -Iinclude
 LDLIBS   += -lpthread
 
 LIB  := $(BUILD)/libgeistr-stub.a
-TEXT := $(BUILD)/template.o $(BUILD)/stream.o $(BUILD)/catalog.o
+TEXT := $(BUILD)/template.o $(BUILD)/stream.o $(BUILD)/catalog.o $(BUILD)/fit.o
 
-all: $(LIB) $(BUILD)/test_api $(BUILD)/test_cxx $(BUILD)/test_template $(BUILD)/test_stream $(BUILD)/test_window $(BUILD)/test_catalog $(BUILD)/chat
+all: $(LIB) $(BUILD)/test_api $(BUILD)/test_cxx $(BUILD)/test_template $(BUILD)/test_stream $(BUILD)/test_window $(BUILD)/test_catalog $(BUILD)/test_fit $(BUILD)/chat
 
 $(BUILD)/%.o: src/%.c src/*.h include/*.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -53,6 +53,9 @@ $(BUILD)/test_window: tests/test_window.c src/window.h | $(BUILD)
 $(BUILD)/test_catalog: tests/test_catalog.c $(TEXT)
 	$(CC) $(CFLAGS) $< $(TEXT) $(LDFLAGS) $(LDLIBS) -o $@
 
+$(BUILD)/test_fit: tests/test_fit.c $(TEXT)
+	$(CC) $(CFLAGS) $< $(TEXT) $(LDFLAGS) $(LDLIBS) -o $@
+
 $(BUILD)/chat: examples/chat.c $(LIB)
 	$(CC) $(CFLAGS) $< $(LIB) $(LDFLAGS) $(LDLIBS) -o $@
 
@@ -67,6 +70,7 @@ test: all
 	$(BUILD)/test_window
 	$(BUILD)/test_catalog
 	python3 tests/test_catalog.py $(BUILD)/test_catalog models/catalog.json
+	$(BUILD)/test_fit
 	@out=$$(printf 'Hallo Welt\nnoch einmal\n' | $(BUILD)/chat stub:echo) && \
 	  echo "$$out" | grep -q 'Echo: noch einmal' && echo "example chat: two turns passed" || \
 	  { echo "example chat failed: $$out"; exit 1; }
@@ -136,6 +140,11 @@ parity: $(TEXT)
 	$(BUILD)/parity_geistr > $(BUILD)/parity_geistr.txt
 	cmp $(BUILD)/parity_serve.txt $(BUILD)/parity_geistr.txt
 	@echo "parity with geist-serve: $$(grep -c '^== ' $(BUILD)/parity_serve.txt) renders identical"
+	sed 's|#include "../../build/app_tasks.h"|static const struct app_task task_registry[1]; static const char task_catalog[] = ""; static const struct app_quality_record quality_registry[1];|' \
+	  $(SERVE_DIR)/src/app/tasks.c > $(BUILD)/serve_tasks.c
+	$(CC) $(CFLAGS) -Wno-error -I$(SERVE_DIR)/src/app tools/parity/fit.c \
+	  $(SERVE_DIR)/src/app/core.c $(BUILD)/serve_tasks.c $(TEXT) -lm -o $(BUILD)/parity_fit
+	$(BUILD)/parity_fit
 	cmp models/catalog.json $(SERVE_DIR)/models/catalog.json
 	$(BUILD)/test_catalog --validate < $(SERVE_DIR)/models/catalog.json
 
