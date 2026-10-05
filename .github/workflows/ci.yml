@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            cc: gcc-14
+            cxx: g++-14
+          - runner: ubuntu-24.04
+            cc: clang-18
+            cxx: clang++-18
+          - runner: ubuntu-24.04-arm
+            cc: gcc-14
+            cxx: g++-14
+          - runner: macos-15
+            cc: clang
+            cxx: clang++
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: deps (linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y -q gcc-14 g++-14 clang-18
+      - name: build and test
+        run: make test
+      - name: sanitizers (ASan, UBSan; leaks on Linux)
+        run: make sanitize
