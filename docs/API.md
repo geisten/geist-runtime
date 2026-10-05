@@ -148,6 +148,31 @@ resolved through the vocabulary, as geist-serve does. geist-serve's
 `chat_render_fit` (drop the oldest turns) is not moved: dropping is the chat's
 job in the stateful design (#4, `GEISTR_OVERFLOW_DROP_OLDEST`).
 
+## Text stages (#3)
+
+`src/stream.c` (internal) turns generated token pieces into the pieces of
+`geistr_chat_next`, in three stages:
+
+1. **UTF-8**: complete, validated code points only (no overlongs,
+   surrogates or values above U+10FFFF). Invalid model output ends the
+   answer with `GEISTR_BACKEND` and finish `ERROR`.
+2. **Thinking** (`GEISTR_REASONING_THINK_TAGS`): `<think>` … `</think>` blocks
+   before the answer become `GEISTR_PART_THINKING` (or are discarded without
+   `opts.thinking`), without their closing markers. Nesting up to 16 deep;
+   beyond that, and for unfinished thinking, the rest is discarded and never
+   shown. Up to 32 leading whitespace bytes are kept, so an answer may start
+   with whitespace, as in geist-serve. A `<think>` after the answer has
+   started is literal text.
+3. **Stop strings** (D11): the answer ends before the first match; a
+   possible start of one is held back across tokens.
+
+Stages 1 and 2 are geist-serve's `app_utf8_feed` and `src/app/output.c`,
+moved with only names changed; their tests are ported unchanged
+(`tests/test_stream.c`: every split position, literal Markdown, Unicode,
+a 6 MB bounded discard, 1 MB of thinking on character boundaries).
+geist-serve's reasoning cases (`tests/app/reasoning_test.py`) also run
+through the API (`tests/test_api.c`, model `stub:raw`).
+
 ## What the runtime needs from geistlib (input for geistlib#622)
 
 Used today by geist-serve and needed by the runtime, to be STABLE:

@@ -195,6 +195,41 @@ static void test_thinking(void) {
     geistr_model_close(model);
 }
 
+/* geist-serve's reasoning cases (tests/app/reasoning_test.py), through the
+ * API: the model's own text, cut into 3-byte tokens, so markers and
+ * characters arrive split. */
+static void reasoning_case(const char *generated, const char *answer, const char *thinking) {
+    geistr_model    *model = open_model("stub:raw", 0);
+    geistr_chat_opts opts  = GEISTR_CHAT_OPTS_INIT;
+    opts.reasoning         = GEISTR_REASONING_THINK_TAGS;
+    opts.thinking          = 1;
+    geistr_chat     *shown = open_chat(model, opts);
+    opts.thinking          = 0;
+    geistr_chat     *quiet = open_chat(model, opts);
+    geistr_message   msg   = {"user", generated};
+    struct collected got;
+    CHECK(geistr_chat_send(shown, 1, &msg) == GEISTR_OK && drain(shown, &got) == GEISTR_OK, generated);
+    CHECK(!strcmp(got.answer, answer) && !strcmp(got.thinking, thinking) && got.utf8_ok, generated);
+    /* Closing markers are protocol; a nested <think> stays thinking text (geist-serve). */
+    CHECK(!strstr(got.answer, "SECRET") && !strstr(got.thinking, "</think>"),
+          "thinking stays out of the answer and loses its closing markers");
+    CHECK(geistr_chat_send(quiet, 1, &msg) == GEISTR_OK && drain(quiet, &got) == GEISTR_OK &&
+              !strcmp(got.answer, answer) && !got.thinking[0],
+          "without opts.thinking the thinking is discarded");
+    geistr_chat_close(shown);
+    geistr_chat_close(quiet);
+    geistr_model_close(model);
+}
+
+static void test_reasoning(void) {
+    reasoning_case("<think>SECRET</think>**Answer** → 🌿", "**Answer** → 🌿", "SECRET");
+    reasoning_case(" \n<think></think>\n<think>SECRET</think> Grüß 🌿", " Grüß 🌿", "SECRET");
+    for (const char *const *t = (const char *[]) {"<think>SECRET", "<thi", "<think></think>", "<think>SECRET</think>", nullptr}; *t; t++)
+        reasoning_case(*t, "", strstr(*t, "SECRET") ? "SECRET" : ""); /* no answer: nothing shown */
+    reasoning_case("Plain `code` with <think>literal</think>.", "Plain `code` with <think>literal</think>.", "");
+    reasoning_case("<think>a<think>b</think>c</think>Done", "Done", "a<think>bc");
+}
+
 static void test_limits(void) {
     geistr_model    *model = open_model("stub:echo", 0);
     geistr_chat_opts opts  = GEISTR_CHAT_OPTS_INIT;
@@ -357,6 +392,7 @@ int main(void) {
     test_abi();
     test_answer();
     test_thinking();
+    test_reasoning();
     test_limits();
     test_stop_strings();
     test_conversation();
@@ -366,6 +402,6 @@ int main(void) {
         fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;
     }
-    puts("geistr API: basics, ABI sizes, answer, thinking, limits, stop strings, conversation, rewind, cancellation, lifetime passed");
+    puts("geistr API: basics, ABI sizes, answer, thinking, reasoning protocol, limits, stop strings, conversation, rewind, cancellation, lifetime passed");
     return 0;
 }

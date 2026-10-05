@@ -5,7 +5,7 @@
 #   make sanitize   the same with AddressSanitizer and UBSan
 #
 # libgeistr.a collects the real runtime as it moves from geist-serve (#2–#6):
-# so far the chat templates (src/template.c). libgeistr-stub.a is a test
+# so far the chat templates (src/template.c) and the text stages (src/stream.c). libgeistr-stub.a is a test
 # double of include/geistr.h without geistlib, for the API conformance tests.
 
 CC       ?= cc
@@ -21,18 +21,21 @@ LDLIBS   += -lpthread
 LIB     := $(BUILD)/libgeistr-stub.a
 RUNTIME := $(BUILD)/libgeistr.a
 
-all: $(LIB) $(RUNTIME) $(BUILD)/test_api $(BUILD)/test_cxx $(BUILD)/test_template $(BUILD)/chat
+all: $(LIB) $(RUNTIME) $(BUILD)/test_api $(BUILD)/test_cxx $(BUILD)/test_template $(BUILD)/test_stream $(BUILD)/chat
 
 $(BUILD)/%.o: src/%.c src/*.h include/geistr.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(LIB): $(BUILD)/stub.o $(BUILD)/template.o
+$(LIB): $(BUILD)/stub.o $(BUILD)/template.o $(BUILD)/stream.o
 	ar rcs $@ $^
 
-$(RUNTIME): $(BUILD)/template.o
+$(RUNTIME): $(BUILD)/template.o $(BUILD)/stream.o
 	ar rcs $@ $^
 
 $(BUILD)/test_template: tests/test_template.c $(RUNTIME)
+	$(CC) $(CFLAGS) -Isrc $< $(RUNTIME) $(LDFLAGS) $(LDLIBS) -o $@
+
+$(BUILD)/test_stream: tests/test_stream.c $(RUNTIME)
 	$(CC) $(CFLAGS) -Isrc $< $(RUNTIME) $(LDFLAGS) $(LDLIBS) -o $@
 
 $(BUILD)/test_api: tests/test_api.c $(LIB)
@@ -51,6 +54,7 @@ test: all
 	$(BUILD)/test_api
 	$(BUILD)/test_cxx
 	$(BUILD)/test_template
+	$(BUILD)/test_stream
 	@out=$$(printf 'Hallo Welt\nnoch einmal\n' | $(BUILD)/chat stub:echo) && \
 	  echo "$$out" | grep -q 'Echo: noch einmal' && echo "example chat: two turns passed" || \
 	  { echo "example chat failed: $$out"; exit 1; }
