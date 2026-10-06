@@ -193,6 +193,48 @@ assert os.WEXITSTATUS(status) == 0, status
 os.close(fd)
 print('geistr run/chat: answers, prompt from stdin, Ctrl-C (130 / stopped answer), exit codes, settings, Tab completion in a terminal passed')
 
+# ---- the conversation across runs (in a terminal only) ------------------------
+chats = os.path.join(tmp, 'home', 'chats')
+def terminal_chat(message, *flags):
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execve(geistr, [geistr, 'chat', 'ref', *flags, *base], {**env, 'TERM': 'xterm'})
+    seen = until(fd, 'Ctrl-C twice exits')
+    time.sleep(.3)
+    os.write(fd, message.encode() + b'\r')
+    seen += until(fd, 'tok/s')
+    os.write(fd, b'\x03'); until(fd, 'Ctrl-C again to exit')   # right after the answer: still counts
+    os.write(fd, b'\x03')
+    deadline, status, tail = time.time() + 30, None, b''
+    while status is None and time.time() < deadline:
+        try:
+            if select.select([fd], [], [], 0.2)[0]: tail += os.read(fd, 4096)
+        except OSError: pass
+        done, code = os.waitpid(pid, os.WNOHANG)
+        status = code if done else None
+    if status is None:
+        os.kill(pid, signal.SIGKILL)
+    os.close(fd)
+    assert status is not None and os.WEXITSTATUS(status) == 0, (status, message, seen[-300:], tail[-300:])
+    return seen.decode(errors='replace')
+def stored():
+    return sorted(os.listdir(chats)) if os.path.isdir(chats) else []
+def lines(name):
+    return [json.loads(l) for l in open(os.path.join(chats, name))]
+out = terminal_chat('My name is Ada.')
+assert '↻' not in out and len(stored()) == 1, (out, stored())
+first = stored()[0]
+assert os.stat(os.path.join(chats, first)).st_mode & 0o777 == 0o600
+assert [m['role'] for m in lines(first)] == ['user', 'assistant'] and lines(first)[0]['content'] == 'My name is Ada.'
+out = terminal_chat('What is my name?')
+assert '↻ 2 · „My name is Ada.“' in out, out                 # continued where it was
+assert len(stored()) == 1 and stored()[0] != first, stored()  # moved into this chat's file
+assert [m['content'] for m in lines(stored()[0])][::2] == ['My name is Ada.', 'What is my name?']
+out = terminal_chat('Hello.', '--new')
+assert '↻' not in out and len(stored()) == 2, (out, stored())  # a new one; the old one stays
+assert geistr_run('chat', 'ref', input='Hi.\n').returncode == 0 and len(stored()) == 2  # piped: nothing kept
+print('geistr chat: continues the last conversation in a terminal, --new, private files, piped chats keep nothing passed')
+
 # ---- serve and chat --socket --------------------------------------------------
 import socket as unix
 sock = f'/tmp/geistr-test-{os.getpid()}.sock'  # short: sun_path holds ~100 bytes
