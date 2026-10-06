@@ -6,22 +6,32 @@
  *   geistr chat <model>              interactive; Ctrl-C stops the answer, not the chat
  *   geistr catalog [--installed | --available] [--json]
  *   geistr pull <id>                 download and verify (builds with the download module)
+ *   geistr config [key [value]]      settings, remembered between runs (geistr.conf)
  *
- * <model> is a catalog id or a path to a GGUF. Options anywhere:
+ * <model> is a catalog id or a path to a GGUF; chat without one continues with
+ * the last model (or the geisten app's). In a terminal the answer is shown as
+ * Markdown with math as Unicode; the prompt shows ⚙ (CPU) or ⚡ (GPU), and
+ * each answer ends with its speed. Options anywhere:
  *   --models DIR    model folder (default: the geisten app's, see geistr_models_dir)
  *   --catalog FILE  catalog JSON (default: the app's catalog.json next to the
  *                   model folder if present, else the one built in)
+ *   --cpu, --gpu    the processor for this run
  *
  * Exit codes: 0 ok, 1 error, 2 usage, 130 cancelled.
  */
 #include "geistr.h"
 #include "geistr_catalog.h"
 #include "pull.h"
+#include "render.h"
 
+#include <errno.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "catalog_json.h" /* embedded_catalog[], generated from models/catalog.json */
 
@@ -30,12 +40,166 @@ enum { OK = 0, ERROR = 1, USAGE = 2, CANCELLED = 130 };
 static const char *models_dir, *catalog_file;
 static char        default_models[4096];
 
+/* ---- settings: geistr.conf next to the model folder ---------------------- */
+
+static struct {
+    char   model[256], processor[8], system[2048];
+    double temperature;
+    bool   markdown, stats;
+} cfg = {.processor = "auto", .markdown = true, .stats = true};
+static char config_path[4200], data_dir[4096];
+static const char *const config_keys[] = {"model", "processor", "temperature", "system", "markdown", "stats"};
+
+/* The geisten data folder: where the default model folder lives. */
+static bool data_folder(void) {
+    char models[4096];
+    if (geistr_models_dir(models, sizeof models) != GEISTR_OK)
+        return false;
+    char *slash = strrchr(models, '/');
+    if (!slash)
+        return false;
+    *slash = 0;
+    snprintf(data_dir, sizeof data_dir, "%s", models);
+    snprintf(config_path, sizeof config_path, "%s/geistr.conf", data_dir);
+    return true;
+}
+
+/* nullptr when the value is valid for key and stored, else why not. */
+static const char *config_set(const char *key, const char *value) {
+    if (!strcmp(key, "model"))
+        snprintf(cfg.model, sizeof cfg.model, "%s", value);
+    else if (!strcmp(key, "processor")) {
+        if (*value && strcmp(value, "auto") && strcmp(value, "cpu") && strcmp(value, "gpu"))
+            return "processor is auto, cpu or gpu";
+        snprintf(cfg.processor, sizeof cfg.processor, "%s", *value ? value : "auto");
+    } else if (!strcmp(key, "temperature")) {
+        char  *end = nullptr;
+        double t   = *value ? strtod(value, &end) : 0;
+        if (*value && (*end || !(t >= 0 && t <= 2)))
+            return "temperature is a number from 0 to 2";
+        cfg.temperature = t;
+    } else if (!strcmp(key, "system"))
+        snprintf(cfg.system, sizeof cfg.system, "%s", value);
+    else if (!strcmp(key, "markdown") || !strcmp(key, "stats")) {
+        if (*value && strcmp(value, "on") && strcmp(value, "off"))
+            return "the value is on or off";
+        *(!strcmp(key, "markdown") ? &cfg.markdown : &cfg.stats) = strcmp(value, "off") != 0;
+    } else
+        return "unknown key";
+    return nullptr;
+}
+
+static void config_value(const char *key, char *out, size_t cap) {
+    if (!strcmp(key, "model"))
+        snprintf(out, cap, "%s", cfg.model);
+    else if (!strcmp(key, "processor"))
+        snprintf(out, cap, "%s", cfg.processor);
+    else if (!strcmp(key, "temperature"))
+        snprintf(out, cap, "%g", cfg.temperature);
+    else if (!strcmp(key, "system"))
+        snprintf(out, cap, "%s", cfg.system);
+    else
+        snprintf(out, cap, "%s", (!strcmp(key, "markdown") ? cfg.markdown : cfg.stats) ? "on" : "off");
+}
+
+static void config_load(void) {
+    FILE *f = config_path[0] ? fopen(config_path, "r") : nullptr;
+    char  line[2400];
+    while (f && fgets(line, sizeof line, f)) {
+        line[strcspn(line, "\n")] = 0;
+        char *eq                  = strchr(line, '=');
+        if (line[0] == '#' || !eq)
+            continue;
+        char *key = line, *value = eq + 1, *end = eq;
+        while (end > key && end[-1] == ' ')
+            end--;
+        *end = 0;
+        while (*value == ' ')
+            value++;
+        if (config_set(key, value))
+            fprintf(stderr, "geistr: %s: ignored %s\n", config_path, key);
+    }
+    if (f)
+        fclose(f);
+}
+
+static bool config_save(void) {
+    char dir[4096]; /* the data folder may not exist yet without the app */
+    snprintf(dir, sizeof dir, "%s", data_dir);
+    for (char *p = dir + 1; *p; p++)
+        if (*p == '/') {
+            *p = 0;
+            (void) mkdir(dir, 0700);
+            *p = '/';
+        }
+    if (mkdir(dir, 0700) != 0 && errno != EEXIST)
+        return false;
+    char tmp[4300];
+    snprintf(tmp, sizeof tmp, "%s.%ld", config_path, (long) getpid());
+    FILE *f = fopen(tmp, "w");
+    if (!f)
+        return false;
+    fputs("# geistr settings (geistr config KEY VALUE)\n", f);
+    for (size_t i = 0; i < sizeof config_keys / sizeof *config_keys; i++) {
+        char value[2048];
+        config_value(config_keys[i], value, sizeof value);
+        fprintf(f, "%s = %s\n", config_keys[i], value);
+    }
+    bool ok = fclose(f) == 0 && rename(tmp, config_path) == 0;
+    if (!ok)
+        unlink(tmp);
+    return ok;
+}
+
+static int config(int n, const char **args) {
+    if (!config_path[0]) {
+        fputs("geistr: no settings folder: set HOME or GEISTEN_HOME\n", stderr);
+        return ERROR;
+    }
+    if (n == 1) {
+        printf("# %s\n", config_path);
+        for (size_t i = 0; i < sizeof config_keys / sizeof *config_keys; i++) {
+            char value[2048];
+            config_value(config_keys[i], value, sizeof value);
+            printf("%-12s %s\n", config_keys[i], value);
+        }
+        return OK;
+    }
+    bool known = false;
+    for (size_t i = 0; i < sizeof config_keys / sizeof *config_keys; i++)
+        known |= !strcmp(args[1], config_keys[i]);
+    if (!known) {
+        fprintf(stderr, "geistr: unknown key %s (model processor temperature system markdown stats)\n", args[1]);
+        return USAGE;
+    }
+    if (n == 2) {
+        char value[2048];
+        config_value(args[1], value, sizeof value);
+        puts(value);
+        return OK;
+    }
+    char value[2048] = "";
+    for (int i = 2; i < n; i++) /* the rest of the line: a system prompt may have spaces */
+        snprintf(value + strlen(value), sizeof value - strlen(value), "%s%s", i > 2 ? " " : "", args[i]);
+    const char *why = config_set(args[1], value);
+    if (why) {
+        fprintf(stderr, "geistr: %s\n", why);
+        return USAGE;
+    }
+    if (!config_save()) {
+        fprintf(stderr, "geistr: cannot write %s: %s\n", config_path, strerror(errno));
+        return ERROR;
+    }
+    return OK;
+}
+
 static int usage(void) {
     fputs("usage: geistr run <model> [prompt…]\n"
           "       geistr chat <model>\n"
           "       geistr catalog [--installed | --available] [--json]\n"
           "       geistr pull <id>\n"
-          "options: --models DIR  --catalog FILE\n"
+          "       geistr config [key [value]]   (keys: model processor temperature system markdown stats)\n"
+          "options: --models DIR  --catalog FILE  --cpu  --gpu\n"
           "<model> is a catalog id or a path to a .gguf file\n",
           stderr);
     return USAGE;
@@ -246,6 +410,7 @@ static int resolve(const char *model, char *path, size_t cap, geistr_reasoning *
 
 static geistr_chat *volatile running; /* for the Ctrl-C handler */
 static volatile sig_atomic_t interrupted;
+static struct md            view;
 
 static void on_interrupt(int signal) {
     (void) signal;
@@ -256,47 +421,89 @@ static void on_interrupt(int signal) {
 
 static int print_piece(void *context, const geistr_piece *piece) {
     (void) context;
-    fwrite(piece->text, 1, piece->len, stdout);
-    fflush(stdout);
+    md_feed(&view, piece->text);
     return 1;
 }
 
-static int converse(const char *model, const char *prompt, bool interactive) {
+static bool tty_out(void) {
+    return isatty(STDOUT_FILENO) && !getenv("NO_COLOR");
+}
+
+/* "  42.3 tok/s · 1.8 s" after an answer: generation speed and the whole turn. */
+static void speed(geistr_chat *chat, FILE *out) {
+    geistr_stats st = {.size = sizeof st};
+    if (!cfg.stats || geistr_chat_stats(chat, &st) != GEISTR_OK || !st.output_tokens)
+        return;
+    bool   dim  = out == stdout ? tty_out() : isatty(STDERR_FILENO);
+    double rate = st.generation_ms > 0 ? st.output_tokens / (st.generation_ms / 1000) : 0;
+    fprintf(out, "%s  %.1f tok/s · %.1f s%s\n", dim ? "\033[2m" : "", rate, st.total_ms / 1000, dim ? "\033[0m" : "");
+}
+
+static void chat_help(void) {
+    puts("/clear  a new conversation    /exit  end (or Ctrl-D)    Ctrl-C  stop the answer");
+}
+
+static int converse(const char *model, const char *prompt, bool interactive, const char *processor) {
     char             path[4200] = "";
     geistr_reasoning reasoning;
     int              rc = resolve(model, path, sizeof path, &reasoning);
     if (rc != OK)
         return rc;
-    geistr_model *m = nullptr;
-    char          error[256];
-    if (geistr_model_open(path, nullptr, &m, error, sizeof error) != GEISTR_OK) {
+    geistr_model     *m  = nullptr;
+    geistr_model_opts mo = GEISTR_MODEL_OPTS_INIT;
+    mo.processor = !strcmp(processor, "cpu") ? GEISTR_PROCESSOR_CPU
+                   : !strcmp(processor, "gpu") ? GEISTR_PROCESSOR_GPU
+                                               : GEISTR_PROCESSOR_AUTO;
+    char error[256];
+    if (geistr_model_open(path, &mo, &m, error, sizeof error) != GEISTR_OK) {
         fprintf(stderr, "geistr: cannot open %s: %s\n", path, error);
         return ERROR;
     }
-    geistr_chat_opts opts = GEISTR_CHAT_OPTS_INIT;
-    opts.reasoning        = reasoning;
-    opts.overflow         = interactive ? GEISTR_OVERFLOW_DROP_OLDEST : GEISTR_OVERFLOW_REFUSE;
-    geistr_chat  *chat    = nullptr;
-    geistr_status s       = geistr_chat_open(m, &opts, &chat);
+    geistr_model_info info = {.size = sizeof info};
+    bool              gpu  = geistr_model_info_get(m, &info) == GEISTR_OK && info.backend && strcmp(info.backend, "cpu");
+    geistr_chat_opts  opts = GEISTR_CHAT_OPTS_INIT;
+    opts.reasoning         = reasoning;
+    opts.temperature       = (float) cfg.temperature;
+    opts.overflow          = interactive ? GEISTR_OVERFLOW_DROP_OLDEST : GEISTR_OVERFLOW_REFUSE;
+    geistr_chat  *chat     = nullptr;
+    geistr_status s        = geistr_chat_open(m, &opts, &chat);
     geistr_model_close(m); /* the chat holds its own reference */
     if (s != GEISTR_OK) {
         fprintf(stderr, "geistr: cannot chat: %s\n", geistr_status_text(s));
         return ERROR;
     }
+    /* Remember the model for the next chat. */
+    if (interactive && strcmp(cfg.model, model) && config_path[0]) {
+        snprintf(cfg.model, sizeof cfg.model, "%s", model);
+        (void) config_save();
+    }
     struct sigaction sa = {.sa_handler = on_interrupt};
     sigaction(SIGINT, &sa, nullptr); /* no SA_RESTART: Ctrl-C at the prompt ends fgets */
-    running = chat;
-    rc      = OK;
+    running             = chat;
+    rc                  = OK;
+    enum md_mode mode   = cfg.markdown && tty_out() ? MD_ANSI : MD_RAW;
+    bool         fresh  = true; /* the system prompt opens a conversation */
+    geistr_message turn[2];
     if (!interactive) {
-        geistr_message turn = {"user", prompt};
-        s                   = geistr_chat_run(chat, 1, &turn, print_piece, nullptr);
+        size_t n = 0;
+        if (cfg.system[0])
+            turn[n++] = (geistr_message) {"system", cfg.system};
+        turn[n++] = (geistr_message) {"user", prompt};
+        md_init(&view, mode, stdout);
+        s = geistr_chat_run(chat, n, turn, print_piece, nullptr);
+        md_finish(&view);
         putchar('\n');
+        speed(chat, stderr);
         rc = s == GEISTR_OK ? OK : s == GEISTR_CANCELLED ? CANCELLED : ERROR;
     } else {
         static char line[1 << 16];
+        const char *symbol = gpu ? "⚡" : "⚙";
         for (;;) {
             interrupted = 0;
-            fputs("> ", stdout);
+            if (tty_out())
+                printf("\033[2m%s\033[0m > ", symbol);
+            else
+                printf("%s > ", symbol);
             fflush(stdout);
             if (!fgets(line, sizeof line, stdin)) {
                 if (interrupted && !feof(stdin)) { /* Ctrl-C at the prompt: a new prompt */
@@ -309,9 +516,27 @@ static int converse(const char *model, const char *prompt, bool interactive) {
             line[strcspn(line, "\n")] = 0;
             if (!line[0])
                 continue;
-            geistr_message turn = {"user", line};
-            s                   = geistr_chat_run(chat, 1, &turn, print_piece, nullptr);
+            if (line[0] == '/') {
+                if (!strcmp(line, "/exit") || !strcmp(line, "/quit"))
+                    break;
+                if (!strcmp(line, "/clear")) {
+                    (void) geistr_chat_rewind(chat, 0);
+                    fresh = true;
+                } else
+                    chat_help();
+                continue;
+            }
+            size_t n = 0;
+            if (fresh && cfg.system[0])
+                turn[n++] = (geistr_message) {"system", cfg.system};
+            turn[n++] = (geistr_message) {"user", line};
+            fresh     = false;
+            md_init(&view, mode, stdout);
+            s = geistr_chat_run(chat, n, turn, print_piece, nullptr);
+            md_finish(&view);
             puts(s == GEISTR_CANCELLED ? " [stopped]" : "");
+            if (s == GEISTR_OK)
+                speed(chat, stdout);
         }
         putchar('\n');
     }
@@ -344,6 +569,7 @@ int main(int argc, char **argv) {
     const char *args[64];
     int         n = 0;
     bool        installed = false, available = false, json = false;
+    const char *processor = nullptr;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--models") && i + 1 < argc)
             models_dir = argv[++i];
@@ -355,6 +581,8 @@ int main(int argc, char **argv) {
             available = true;
         else if (!strcmp(argv[i], "--json"))
             json = true;
+        else if (!strcmp(argv[i], "--cpu") || !strcmp(argv[i], "--gpu"))
+            processor = argv[i] + 2;
         else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h"))
             return usage(), OK;
         else if (!strncmp(argv[i], "--", 2) || n == 64)
@@ -371,13 +599,35 @@ int main(int argc, char **argv) {
         }
         models_dir = default_models;
     }
+    if (data_folder())
+        config_load();
     const char *command = args[0];
+    if (!strcmp(command, "config") && n <= 64)
+        return processor ? usage() : config(n, args);
+    if (!processor)
+        processor = cfg.processor;
     if (!strcmp(command, "catalog") && n == 1 && !(installed && available))
         return catalog(installed, available, json);
     if (installed || available || json)
         return usage();
+    if (!strcmp(command, "chat") && n == 1) { /* the last model, else the geisten app's */
+        static char selected[256];
+        char        file[4300];
+        snprintf(file, sizeof file, "%s/selected", data_dir);
+        FILE *f = !cfg.model[0] && data_dir[0] ? fopen(file, "r") : nullptr;
+        if (f && fgets(selected, sizeof selected, f))
+            selected[strcspn(selected, "\n")] = 0;
+        if (f)
+            fclose(f);
+        const char *model = cfg.model[0] ? cfg.model : selected;
+        if (!model[0]) {
+            fputs("geistr: which model? geistr chat <model> (see geistr catalog)\n", stderr);
+            return USAGE;
+        }
+        return converse(model, nullptr, true, processor);
+    }
     if (!strcmp(command, "chat") && n == 2)
-        return converse(args[1], nullptr, true);
+        return converse(args[1], nullptr, true, processor);
     if (!strcmp(command, "pull") && n == 2)
         return pull(args[1]);
     if (!strcmp(command, "run") && n >= 2) {
@@ -393,7 +643,7 @@ int main(int argc, char **argv) {
             fputs("geistr: empty prompt\n", stderr);
             return USAGE;
         }
-        return converse(args[1], prompt, false);
+        return converse(args[1], prompt, false, processor);
     }
     return usage();
 }
