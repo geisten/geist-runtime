@@ -60,8 +60,20 @@ static struct {
     double temperature;
     bool   markdown, stats, intro;
 } cfg = {.processor = "auto", .markdown = true, .stats = true, .intro = true};
-static char config_path[4200], data_dir[4096];
+static char config_path[4200], config_dir[4096], data_dir[4096];
 static const char *const config_keys[] = {"model", "processor", "temperature", "system", "markdown", "stats", "intro"};
+
+static bool make_dirs(const char *path) {
+    char dir[4096];
+    snprintf(dir, sizeof dir, "%s", path);
+    for (char *p = dir + 1; *p; p++)
+        if (*p == '/') {
+            *p = 0;
+            (void) mkdir(dir, 0700);
+            *p = '/';
+        }
+    return mkdir(dir, 0700) == 0 || errno == EEXIST;
+}
 
 /* The geisten data folder: where the default model folder lives. */
 static bool data_folder(void) {
@@ -73,7 +85,25 @@ static bool data_folder(void) {
         return false;
     *slash = 0;
     snprintf(data_dir, sizeof data_dir, "%s", models);
-    snprintf(config_path, sizeof config_path, "%s/geistr.conf", data_dir);
+    /* Settings: in the data folder on macOS (Application Support) and with
+     * GEISTEN_HOME; on Linux where XDG puts configuration. */
+    const char *xdg = getenv("XDG_CONFIG_HOME"), *home = getenv("HOME");
+#ifdef __APPLE__
+    bool own = true;
+#else
+    bool own = (getenv("GEISTEN_HOME") && *getenv("GEISTEN_HOME")) || (getenv("GEIST_HOME") && *getenv("GEIST_HOME"));
+#endif
+    if (own)
+        snprintf(config_dir, sizeof config_dir, "%s", data_dir);
+    else if (xdg && *xdg)
+        snprintf(config_dir, sizeof config_dir, "%s/geisten", xdg);
+    else
+        snprintf(config_dir, sizeof config_dir, "%s/.config/geisten", home ? home : "");
+    snprintf(config_path, sizeof config_path, "%s/geistr.conf", config_dir);
+    char old[4200]; /* where geistr kept it before: moved once */
+    snprintf(old, sizeof old, "%s/geistr.conf", data_dir);
+    if (!own && access(config_path, F_OK) != 0 && access(old, F_OK) == 0 && make_dirs(config_dir))
+        (void) rename(old, config_path);
     return true;
 }
 
@@ -140,15 +170,7 @@ static void config_load(void) {
 }
 
 static bool config_save(void) {
-    char dir[4096]; /* the data folder may not exist yet without the app */
-    snprintf(dir, sizeof dir, "%s", data_dir);
-    for (char *p = dir + 1; *p; p++)
-        if (*p == '/') {
-            *p = 0;
-            (void) mkdir(dir, 0700);
-            *p = '/';
-        }
-    if (mkdir(dir, 0700) != 0 && errno != EEXIST)
+    if (!make_dirs(config_dir)) /* the folder may not exist yet without the app */
         return false;
     char tmp[4300];
     snprintf(tmp, sizeof tmp, "%s.%ld", config_path, (long) getpid());

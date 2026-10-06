@@ -83,7 +83,10 @@ the current session:
 /clear  /exit
 ```
 
-Settings live in `geistr.conf` next to the model folder:
+Settings live in `geistr.conf`: on macOS in `~/Library/Application Support/geisten/`
+(next to the models), on Linux in `$XDG_CONFIG_HOME/geisten/` (`~/.config/geisten/`;
+an older one next to the models moves there once), with `GEISTEN_HOME` in that folder.
+`geistr config` shows the file:
 
 ```sh
 geistr config                              # all settings and the file
