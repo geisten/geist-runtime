@@ -394,6 +394,7 @@ static void speeds_load(const geistr_catalog *c, geistr_local *local) {
                                                 * never trimmed: it is the history across engines */
         char *model = strtok(line, "\t"), *proc = strtok(nullptr, "\t"), *rate = strtok(nullptr, "\t"),
              *first = strtok(nullptr, "\t"), *when = strtok(nullptr, "\t"), *engine = strtok(nullptr, "\t\n");
+        /* the seventh column, the source, does not matter here: every answer counts */
         if (!model || !proc || !rate || !first || !when || !engine || strcmp(engine, GEISTR_ENGINE))
             continue; /* another engine's speed */
         const char *base = strrchr(model, '/') ? strrchr(model, '/') + 1 : model;
@@ -649,11 +650,12 @@ static void speed_line(unsigned tokens, double generation_ms, double total_ms, F
 
 /* ---- speeds measured here: <data>/speed.tsv, a line per complete answer ----
  * model, cpu|gpu, tokens/s, seconds to the first answer text, time, geistlib
- * commit. The catalog shows the median of the last ten per model and
+ * commit, source (bench: the fixed prompt, comparable across engines;
+ * answer: chat or run). The catalog shows the median of the last ten per model and
  * processor measured with this engine: another one may be faster or slower.
  * Only ever appended to, never shortened: the history compares engines. */
 static void speed_record(const char *model, const char *backend, unsigned tokens, double generation_ms,
-                         double first_ms) {
+                         double first_ms, const char *source) {
     char path[4200];
     snprintf(path, sizeof path, "%s/speed.tsv", data_dir);
     if (!data_dir[0] || tokens < 8 || generation_ms <= 0 || !make_dirs(data_dir)) /* too short to tell */
@@ -661,20 +663,21 @@ static void speed_record(const char *model, const char *backend, unsigned tokens
     FILE *f = fopen(path, "a");
     if (!f)
         return;
-    fprintf(f, "%s\t%s\t%.1f\t%.3f\t%lld\t%s\n", model, strcmp(backend, "cpu") ? "gpu" : "cpu",
+    fprintf(f, "%s\t%s\t%.1f\t%.3f\t%lld\t%s\t%s\n", model, strcmp(backend, "cpu") ? "gpu" : "cpu",
             tokens / (generation_ms / 1000), first_ms >= 0 ? first_ms / 1000 : -1, (long long) time(nullptr),
-            GEISTR_ENGINE);
+            GEISTR_ENGINE, source);
     fclose(f);
 }
 
 /* An answer's speed line; a complete one is also recorded. */
-static void speed(geistr_chat *chat, const char *model, const char *backend, bool complete, FILE *out) {
+static void speed(geistr_chat *chat, const char *model, const char *backend, bool complete, const char *source,
+                  FILE *out) {
     geistr_stats st = {.size = sizeof st};
     if (geistr_chat_stats(chat, &st) != GEISTR_OK)
         return;
     speed_line(st.output_tokens, st.generation_ms, st.total_ms, out);
     if (complete)
-        speed_record(model, backend, st.output_tokens, st.generation_ms, st.first_answer_ms);
+        speed_record(model, backend, st.output_tokens, st.generation_ms, st.first_answer_ms, source);
 }
 
 /* ---- while a model loads: a spinner with its size and the time ----------- */
@@ -1053,7 +1056,7 @@ static int answer_once(const char *name, const char *prompt, const char *process
     geistr_status s = geistr_chat_run(x.chat, n, turn, print_piece, nullptr);
     md_finish(&view);
     putchar('\n');
-    speed(x.chat, x.name, x.backend, s == GEISTR_OK, stderr);
+    speed(x.chat, x.name, x.backend, s == GEISTR_OK, "answer", stderr);
     if (s != GEISTR_OK && s != GEISTR_CANCELLED)
         fprintf(stderr, "geistr: %s: %s\n", geistr_status_text(s), geistr_chat_error(x.chat));
     running = nullptr;
@@ -1311,9 +1314,9 @@ static int chat(const char *name, const char *processor) {
             chat_store(&said);
             if (s == GEISTR_OK && remote) {
                 speed_line(rs.output_tokens, rs.generation_ms, rs.total_ms, stdout);
-                speed_record(x.name, x.backend, rs.output_tokens, rs.generation_ms, rs.prefill_ms);
+                speed_record(x.name, x.backend, rs.output_tokens, rs.generation_ms, rs.prefill_ms, "answer");
             } else if (s == GEISTR_OK)
-                speed(x.chat, x.name, x.backend, true, stdout);
+                speed(x.chat, x.name, x.backend, true, "answer", stdout);
         } else {
             said.n--; /* not part of the conversation: the chat refused it */
             free(said.role[said.n]), free(said.content[said.n]);
@@ -1366,7 +1369,7 @@ static int bench(int n, const char **ids) {
             running = nullptr;
             printf("%s %-18s", on_gpu(&x) ? "⚡" : "⚙", models[i]);
             if (s == GEISTR_OK)
-                speed(x.chat, x.name, x.backend, true, stdout);
+                speed(x.chat, x.name, x.backend, true, "bench", stdout);
             else
                 printf("  %s\n", geistr_status_text(s));
             session_close(&x);

@@ -204,7 +204,7 @@ def terminal_chat(message, *flags):
     seen = until(fd, 'Ctrl-C twice exits')
     time.sleep(.3)
     os.write(fd, message.encode() + b'\r')
-    seen += until(fd, 'tok/s')
+    seen += until(fd, 'tok/s', 180)  # a whole answer: slow on a busy machine
     os.write(fd, b'\x03'); until(fd, 'Ctrl-C again to exit')   # right after the answer: still counts
     os.write(fd, b'\x03')
     deadline, status, tail = time.time() + 30, None, b''
@@ -304,7 +304,8 @@ assert r.returncode == 0 and 'tok/s' in r.stdout and 'ref' in r.stdout, (r.stdou
 rows = [l.split('\t') for l in open(speeds).read().splitlines()]
 assert len(rows) > before and rows[-1][0] == 'ref' and rows[-1][1] in ('cpu', 'gpu') and float(rows[-1][2]) > 0, rows
 engine = rows[-1][5]
-assert len(engine) == 40, rows[-1]  # the geistlib commit
+assert len(engine) == 40 and rows[-1][6] == 'bench', rows[-1]  # the geistlib commit, the source
+assert all(r[6] == 'answer' for r in rows[:before]), rows[:before]  # chats and runs above
 with open(speeds, 'a') as f:  # a model recorded by path counts for its catalog entry
     f.write(f'{model_path}\tcpu\t1000.0\t0.1\t0\t{engine}\n' * 11)
     f.write(f'ref\tcpu\t5.0\t0.1\t0\tanother-engine\n' * 11)  # not this engine's: ignored
