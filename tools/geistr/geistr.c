@@ -589,7 +589,7 @@ static size_t complete_line(void *ctx, const char *line, struct le_candidate *ou
         const char *typed = line + 7;
         for (size_t i = 0; i < n_installed && n < max; i++)
             if (!strncmp(installed_ids[i], typed, strlen(typed))) {
-                snprintf(model_lines[n], sizeof model_lines[0], "/model %s", installed_ids[i]);
+                snprintf(model_lines[n], sizeof model_lines[0], "/model %.63s", installed_ids[i]);
                 out[n] = (struct le_candidate) {model_lines[n], nullptr};
                 n++;
             }
