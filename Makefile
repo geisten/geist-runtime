@@ -216,7 +216,7 @@ test-geistr:
 	@test -f "$(GEIST_TEST_MODEL)" || { echo "no reference model at $(GEIST_TEST_MODEL): make fetch-model"; exit 1; }
 	$(MAKE) BUILD=$(BUILD)/geistr-test GEISTR_CFLAGS=-DGEISTR_TESTING geistr
 	$(MAKE) BUILD=$(BUILD)/geistr-nonet PULL=0 geistr
-	python3 tests/test_geistr.py $(BUILD)/geistr-test/geistr $(BUILD)/geistr-nonet/geistr "$(GEIST_TEST_MODEL)" $(PULL)
+	python3 -u tests/test_geistr.py $(BUILD)/geistr-test/geistr $(BUILD)/geistr-nonet/geistr "$(GEIST_TEST_MODEL)" $(PULL)
 
 # An explicit target never skips: a missing model is an error, not a pass.
 test-real: $(BUILD)/test_real

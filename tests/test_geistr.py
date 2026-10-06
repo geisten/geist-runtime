@@ -3,7 +3,8 @@
 schema, run, chat, Ctrl-C, exit codes, pull from a local server, and a
 build without the download module.
 Usage: test_geistr.py <geistr (GEISTR_TESTING)> <geistr PULL=0> <model.gguf> <pull 0|1>"""
-import functools, hashlib, http.server, json, os, signal, subprocess, sys, tempfile, threading, time
+import faulthandler, functools, hashlib, http.server, json, os, signal, subprocess, sys, tempfile, threading, time
+faulthandler.dump_traceback_later(900, exit=True)  # a hang shows where, instead of the CI timeout
 
 geistr, nonet, model_path, pull = sys.argv[1], sys.argv[2], os.path.abspath(sys.argv[3]), sys.argv[4] == '1'
 tmp = tempfile.mkdtemp(prefix='geistr-test-')
