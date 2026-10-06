@@ -32,6 +32,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -448,6 +449,14 @@ static bool tty_out(void) {
     return isatty(STDOUT_FILENO) && !getenv("NO_COLOR");
 }
 
+/* The answer view: Markdown in a terminal, sized to it (tables). */
+static void view_begin(void) {
+    md_init(&view, cfg.markdown && tty_out() ? MD_ANSI : MD_RAW, stdout);
+    struct winsize ws;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col)
+        view.width = ws.ws_col;
+}
+
 /* "  42.3 tok/s · 1.8 s" after an answer: generation speed and the whole turn. */
 static void speed(geistr_chat *chat, FILE *out) {
     geistr_stats st = {.size = sizeof st};
@@ -629,7 +638,7 @@ static int answer_once(const char *name, const char *prompt, const char *process
     if (cfg.system[0])
         turn[n++] = (geistr_message) {"system", cfg.system};
     turn[n++] = (geistr_message) {"user", prompt};
-    md_init(&view, cfg.markdown && tty_out() ? MD_ANSI : MD_RAW, stdout);
+    view_begin();
     geistr_status s = geistr_chat_run(x.chat, n, turn, print_piece, nullptr);
     md_finish(&view);
     putchar('\n');
@@ -662,7 +671,6 @@ static int chat(const char *name, const char *processor) {
     bool      edit = isatty(STDIN_FILENO) && isatty(STDOUT_FILENO);
     struct le editor;
     if (edit) {
-        setlocale(LC_CTYPE, ""); /* character widths for the editor */
         find_installed();
         le_init(&editor, stdout, 80, complete_line, nullptr);
     }
@@ -795,7 +803,7 @@ static int chat(const char *name, const char *processor) {
         answer_len = 0;
         if (answer)
             answer[0] = 0;
-        md_init(&view, cfg.markdown && tty_out() ? MD_ANSI : MD_RAW, stdout);
+        view_begin();
         geistr_status s = geistr_chat_run(x.chat, count, turn, print_piece, nullptr);
         md_finish(&view);
         free(turn);
@@ -841,6 +849,7 @@ static int pull(const char *id) {
 }
 
 int main(int argc, char **argv) {
+    setlocale(LC_CTYPE, ""); /* character widths for the view and the line editor */
     const char *args[64];
     int         n = 0;
     bool        installed = false, available = false, json = false;
