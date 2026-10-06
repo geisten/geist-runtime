@@ -43,6 +43,7 @@ geistr catalog --installed | --available | --json
 geistr run gemma4-e2b "prompt"     # one answer to stdout; a catalog id or a .gguf path; prompt from stdin if none
 geistr chat gemma4-e2b             # Ctrl-C stops the answer, not the chat; /help in the chat
 geistr chat                        # the last model again (else the geisten app's)
+geistr chat --new                  # a new conversation instead of the last one
 geistr pull gemma4-e4b             # download, resume, verify (builds with the download module)
 ```
 
@@ -52,6 +53,14 @@ terminal, one record per row when the columns cannot fit) and LaTeX math as Unic
 → e^(iπ), a/b; α, ∑, ², ₁, √, ℝ …); piped output stays plain text. The prompt
 shows the processor (⚙ CPU, ⚡ GPU), and each answer ends with its speed
 (`79.4 tok/s · 4.1 s`).
+
+In a terminal the chat continues the last conversation: `↻ 6 · „the last
+question“ · /clear new` shows where it was, and only on its first message does
+the model read it again (with `geistr serve`, not even that). Each chat keeps
+its own file in `chats/` in the data folder (0600, one JSON message per line),
+written after every answer; `/clear` starts a new one and keeps the old.
+`geistr config resume off` keeps nothing. Piped chats neither continue nor
+keep anything, so scripts stay reproducible.
 
 In a terminal the chat starts with a two-line intro (what ⚙/⚡ mean, the
 keys; `geistr config intro off`), shows a spinner with size and time while a
@@ -96,6 +105,7 @@ geistr config system Antworte auf Deutsch. # a system prompt for every new chat
 geistr config markdown off                 # plain text
 geistr config stats off                    # no speed line
 geistr config intro off                    # no intro at the start
+geistr config resume off                   # every chat starts new, nothing is kept
 geistr config model ""                     # forget the last model
 ```
 

@@ -12,13 +12,15 @@
  *   geistr chat --socket[=PATH]      chat with that service
  *
  * <model> is a catalog id or a path to a GGUF; chat without one continues with
- * the last model (or the geisten app's). In a terminal the answer is shown as
+ * the last model (or the geisten app's). In a terminal the chat continues the
+ * last conversation (--new or /clear for a new one; geistr config resume off). In a terminal the answer is shown as
  * Markdown with math as Unicode; the prompt shows ⚙ (CPU) or ⚡ (GPU), and
  * each answer ends with its speed. Options anywhere:
  *   --models DIR    model folder (default: the geisten app's, see geistr_models_dir)
  *   --catalog FILE  catalog JSON (default: the app's catalog.json next to the
  *                   model folder if present, else the one built in)
  *   --cpu, --gpu    the processor for this run
+ *   --new           chat: a new conversation instead of the last one
  *   --socket[=PATH] the service's socket (default: geistr.sock next to the model folder)
  *
  * Exit codes: 0 ok, 1 error, 2 usage, 130 cancelled.
@@ -30,7 +32,9 @@
 #include "render.h"
 #include "service.h"
 
+#include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -58,10 +62,10 @@ static char        default_models[4096];
 static struct {
     char   model[256], processor[8], system[2048];
     double temperature;
-    bool   markdown, stats, intro;
-} cfg = {.processor = "auto", .markdown = true, .stats = true, .intro = true};
+    bool   markdown, stats, intro, resume;
+} cfg = {.processor = "auto", .markdown = true, .stats = true, .intro = true, .resume = true};
 static char config_path[4200], config_dir[4096], data_dir[4096];
-static const char *const config_keys[] = {"model", "processor", "temperature", "system", "markdown", "stats", "intro"};
+static const char *const config_keys[] = {"model", "processor", "temperature", "system", "markdown", "stats", "intro", "resume"};
 
 static bool make_dirs(const char *path) {
     char dir[4096];
@@ -123,11 +127,13 @@ static const char *config_set(const char *key, const char *value) {
         cfg.temperature = t;
     } else if (!strcmp(key, "system"))
         snprintf(cfg.system, sizeof cfg.system, "%s", value);
-    else if (!strcmp(key, "markdown") || !strcmp(key, "stats") || !strcmp(key, "intro")) {
+    else if (!strcmp(key, "markdown") || !strcmp(key, "stats") || !strcmp(key, "intro") || !strcmp(key, "resume")) {
         if (*value && strcmp(value, "on") && strcmp(value, "off"))
             return "the value is on or off";
-        *(!strcmp(key, "markdown") ? &cfg.markdown : !strcmp(key, "stats") ? &cfg.stats : &cfg.intro) =
-                strcmp(value, "off") != 0;
+        *(!strcmp(key, "markdown") ? &cfg.markdown
+          : !strcmp(key, "stats")  ? &cfg.stats
+          : !strcmp(key, "intro")  ? &cfg.intro
+                                   : &cfg.resume) = strcmp(value, "off") != 0;
     } else
         return "unknown key";
     return nullptr;
@@ -144,8 +150,12 @@ static void config_value(const char *key, char *out, size_t cap) {
         snprintf(out, cap, "%s", cfg.system);
     else
         snprintf(out, cap, "%s",
-                 (!strcmp(key, "markdown") ? cfg.markdown : !strcmp(key, "stats") ? cfg.stats : cfg.intro) ? "on"
-                                                                                                         : "off");
+                 (!strcmp(key, "markdown") ? cfg.markdown
+                  : !strcmp(key, "stats")  ? cfg.stats
+                  : !strcmp(key, "intro")  ? cfg.intro
+                                           : cfg.resume)
+                         ? "on"
+                         : "off");
 }
 
 static void config_load(void) {
@@ -207,7 +217,7 @@ static int config(int n, const char **args) {
     for (size_t i = 0; i < sizeof config_keys / sizeof *config_keys; i++)
         known |= !strcmp(args[1], config_keys[i]);
     if (!known) {
-        fprintf(stderr, "geistr: unknown key %s (model processor temperature system markdown stats intro)\n", args[1]);
+        fprintf(stderr, "geistr: unknown key %s (model processor temperature system markdown stats intro resume)\n", args[1]);
         return USAGE;
     }
     if (n == 2) {
@@ -236,10 +246,10 @@ static int usage(void) {
           "       geistr chat <model>\n"
           "       geistr catalog [--installed | --available] [--json]\n"
           "       geistr pull <id>\n"
-          "       geistr config [key [value]]   (keys: model processor temperature system markdown stats intro)\n"
+          "       geistr config [key [value]]   (keys: model processor temperature system markdown stats intro resume)\n"
           "       geistr serve <model> [--socket=PATH] [--chats N]\n"
           "       geistr chat --socket[=PATH]\n"
-          "options: --models DIR  --catalog FILE  --cpu  --gpu\n"
+          "options: --models DIR  --catalog FILE  --cpu  --gpu  --new (chat)\n"
           "<model> is a catalog id or a path to a .gguf file\n",
           stderr);
     return USAGE;
@@ -331,16 +341,20 @@ static const char *limit_text(const char *reason) {
     return reason;
 }
 
-static void json_string(const char *s) {
-    putchar('"');
+static void json_to(FILE *f, const char *s) {
+    fputc('"', f);
     for (; s && *s; s++)
         if (*s == '"' || *s == '\\')
-            printf("\\%c", *s);
+            fprintf(f, "\\%c", *s);
         else if ((unsigned char) *s < 32)
-            printf("\\u%04x", *s);
+            fprintf(f, "\\u%04x", *s);
         else
-            putchar(*s);
-    putchar('"');
+            fputc(*s, f);
+    fputc('"', f);
+}
+
+static void json_string(const char *s) {
+    json_to(stdout, s);
 }
 
 static int catalog(bool installed_only, bool available_only, bool json) {
@@ -727,6 +741,82 @@ static void transcript_clear(struct transcript *t) {
     t->n = 0;
 }
 
+/* ---- the conversation across runs: <data>/chats/<ms>-<pid>.jsonl ------------
+ * Each chat writes its own file after every answer (role and content per
+ * line); the next chat continues the newest and, once it writes, removes it.
+ * Only in a terminal: piped chats stay reproducible. */
+static char chat_file[4400], resumed_from[4400];
+static bool fresh; /* --new */
+
+static void chat_file_new(void) {
+    struct timespec t;
+    clock_gettime(CLOCK_REALTIME, &t);
+    snprintf(chat_file, sizeof chat_file, "%s/chats/%lld%03ld-%ld.jsonl", data_dir, (long long) t.tv_sec,
+             t.tv_nsec / 1000000, (long) getpid());
+}
+
+static void chat_store(const struct transcript *t) {
+    char dir[4200], tmp[4500];
+    snprintf(dir, sizeof dir, "%s/chats", data_dir);
+    snprintf(tmp, sizeof tmp, "%s.tmp", chat_file);
+    if (!chat_file[0] || !t->n || !make_dirs(dir))
+        return;
+    int   fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600); /* private: what was said */
+    FILE *f  = fd >= 0 ? fdopen(fd, "w") : nullptr;
+    if (!f) {
+        if (fd >= 0)
+            close(fd);
+        return;
+    }
+    for (size_t i = 0; i < t->n; i++) {
+        fputs("{\"role\":", f), json_to(f, t->role[i]);
+        fputs(",\"content\":", f), json_to(f, t->content[i]), fputs("}\n", f);
+    }
+    if (fclose(f) == 0 && rename(tmp, chat_file) == 0) {
+        if (resumed_from[0]) /* it lives on in this chat's file */
+            unlink(resumed_from), resumed_from[0] = 0;
+    } else
+        unlink(tmp);
+}
+
+/* The newest conversation into t (empty if none). */
+static void chat_resume(struct transcript *t) {
+    char dir[4200], best[300] = "";
+    snprintf(dir, sizeof dir, "%s/chats", data_dir);
+    DIR   *d     = opendir(dir);
+    time_t newest = 0;
+    for (struct dirent *e; d && (e = readdir(d));) {
+        size_t      n = strlen(e->d_name);
+        struct stat st;
+        char        path[4500];
+        snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
+        if (n > 6 && !strcmp(e->d_name + n - 6, ".jsonl") && n < sizeof best && stat(path, &st) == 0 &&
+            (st.st_mtime > newest || (st.st_mtime == newest && strcmp(e->d_name, best) > 0)))
+            newest = st.st_mtime, snprintf(best, sizeof best, "%s", e->d_name);
+    }
+    if (d)
+        closedir(d);
+    if (!best[0])
+        return;
+    snprintf(resumed_from, sizeof resumed_from, "%s/%s", dir, best);
+    FILE  *f    = fopen(resumed_from, "r");
+    char  *line = nullptr;
+    size_t cap  = 0;
+    for (ssize_t len; f && (len = getline(&line, &cap, f)) > 0;) {
+        char *role = malloc((size_t) len + 1), *content = malloc((size_t) len + 1);
+        if (role && content) {
+            service_field(line, "role", role, (size_t) len + 1);
+            service_field(line, "content", content, (size_t) len + 1);
+            if (role[0])
+                transcript_push(t, role, content);
+        }
+        free(role), free(content);
+    }
+    free(line);
+    if (f)
+        fclose(f);
+}
+
 /* Tab completion in the chat: the commands, and after /model the models
  * found in the model folder (receipts only: no hashing at the prompt). */
 static const struct le_candidate commands[] = {
@@ -870,12 +960,33 @@ static int chat(const char *name, const char *processor) {
         find_installed();
         le_init(&editor, stdout, 80, complete_line, nullptr);
     }
+    if (edit && cfg.resume && data_dir[0]) { /* the conversation outlives the chat */
+        chat_file_new();
+        if (!fresh)
+            chat_resume(&said);
+    }
+    if (said.n) { /* where it was: its system prompt, its size, the last question */
+        snprintf(system, sizeof system, "%s", !strcmp(said.role[0], "system") ? said.content[0] : "");
+        carry            = true;
+        const char *last = "";
+        for (size_t i = said.n; i-- > 0 && !last[0];)
+            if (!strcmp(said.role[i], "user"))
+                last = said.content[i];
+        int cut = 0; /* 60 characters, not bytes */
+        for (int chars = 0; last[cut] && chars < 60; chars++)
+            for (cut++; ((unsigned char) last[cut] & 0xC0) == 0x80; cut++) {
+            }
+        printf("\033[2m↻ %zu · „%.*s%s“ · /clear new\033[0m\n", said.n, cut, last, last[cut] ? "…" : "");
+    }
     for (;;) {
-        interrupted = 0;
+        /* A Ctrl-C between two reads of the editor (the terminal is cooked
+         * then, so it arrives as SIGINT) is a Ctrl-C at the prompt. */
+        bool pressed = edit && interrupted;
+        interrupted  = 0;
         char prompt[64];
         snprintf(prompt, sizeof prompt, tty_out() ? "\033[2m%s\033[0m > " : "%s > ", on_gpu(&x) ? "⚡" : "⚙");
         if (edit) {
-            enum le_event ev = le_read(&editor, prompt);
+            enum le_event ev = pressed ? LE_INTERRUPT : le_read(&editor, prompt);
             if (ev == LE_EOF)
                 break;
             if (ev == LE_INTERRUPT) { /* on an empty line: twice to exit, as in Claude Code */
@@ -999,6 +1110,10 @@ static int chat(const char *name, const char *processor) {
                 (void) geistr_chat_rewind(x.chat, 0);
                 transcript_clear(&said);
                 carry = false;
+                if (chat_file[0]) { /* the old one stays as it was */
+                    chat_file_new();
+                    resumed_from[0] = 0;
+                }
             } else
                 chat_help();
             continue;
@@ -1033,12 +1148,14 @@ static int chat(const char *name, const char *processor) {
             s = geistr_chat_run(x.chat, count, turn, print_piece, nullptr);
         if (edit)
             watch_stop();
+        interrupted = 0; /* it stopped the answer, if it came */
         md_finish(&view);
         free(turn);
         puts(s == GEISTR_CANCELLED ? " [stopped]" : "");
         if (s == GEISTR_OK || s == GEISTR_CANCELLED) {
             carry = false;
             transcript_push(&said, "assistant", answer ? answer : "");
+            chat_store(&said);
             if (s == GEISTR_OK && remote)
                 speed_line(rs.output_tokens, rs.generation_ms, rs.total_ms, stdout);
             else if (s == GEISTR_OK)
@@ -1133,7 +1250,9 @@ int main(int argc, char **argv) {
             chats = strtol(argv[++i], &end, 10);
             if (*end || chats < 1 || chats > 64)
                 return usage();
-        } else if (!strcmp(argv[i], "--cpu") || !strcmp(argv[i], "--gpu"))
+        } else if (!strcmp(argv[i], "--new"))
+            fresh = true;
+        else if (!strcmp(argv[i], "--cpu") || !strcmp(argv[i], "--gpu"))
             processor = argv[i] + 2;
         else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h"))
             return usage(), OK;
