@@ -26,6 +26,11 @@
 #include "render.h"
 
 #include <errno.h>
+#include <poll.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <termios.h>
+#include <time.h>
 #include <locale.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -48,10 +53,10 @@ static char        default_models[4096];
 static struct {
     char   model[256], processor[8], system[2048];
     double temperature;
-    bool   markdown, stats;
-} cfg = {.processor = "auto", .markdown = true, .stats = true};
+    bool   markdown, stats, intro;
+} cfg = {.processor = "auto", .markdown = true, .stats = true, .intro = true};
 static char config_path[4200], data_dir[4096];
-static const char *const config_keys[] = {"model", "processor", "temperature", "system", "markdown", "stats"};
+static const char *const config_keys[] = {"model", "processor", "temperature", "system", "markdown", "stats", "intro"};
 
 /* The geisten data folder: where the default model folder lives. */
 static bool data_folder(void) {
@@ -83,10 +88,11 @@ static const char *config_set(const char *key, const char *value) {
         cfg.temperature = t;
     } else if (!strcmp(key, "system"))
         snprintf(cfg.system, sizeof cfg.system, "%s", value);
-    else if (!strcmp(key, "markdown") || !strcmp(key, "stats")) {
+    else if (!strcmp(key, "markdown") || !strcmp(key, "stats") || !strcmp(key, "intro")) {
         if (*value && strcmp(value, "on") && strcmp(value, "off"))
             return "the value is on or off";
-        *(!strcmp(key, "markdown") ? &cfg.markdown : &cfg.stats) = strcmp(value, "off") != 0;
+        *(!strcmp(key, "markdown") ? &cfg.markdown : !strcmp(key, "stats") ? &cfg.stats : &cfg.intro) =
+                strcmp(value, "off") != 0;
     } else
         return "unknown key";
     return nullptr;
@@ -102,7 +108,9 @@ static void config_value(const char *key, char *out, size_t cap) {
     else if (!strcmp(key, "system"))
         snprintf(out, cap, "%s", cfg.system);
     else
-        snprintf(out, cap, "%s", (!strcmp(key, "markdown") ? cfg.markdown : cfg.stats) ? "on" : "off");
+        snprintf(out, cap, "%s",
+                 (!strcmp(key, "markdown") ? cfg.markdown : !strcmp(key, "stats") ? cfg.stats : cfg.intro) ? "on"
+                                                                                                         : "off");
 }
 
 static void config_load(void) {
@@ -172,7 +180,7 @@ static int config(int n, const char **args) {
     for (size_t i = 0; i < sizeof config_keys / sizeof *config_keys; i++)
         known |= !strcmp(args[1], config_keys[i]);
     if (!known) {
-        fprintf(stderr, "geistr: unknown key %s (model processor temperature system markdown stats)\n", args[1]);
+        fprintf(stderr, "geistr: unknown key %s (model processor temperature system markdown stats intro)\n", args[1]);
         return USAGE;
     }
     if (n == 2) {
@@ -201,7 +209,7 @@ static int usage(void) {
           "       geistr chat <model>\n"
           "       geistr catalog [--installed | --available] [--json]\n"
           "       geistr pull <id>\n"
-          "       geistr config [key [value]]   (keys: model processor temperature system markdown stats)\n"
+          "       geistr config [key [value]]   (keys: model processor temperature system markdown stats intro)\n"
           "options: --models DIR  --catalog FILE  --cpu  --gpu\n"
           "<model> is a catalog id or a path to a .gguf file\n",
           stderr);
@@ -467,6 +475,127 @@ static void speed(geistr_chat *chat, FILE *out) {
     fprintf(out, "%s  %.1f tok/s · %.1f s%s\n", dim ? "\033[2m" : "", rate, st.total_ms / 1000, dim ? "\033[0m" : "");
 }
 
+/* ---- while a model loads: a spinner with its size and the time ----------- */
+
+static struct {
+    pthread_t   thread;
+    atomic_bool stop;
+    bool        on;
+    char        label[300];
+} spin;
+
+static double seconds(void) {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (double) t.tv_sec + (double) t.tv_nsec / 1e9;
+}
+
+static void *spinner(void *unused) {
+    (void) unused;
+    static const char *const frames[] = {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"};
+    double                   start    = seconds();
+    for (unsigned i = 0; !atomic_load(&spin.stop); i++) {
+        if (seconds() - start > 0.3) /* quick loads stay quiet */
+            fprintf(stdout, "\r\033[2K\033[2m%s %s · %.0f s\033[0m", frames[i % 10], spin.label, seconds() - start);
+        fflush(stdout);
+        struct timespec pause = {.tv_nsec = 100000000};
+        nanosleep(&pause, nullptr);
+    }
+    return nullptr;
+}
+
+static void spinner_start(const char *name, const char *path) {
+    struct stat st;
+    char        size[24] = "";
+    if (stat(path, &st) == 0)
+        snprintf(size, sizeof size, " · %.1f GB", (double) st.st_size / 1e9);
+    spin.on = tty_out() && strncmp(path, "stub:", 5) != 0;
+    if (!spin.on)
+        return;
+    snprintf(spin.label, sizeof spin.label, "loading %s%s", name, size);
+    atomic_store(&spin.stop, false);
+    spin.on = pthread_create(&spin.thread, nullptr, spinner, nullptr) == 0;
+}
+
+static void spinner_stop(void) {
+    if (!spin.on)
+        return;
+    atomic_store(&spin.stop, true);
+    pthread_join(spin.thread, nullptr);
+    fputs("\r\033[2K", stdout);
+    fflush(stdout);
+    spin.on = false;
+}
+
+/* ---- while an answer runs: Esc stops it, other keys wait for the prompt --- */
+
+static struct {
+    pthread_t      thread;
+    atomic_bool    stop;
+    bool           on;
+    struct termios cooked;
+    struct le     *editor;
+} keys_watch;
+
+static void *watch_keys(void *unused) {
+    (void) unused;
+    while (!atomic_load(&keys_watch.stop)) {
+        struct pollfd in = {.fd = STDIN_FILENO, .events = POLLIN};
+        if (poll(&in, 1, 50) <= 0)
+            continue;
+        unsigned char c;
+        if (read(STDIN_FILENO, &c, 1) != 1)
+            break;
+        if (c == 27 && poll(&in, 1, 30) == 0) { /* Esc alone: stop the answer */
+            if (running)
+                geistr_chat_cancel(running);
+            continue;
+        }
+        le_type_ahead(keys_watch.editor, &c, 1); /* for the next prompt */
+    }
+    return nullptr;
+}
+
+static void watch_start(struct le *editor) {
+    if (tcgetattr(STDIN_FILENO, &keys_watch.cooked) != 0)
+        return;
+    struct termios raw = keys_watch.cooked;
+    raw.c_lflag &= (tcflag_t) ~(ECHO | ICANON); /* ISIG stays: Ctrl-C still stops the answer */
+    raw.c_cc[VMIN]  = 1;
+    raw.c_cc[VTIME] = 0;
+    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+    keys_watch.editor = editor;
+    atomic_store(&keys_watch.stop, false);
+    keys_watch.on = pthread_create(&keys_watch.thread, nullptr, watch_keys, nullptr) == 0;
+    if (!keys_watch.on)
+        tcsetattr(STDIN_FILENO, TCSANOW, &keys_watch.cooked);
+}
+
+static void watch_stop(void) {
+    if (!keys_watch.on)
+        return;
+    atomic_store(&keys_watch.stop, true);
+    pthread_join(keys_watch.thread, nullptr);
+    tcsetattr(STDIN_FILENO, TCSANOW, &keys_watch.cooked);
+    keys_watch.on = false;
+}
+
+static void shortcuts(void) {
+    bool dim = tty_out();
+    printf("%sEnter send · Esc stop the answer · Ctrl-C clear the line, twice: exit · Ctrl-D exit\n"
+           "/ commands (↑↓ choose · Tab take · Esc close) · ↑↓ earlier lines · → take the hint\n"
+           "Ctrl-A/E start/end · Ctrl-U/K delete to start/end · Ctrl-W a word · Ctrl-L clear screen%s\n",
+           dim ? "\033[2m" : "", dim ? "\033[0m" : "");
+}
+
+static void intro(const char *name, const char *backend, bool gpu) {
+    if (!cfg.intro || !tty_out())
+        return;
+    printf("\033[2mgeistr · %s on %s %s   (⚙ CPU · ⚡ GPU)\n"
+           "/ commands · ? shortcuts · Esc stops an answer · Ctrl-C twice exits · geistr config intro off\033[0m\n",
+           name, gpu ? "⚡" : "⚙", backend);
+}
+
 /* A model with a chat on it, and the choices behind both. Replaced as a whole
  * by a runtime switch (/gpu, /model …); the conversation moves along. */
 struct session {
@@ -508,7 +637,10 @@ static int session_open(struct session *x, const char *name, const char *process
                                                        : GEISTR_PROCESSOR_AUTO;
     char error[256];
     *x = (struct session) {.temperature = temperature};
-    if (geistr_model_open(path, &mo, &x->model, error, sizeof error) != GEISTR_OK) {
+    spinner_start(name, path);
+    geistr_status opened = geistr_model_open(path, &mo, &x->model, error, sizeof error);
+    spinner_stop();
+    if (opened != GEISTR_OK) {
         fprintf(stderr, "geistr: cannot open %s: %s\n", path, error);
         return ERROR;
     }
@@ -615,7 +747,7 @@ static size_t complete_line(void *ctx, const char *line, struct le_candidate *ou
 static void chat_help(void) {
     for (size_t i = 0; i < sizeof commands / sizeof *commands; i++)
         printf("%-10s %s\n", commands[i].line, commands[i].help);
-    puts("Tab completes, ↑/↓ recall earlier lines, Ctrl-C stops an answer.");
+    shortcuts();
 }
 
 static void status_line(const struct session *x, const char *what) {
@@ -662,7 +794,9 @@ static int chat(const char *name, const char *processor) {
     struct sigaction sa = {.sa_handler = on_interrupt};
     sigaction(SIGINT, &sa, nullptr); /* no SA_RESTART: Ctrl-C at the prompt ends fgets */
     running = x.chat;
-    char system[sizeof cfg.system];
+    intro(x.name, x.backend, on_gpu(&x));
+    double last_ctrl_c = -10;
+    char   system[sizeof cfg.system];
     snprintf(system, sizeof system, "%s", cfg.system);
     struct transcript said  = {};
     bool              carry = false; /* a new session reads `said` with the next message */
@@ -682,8 +816,17 @@ static int chat(const char *name, const char *processor) {
             enum le_event ev = le_read(&editor, prompt);
             if (ev == LE_EOF)
                 break;
-            if (ev == LE_INTERRUPT)
+            if (ev == LE_INTERRUPT) { /* on an empty line: twice to exit, as in Claude Code */
+                if (seconds() - last_ctrl_c < 2)
+                    break;
+                last_ctrl_c = seconds();
+                puts("\033[2m  Ctrl-C again to exit\033[0m");
                 continue;
+            }
+            if (ev == LE_HELP) {
+                shortcuts();
+                continue;
+            }
             snprintf(line, sizeof line, "%s", editor.buf);
             le_remember(&editor, line);
         } else {
@@ -804,7 +947,11 @@ static int chat(const char *name, const char *processor) {
         if (answer)
             answer[0] = 0;
         view_begin();
+        if (edit)
+            watch_start(&editor);
         geistr_status s = geistr_chat_run(x.chat, count, turn, print_piece, nullptr);
+        if (edit)
+            watch_stop();
         md_finish(&view);
         free(turn);
         puts(s == GEISTR_CANCELLED ? " [stopped]" : "");
