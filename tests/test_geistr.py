@@ -112,6 +112,23 @@ assert p.returncode == 0 and '[stopped]' in out and 'Paris' in out.split('[stopp
 assert ('⚙ >' in out or '⚡ >' in out) and 'tok/s' in out, out  # processor symbol, speed per answer
 
 # ---- settings: geistr.conf, the last model remembered -------------------------
+# where without GEISTEN_HOME: Application Support on macOS; XDG config on Linux, moved there once
+user = os.path.join(tmp, 'user')
+plain = {k: v for k, v in env.items() if k not in ('GEISTEN_HOME', 'GEIST_HOME', 'XDG_DATA_HOME')}
+plain.update(HOME=user, XDG_CONFIG_HOME=os.path.join(user, 'cfg'))
+if sys.platform == 'darwin':
+    where = os.path.join(user, 'Library', 'Application Support', 'geisten', 'geistr.conf')
+else:
+    where = os.path.join(user, 'cfg', 'geisten', 'geistr.conf')
+    before = os.path.join(user, '.local', 'share', 'geisten', 'geistr.conf')
+    os.makedirs(os.path.dirname(before))
+    with open(before, 'w') as f:
+        f.write('temperature = 0.25\n')
+r = subprocess.run([geistr, 'config'], capture_output=True, text=True, env=plain)
+assert r.returncode == 0 and r.stdout.startswith('# ' + where), r.stdout
+if sys.platform != 'darwin':
+    assert not os.path.exists(before) and '0.25' in r.stdout, r.stdout
+assert subprocess.run([geistr, 'config', 'stats', 'off'], env=plain).returncode == 0 and os.path.exists(where)
 conf = os.path.join(tmp, 'home', 'geistr.conf')
 assert os.path.exists(conf) and 'model = ref' in open(conf).read(), 'chat remembers its model'
 r = geistr_run('chat', input='What is the capital of France? Answer in one word.\n')
