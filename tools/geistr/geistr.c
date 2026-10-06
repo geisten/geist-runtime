@@ -959,6 +959,7 @@ static int chat(const char *name, const char *processor) {
     if (edit) {
         find_installed();
         le_init(&editor, stdout, 80, complete_line, nullptr);
+        editor.interrupted = &interrupted;
     }
     if (edit && cfg.resume && data_dir[0]) { /* the conversation outlives the chat */
         chat_file_new();
@@ -979,14 +980,12 @@ static int chat(const char *name, const char *processor) {
         printf("\033[2m↻ %zu · „%.*s%s“ · /clear new\033[0m\n", said.n, cut, last, last[cut] ? "…" : "");
     }
     for (;;) {
-        /* A Ctrl-C between two reads of the editor (the terminal is cooked
-         * then, so it arrives as SIGINT) is a Ctrl-C at the prompt. */
-        bool pressed = edit && interrupted;
-        interrupted  = 0;
+        if (!edit) /* the editor takes a Ctrl-C that came between two reads */
+            interrupted = 0;
         char prompt[64];
         snprintf(prompt, sizeof prompt, tty_out() ? "\033[2m%s\033[0m > " : "%s > ", on_gpu(&x) ? "⚡" : "⚙");
         if (edit) {
-            enum le_event ev = pressed ? LE_INTERRUPT : le_read(&editor, prompt);
+            enum le_event ev = le_read(&editor, prompt);
             if (ev == LE_EOF)
                 break;
             if (ev == LE_INTERRUPT) { /* on an empty line: twice to exit, as in Claude Code */

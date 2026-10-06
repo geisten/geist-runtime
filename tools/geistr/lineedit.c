@@ -456,6 +456,11 @@ enum le_event le_read(struct le *e, const char *prompt) {
     raw.c_cc[VMIN]  = 1;
     raw.c_cc[VTIME] = 0;
     tcsetattr(STDIN_FILENO, TCSANOW, &raw); /* not FLUSH: keep what was typed ahead */
+    if (e->interrupted && *e->interrupted) { /* from now on Ctrl-C is a key, not a signal */
+        *e->interrupted = 0;
+        tcsetattr(STDIN_FILENO, TCSANOW, &cooked);
+        return LE_INTERRUPT;
+    }
     le_begin(e, prompt);
     enum le_event ev = LE_MORE;
     unsigned char c;

@@ -10,6 +10,7 @@
  * screen updates to a FILE, so it is tested without a terminal; le_read
  * puts the terminal in raw mode around it. */
 #pragma once
+#include <signal.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -43,6 +44,10 @@ struct le {
     unsigned       menu_rows;   /* list rows of the last drawing */
     unsigned char  ahead[256];  /* keys typed while the answer ran: read first */
     size_t         n_ahead;
+    /* Set by the caller's SIGINT handler: a Ctrl-C that came while the
+     * terminal was cooked (between two reads). le_read clears it and
+     * returns LE_INTERRUPT once the terminal is raw, so none is lost. */
+    volatile sig_atomic_t *interrupted;
 };
 
 void          le_init(struct le *e, FILE *out, unsigned width, le_complete_fn complete, void *ctx);
