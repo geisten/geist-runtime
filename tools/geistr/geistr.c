@@ -742,7 +742,7 @@ static void *watch_keys(void *unused) {
         unsigned char c;
         if (read(STDIN_FILENO, &c, 1) != 1)
             break;
-        if (c == 27 && poll(&in, 1, 30) == 0) { /* Esc alone: stop the answer */
+        if (c == 3 || (c == 27 && poll(&in, 1, 30) == 0)) { /* Ctrl-C, or Esc alone: stop the answer */
             interrupted = 1; /* a service's answer (chat --socket) */
             if (running)
                 geistr_chat_cancel(running);
@@ -757,7 +757,7 @@ static void watch_start(struct le *editor) {
     if (tcgetattr(STDIN_FILENO, &keys_watch.cooked) != 0)
         return;
     struct termios raw = keys_watch.cooked;
-    raw.c_lflag &= (tcflag_t) ~(ECHO | ICANON); /* ISIG stays: Ctrl-C still stops the answer */
+    raw.c_lflag &= (tcflag_t) ~(ECHO | ICANON); /* Ctrl-C is a key here too (keys_only) */
     raw.c_cc[VMIN]  = 1;
     raw.c_cc[VTIME] = 0;
     tcsetattr(STDIN_FILENO, TCSANOW, &raw);
@@ -775,6 +775,39 @@ static void watch_stop(void) {
     pthread_join(keys_watch.thread, nullptr);
     tcsetattr(STDIN_FILENO, TCSANOW, &keys_watch.cooked);
     keys_watch.on = false;
+}
+
+/* In the interactive chat Ctrl-C is a key, never a signal, also between two
+ * reads of the editor: a SIGINT may be handled by any thread (the engine's
+ * workers too), after the editor looked for it, and the Ctrl-C was lost. As
+ * a key it waits in the input until read. Restored on exit, and on SIGTERM
+ * and SIGHUP. */
+static struct termios original_term;
+static volatile sig_atomic_t term_changed;
+
+static void restore_term(int signal) {
+    if (term_changed)
+        tcsetattr(STDIN_FILENO, TCSANOW, &original_term); /* async-signal-safe */
+    term_changed = 0;
+    if (signal) {
+        sigaction(signal, &(struct sigaction) {.sa_handler = SIG_DFL}, nullptr);
+        raise(signal);
+    }
+}
+
+static void keys_only(bool on) {
+    if (!on) {
+        restore_term(0);
+        return;
+    }
+    if (tcgetattr(STDIN_FILENO, &original_term) != 0)
+        return;
+    struct termios t = original_term;
+    t.c_lflag &= (tcflag_t) ~ISIG;
+    term_changed = tcsetattr(STDIN_FILENO, TCSANOW, &t) == 0;
+    struct sigaction sa = {.sa_handler = restore_term};
+    sigaction(SIGTERM, &sa, nullptr);
+    sigaction(SIGHUP, &sa, nullptr);
 }
 
 static void shortcuts(void) {
@@ -1109,6 +1142,7 @@ static int chat(const char *name, const char *processor) {
         find_installed();
         le_init(&editor, stdout, 80, complete_line, nullptr);
         editor.interrupted = &interrupted;
+        keys_only(true);
     }
     if (edit && cfg.resume && data_dir[0]) { /* the conversation outlives the chat */
         chat_file_new();
@@ -1315,9 +1349,10 @@ static int chat(const char *name, const char *processor) {
             fprintf(stderr, "geistr: %s: %s\n", geistr_status_text(s), remote ? why : geistr_chat_error(x.chat));
         }
     }
-    if (edit)
+    if (edit) {
         le_free(&editor);
-    else
+        keys_only(false);
+    } else
         putchar('\n');
     running = nullptr;
     session_close(&x);
@@ -1488,9 +1523,6 @@ static void on_stop(int signal) {
 }
 
 static int serve(const char *name, const char *processor, const char *socket, size_t chats) {
-    /* Idle OpenMP workers on the CPU spin forever otherwise (geistlib #651);
-     * set before the engine starts its threads. */
-    setenv("KMP_BLOCKTIME", "200", 0);
     struct session x;
     geistr_reasoning reasoning;
     char             path[4200];
