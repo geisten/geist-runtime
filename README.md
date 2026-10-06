@@ -55,9 +55,9 @@ terminal, one record per row when the columns cannot fit) and LaTeX math as Unic
 shows the processor (⚙ CPU, ⚡ GPU), and each answer ends with its speed
 (`79.4 tok/s · 4.1 s`).
 
-Every complete answer (chat, run, bench) records its speed in `speed.tsv` in
-the data folder. `geistr catalog` draws the median of the last ten per model
-and processor as bars on one scale (`⚙ 113 ██████▉  ⚡ 196 ████████████`);
+Every complete answer (chat, run, bench) records its speed and the geistlib
+commit in `speed.tsv` in the data folder. `geistr catalog` draws the median of
+the last ten per model and processor with this engine as bars on one scale (`⚙ 113 ██████▉  ⚡ 196 ████████████`);
 values from the catalog's reference computer are dim until measured here.
 The measured speeds also feed the fit verdicts (`geistr_rank`).
 

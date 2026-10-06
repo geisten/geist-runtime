@@ -303,12 +303,15 @@ r = geistr_run('bench', 'ref')
 assert r.returncode == 0 and 'tok/s' in r.stdout and 'ref' in r.stdout, (r.stdout, r.stderr)
 rows = [l.split('\t') for l in open(speeds).read().splitlines()]
 assert len(rows) > before and rows[-1][0] == 'ref' and rows[-1][1] in ('cpu', 'gpu') and float(rows[-1][2]) > 0, rows
+engine = rows[-1][5]
+assert len(engine) == 40, rows[-1]  # the geistlib commit
 with open(speeds, 'a') as f:  # a model recorded by path counts for its catalog entry
-    f.write(f'{model_path}\tcpu\t1000.0\t0.1\t0\n' * 11)
+    f.write(f'{model_path}\tcpu\t1000.0\t0.1\t0\t{engine}\n' * 11)
+    f.write(f'ref\tcpu\t5.0\t0.1\t0\tanother-engine\n' * 11)  # not this engine's: ignored
 measured = listing()['ref']['tokens_per_s']
-assert measured['cpu'] == 1000.0, measured  # the median of the last ten
+assert measured['cpu'] == 1000.0, measured  # the median of the last ten with this engine
 assert listing()['tiny']['tokens_per_s'] == {'cpu': None, 'gpu': None}
-print('geistr bench / catalog speeds: recorded per answer, median of the last ten, by id or path passed')
+print('geistr bench / catalog speeds: recorded per answer with the engine, median of the last ten, by id or path passed')
 
 # ---- pull -------------------------------------------------------------------
 r = geistr_run('pull', 'tiny', binary=nonet)

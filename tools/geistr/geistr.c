@@ -55,6 +55,10 @@
 
 enum { OK = 0, ERROR = 1, USAGE = 2, CANCELLED = 130 };
 
+#ifndef GEISTR_ENGINE
+#define GEISTR_ENGINE "unknown" /* the geistlib commit, set by the Makefile */
+#endif
+
 static const char *models_dir, *catalog_file;
 static char        default_models[4096];
 
@@ -387,10 +391,10 @@ static void speeds_load(const geistr_catalog *c, geistr_local *local) {
     char  *line = nullptr;
     size_t cap  = 0;
     while (f && getline(&line, &cap, f) > 0) { /* ponytail: reads it all; trim the file if it ever matters */
-        char  *model = strtok(line, "\t"), *proc = strtok(nullptr, "\t"), *rate = strtok(nullptr, "\t"),
-              *first = strtok(nullptr, "\t");
-        if (!model || !proc || !rate || !first)
-            continue;
+        char *model = strtok(line, "\t"), *proc = strtok(nullptr, "\t"), *rate = strtok(nullptr, "\t"),
+             *first = strtok(nullptr, "\t"), *when = strtok(nullptr, "\t"), *engine = strtok(nullptr, "\t\n");
+        if (!model || !proc || !rate || !first || !when || !engine || strcmp(engine, GEISTR_ENGINE))
+            continue; /* another engine's speed */
         const char *base = strrchr(model, '/') ? strrchr(model, '/') + 1 : model;
         for (size_t i = 0; i < n; i++) {
             const geistr_catalog_entry *m = geistr_catalog_get(c, i);
@@ -643,8 +647,9 @@ static void speed_line(unsigned tokens, double generation_ms, double total_ms, F
 }
 
 /* ---- speeds measured here: <data>/speed.tsv, a line per complete answer ----
- * model, cpu|gpu, tokens/s, seconds to the first answer text, time. The
- * catalog shows the median of the last ten per model and processor. */
+ * model, cpu|gpu, tokens/s, seconds to the first answer text, time, geistlib
+ * commit. The catalog shows the median of the last ten per model and
+ * processor measured with this engine: another one may be faster or slower. */
 static void speed_record(const char *model, const char *backend, unsigned tokens, double generation_ms,
                          double first_ms) {
     char path[4200];
@@ -654,8 +659,9 @@ static void speed_record(const char *model, const char *backend, unsigned tokens
     FILE *f = fopen(path, "a");
     if (!f)
         return;
-    fprintf(f, "%s\t%s\t%.1f\t%.3f\t%lld\n", model, strcmp(backend, "cpu") ? "gpu" : "cpu",
-            tokens / (generation_ms / 1000), first_ms >= 0 ? first_ms / 1000 : -1, (long long) time(nullptr));
+    fprintf(f, "%s\t%s\t%.1f\t%.3f\t%lld\t%s\n", model, strcmp(backend, "cpu") ? "gpu" : "cpu",
+            tokens / (generation_ms / 1000), first_ms >= 0 ? first_ms / 1000 : -1, (long long) time(nullptr),
+            GEISTR_ENGINE);
     fclose(f);
 }
 
