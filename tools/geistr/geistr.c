@@ -22,9 +22,11 @@
 #include "geistr.h"
 #include "geistr_catalog.h"
 #include "pull.h"
+#include "lineedit.h"
 #include "render.h"
 
 #include <errno.h>
+#include <locale.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -549,15 +551,62 @@ static void transcript_clear(struct transcript *t) {
     t->n = 0;
 }
 
+/* Tab completion in the chat: the commands, and after /model the models
+ * found in the model folder (receipts only: no hashing at the prompt). */
+static const struct le_candidate commands[] = {
+        {"/gpu", "processor: GPU (the conversation moves along)"},
+        {"/cpu", "processor: CPU"},
+        {"/auto", "processor: the runtime's choice"},
+        {"/model ", "another model, same conversation"},
+        {"/temp ", "sampling temperature, 0 to 2"},
+        {"/system ", "system prompt (empty: none)"},
+        {"/info", "what runs now"},
+        {"/save", "keep these settings for the next chat"},
+        {"/clear", "a new conversation"},
+        {"/help", "the commands"},
+        {"/exit", "end (or Ctrl-D)"},
+};
+static char   installed_ids[64][64], model_lines[64][80];
+static size_t n_installed;
+
+static void find_installed(void) {
+    geistr_catalog *c = load_catalog();
+    n_installed       = 0;
+    for (size_t i = 0; c && i < geistr_catalog_count(c) && n_installed < 64; i++) {
+        const geistr_catalog_entry *m     = geistr_catalog_get(c, i);
+        geistr_install              state = GEISTR_INSTALL_MISSING;
+        if (geistr_catalog_check(m, models_dir, false, &state) == GEISTR_OK &&
+            (state == GEISTR_INSTALL_OK || state == GEISTR_INSTALL_UNVERIFIED))
+            snprintf(installed_ids[n_installed++], sizeof installed_ids[0], "%s", m->id);
+    }
+    geistr_catalog_free(c);
+}
+
+static size_t complete_line(void *ctx, const char *line, struct le_candidate *out, size_t max) {
+    (void) ctx;
+    size_t n = 0;
+    if (!strncmp(line, "/model ", 7)) {
+        const char *typed = line + 7;
+        for (size_t i = 0; i < n_installed && n < max; i++)
+            if (!strncmp(installed_ids[i], typed, strlen(typed))) {
+                snprintf(model_lines[n], sizeof model_lines[0], "/model %s", installed_ids[i]);
+                out[n] = (struct le_candidate) {model_lines[n], nullptr};
+                n++;
+            }
+        return n;
+    }
+    if (line[0] != '/' || strchr(line, ' '))
+        return 0;
+    for (size_t i = 0; i < sizeof commands / sizeof *commands && n < max; i++)
+        if (!strncmp(commands[i].line, line, strlen(line)))
+            out[n++] = commands[i];
+    return n;
+}
+
 static void chat_help(void) {
-    puts("/gpu /cpu /auto      processor (the conversation moves along)\n"
-         "/model <id|path>     another model, same conversation\n"
-         "/temp <0..2>         sampling temperature\n"
-         "/system <text>       system prompt (empty: none)\n"
-         "/info                what runs now\n"
-         "/save                keep these settings for the next chat\n"
-         "/clear               a new conversation\n"
-         "/exit                end (or Ctrl-D); Ctrl-C stops an answer");
+    for (size_t i = 0; i < sizeof commands / sizeof *commands; i++)
+        printf("%-10s %s\n", commands[i].line, commands[i].help);
+    puts("Tab completes, ↑/↓ recall earlier lines, Ctrl-C stops an answer.");
 }
 
 static void status_line(const struct session *x, const char *what) {
@@ -608,21 +657,38 @@ static int chat(const char *name, const char *processor) {
     snprintf(system, sizeof system, "%s", cfg.system);
     struct transcript said  = {};
     bool              carry = false; /* a new session reads `said` with the next message */
-    static char       line[1 << 16];
+    static char line[1 << 16];
+    /* In a terminal: the line editor (Tab completion, history); else plain lines. */
+    bool      edit = isatty(STDIN_FILENO) && isatty(STDOUT_FILENO);
+    struct le editor;
+    if (edit) {
+        setlocale(LC_CTYPE, ""); /* character widths for the editor */
+        find_installed();
+        le_init(&editor, stdout, 80, complete_line, nullptr);
+    }
     for (;;) {
         interrupted = 0;
-        if (tty_out())
-            printf("\033[2m%s\033[0m > ", on_gpu(&x) ? "⚡" : "⚙");
-        else
-            printf("%s > ", on_gpu(&x) ? "⚡" : "⚙");
-        fflush(stdout);
-        if (!fgets(line, sizeof line, stdin)) {
-            if (interrupted && !feof(stdin)) { /* Ctrl-C at the prompt: a new prompt */
-                clearerr(stdin);
-                putchar('\n');
+        char prompt[64];
+        snprintf(prompt, sizeof prompt, tty_out() ? "\033[2m%s\033[0m > " : "%s > ", on_gpu(&x) ? "⚡" : "⚙");
+        if (edit) {
+            enum le_event ev = le_read(&editor, prompt);
+            if (ev == LE_EOF)
+                break;
+            if (ev == LE_INTERRUPT)
                 continue;
+            snprintf(line, sizeof line, "%s", editor.buf);
+            le_remember(&editor, line);
+        } else {
+            fputs(prompt, stdout);
+            fflush(stdout);
+            if (!fgets(line, sizeof line, stdin)) {
+                if (interrupted && !feof(stdin)) { /* Ctrl-C at the prompt: a new prompt */
+                    clearerr(stdin);
+                    putchar('\n');
+                    continue;
+                }
+                break;
             }
-            break;
         }
         line[strcspn(line, "\n")] = 0;
         if (!line[0])
@@ -745,7 +811,10 @@ static int chat(const char *name, const char *processor) {
             fprintf(stderr, "geistr: %s: %s\n", geistr_status_text(s), geistr_chat_error(x.chat));
         }
     }
-    putchar('\n');
+    if (edit)
+        le_free(&editor);
+    else
+        putchar('\n');
     running = nullptr;
     session_close(&x);
     transcript_clear(&said);

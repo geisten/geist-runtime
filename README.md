@@ -52,6 +52,12 @@ lists, quotes, code blocks) and LaTeX math as Unicode (`$e^{i\pi}$`, `$$\frac{a}
 shows the processor (⚙ CPU, ⚡ GPU), and each answer ends with its speed
 (`79.4 tok/s · 4.1 s`).
 
+In a terminal the chat line is editable: Tab completes the `/` commands and,
+after `/model `, the installed models (several matches: their common part,
+then a list with what each does); the rest of a unique command appears dim
+and → or Tab takes it; ↑/↓ recall earlier lines; Ctrl-A/E/U/K/W/L as usual.
+UTF-8 aware, no readline or libedit dependency (`tools/geistr/lineedit.c`).
+
 In the chat, switch while it runs; the conversation moves along (the new
 session reads it once with your next message), and a switch that fails keeps
 the current session:
