@@ -41,7 +41,7 @@ A minimal CLI on the runtime; the model runs in-process (`make geistr`).
 geistr catalog                     # ✓ installed (SHA-256 verified), ↓ available, ⚠/✗ fit on this computer
 geistr catalog --installed | --available | --json
 geistr run gemma4-e2b "prompt"     # one answer to stdout; a catalog id or a .gguf path; prompt from stdin if none
-geistr chat gemma4-e2b             # Ctrl-C stops the answer, not the chat; /clear /help /exit
+geistr chat gemma4-e2b             # Ctrl-C stops the answer, not the chat; /help in the chat
 geistr chat                        # the last model again (else the geisten app's)
 geistr pull gemma4-e4b             # download, resume, verify (builds with the download module)
 ```
@@ -51,6 +51,20 @@ lists, quotes, code blocks) and LaTeX math as Unicode (`$e^{i\pi}$`, `$$\frac{a}
 → e^(iπ), a/b; α, ∑, ², ₁, √, ℝ …); piped output stays plain text. The prompt
 shows the processor (⚙ CPU, ⚡ GPU), and each answer ends with its speed
 (`79.4 tok/s · 4.1 s`).
+
+In the chat, switch while it runs; the conversation moves along (the new
+session reads it once with your next message), and a switch that fails keeps
+the current session:
+
+```
+/gpu /cpu /auto          processor (GPU: Metal on macOS, Vulkan on Linux)
+/model qwen3-0.6b        another model, same conversation
+/temp 0.7                sampling temperature
+/system Sei knapp.       system prompt (empty: none)
+/info                    what runs now: backend, model, chat format, context
+/save                    keep model, processor, temperature, system for next time
+/clear  /exit
+```
 
 Settings live in `geistr.conf` next to the model folder:
 

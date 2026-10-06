@@ -419,9 +419,26 @@ static void on_interrupt(int signal) {
         geistr_chat_cancel(running); /* an atomic store: safe in a handler */
 }
 
+/* The answer as the user saw it: kept for a session switch. */
+static char  *answer;
+static size_t answer_len, answer_cap;
+
 static int print_piece(void *context, const geistr_piece *piece) {
     (void) context;
     md_feed(&view, piece->text);
+    if (piece->part == GEISTR_PART_ANSWER && answer_len + piece->len + 1 > answer_cap) {
+        size_t cap = answer_cap ? answer_cap * 2 : 4096;
+        while (cap < answer_len + piece->len + 1)
+            cap *= 2;
+        char *grown = realloc(answer, cap);
+        if (!grown)
+            return 1;
+        answer = grown, answer_cap = cap;
+    }
+    if (piece->part == GEISTR_PART_ANSWER) {
+        memcpy(answer + answer_len, piece->text, piece->len + 1);
+        answer_len += piece->len;
+    }
     return 1;
 }
 
@@ -439,112 +456,301 @@ static void speed(geistr_chat *chat, FILE *out) {
     fprintf(out, "%s  %.1f tok/s · %.1f s%s\n", dim ? "\033[2m" : "", rate, st.total_ms / 1000, dim ? "\033[0m" : "");
 }
 
-static void chat_help(void) {
-    puts("/clear  a new conversation    /exit  end (or Ctrl-D)    Ctrl-C  stop the answer");
+/* A model with a chat on it, and the choices behind both. Replaced as a whole
+ * by a runtime switch (/gpu, /model …); the conversation moves along. */
+struct session {
+    geistr_model *model;
+    geistr_chat  *chat;
+    char          name[256], processor[8], backend[16], format[16];
+    double        temperature;
+    uint32_t      context;
+};
+
+static void session_close(struct session *x) {
+    geistr_chat_close(x->chat);
+    geistr_model_close(x->model);
+    *x = (struct session) {};
 }
 
-static int converse(const char *model, const char *prompt, bool interactive, const char *processor) {
+/* Open the chat on x->model with x's options (model already open). */
+static bool session_chat(struct session *x, geistr_reasoning reasoning, bool interactive) {
+    geistr_chat_opts opts = GEISTR_CHAT_OPTS_INIT;
+    opts.reasoning        = reasoning;
+    opts.temperature      = (float) x->temperature;
+    opts.overflow         = interactive ? GEISTR_OVERFLOW_DROP_OLDEST : GEISTR_OVERFLOW_REFUSE;
+    geistr_status s       = geistr_chat_open(x->model, &opts, &x->chat);
+    if (s != GEISTR_OK)
+        fprintf(stderr, "geistr: cannot chat: %s\n", geistr_status_text(s));
+    return s == GEISTR_OK;
+}
+
+static int session_open(struct session *x, const char *name, const char *processor, double temperature,
+                        bool interactive) {
     char             path[4200] = "";
     geistr_reasoning reasoning;
-    int              rc = resolve(model, path, sizeof path, &reasoning);
+    int              rc = resolve(name, path, sizeof path, &reasoning);
     if (rc != OK)
         return rc;
-    geistr_model     *m  = nullptr;
     geistr_model_opts mo = GEISTR_MODEL_OPTS_INIT;
-    mo.processor = !strcmp(processor, "cpu") ? GEISTR_PROCESSOR_CPU
-                   : !strcmp(processor, "gpu") ? GEISTR_PROCESSOR_GPU
-                                               : GEISTR_PROCESSOR_AUTO;
+    mo.processor         = !strcmp(processor, "cpu")   ? GEISTR_PROCESSOR_CPU
+                           : !strcmp(processor, "gpu") ? GEISTR_PROCESSOR_GPU
+                                                       : GEISTR_PROCESSOR_AUTO;
     char error[256];
-    if (geistr_model_open(path, &mo, &m, error, sizeof error) != GEISTR_OK) {
+    *x = (struct session) {.temperature = temperature};
+    if (geistr_model_open(path, &mo, &x->model, error, sizeof error) != GEISTR_OK) {
         fprintf(stderr, "geistr: cannot open %s: %s\n", path, error);
         return ERROR;
     }
     geistr_model_info info = {.size = sizeof info};
-    bool              gpu  = geistr_model_info_get(m, &info) == GEISTR_OK && info.backend && strcmp(info.backend, "cpu");
-    geistr_chat_opts  opts = GEISTR_CHAT_OPTS_INIT;
-    opts.reasoning         = reasoning;
-    opts.temperature       = (float) cfg.temperature;
-    opts.overflow          = interactive ? GEISTR_OVERFLOW_DROP_OLDEST : GEISTR_OVERFLOW_REFUSE;
-    geistr_chat  *chat     = nullptr;
-    geistr_status s        = geistr_chat_open(m, &opts, &chat);
-    geistr_model_close(m); /* the chat holds its own reference */
-    if (s != GEISTR_OK) {
-        fprintf(stderr, "geistr: cannot chat: %s\n", geistr_status_text(s));
+    if (geistr_model_info_get(x->model, &info) == GEISTR_OK) {
+        snprintf(x->backend, sizeof x->backend, "%s", info.backend ? info.backend : "cpu");
+        snprintf(x->format, sizeof x->format, "%s", info.chat_format ? info.chat_format : "");
+        x->context = info.context;
+    }
+    snprintf(x->name, sizeof x->name, "%s", name);
+    snprintf(x->processor, sizeof x->processor, "%s", processor);
+    if (!session_chat(x, reasoning, interactive)) {
+        session_close(x);
         return ERROR;
     }
-    /* Remember the model for the next chat. */
-    if (interactive && strcmp(cfg.model, model) && config_path[0]) {
-        snprintf(cfg.model, sizeof cfg.model, "%s", model);
+    return OK;
+}
+
+static bool on_gpu(const struct session *x) {
+    return strcmp(x->backend, "cpu") != 0;
+}
+
+/* The conversation as text, so it survives a switch of model or processor. */
+struct transcript {
+    size_t n, cap;
+    char **role, **content;
+};
+
+static void transcript_push(struct transcript *t, const char *role, const char *content) {
+    if (t->n == t->cap) {
+        size_t cap  = t->cap ? t->cap * 2 : 16;
+        char **r    = realloc(t->role, cap * sizeof *r);
+        char **c    = r ? realloc(t->content, cap * sizeof *c) : nullptr;
+        if (r)
+            t->role = r;
+        if (!c)
+            return;
+        t->content = c, t->cap = cap;
+    }
+    t->role[t->n]    = strdup(role);
+    t->content[t->n] = strdup(content);
+    if (t->role[t->n] && t->content[t->n])
+        t->n++;
+}
+
+static void transcript_clear(struct transcript *t) {
+    for (size_t i = 0; i < t->n; i++)
+        free(t->role[i]), free(t->content[i]);
+    t->n = 0;
+}
+
+static void chat_help(void) {
+    puts("/gpu /cpu /auto      processor (the conversation moves along)\n"
+         "/model <id|path>     another model, same conversation\n"
+         "/temp <0..2>         sampling temperature\n"
+         "/system <text>       system prompt (empty: none)\n"
+         "/info                what runs now\n"
+         "/save                keep these settings for the next chat\n"
+         "/clear               a new conversation\n"
+         "/exit                end (or Ctrl-D); Ctrl-C stops an answer");
+}
+
+static void status_line(const struct session *x, const char *what) {
+    bool dim = tty_out();
+    printf("%s%s %s · %s%s%s\n", dim ? "\033[2m" : "", on_gpu(x) ? "⚡" : "⚙", x->backend, x->name, what,
+           dim ? "\033[0m" : "");
+}
+
+/* One answer to `prompt` (geistr run). */
+static int answer_once(const char *name, const char *prompt, const char *processor) {
+    struct session x;
+    int            rc = session_open(&x, name, processor, cfg.temperature, false);
+    if (rc != OK)
+        return rc;
+    struct sigaction sa = {.sa_handler = on_interrupt};
+    sigaction(SIGINT, &sa, nullptr);
+    running              = x.chat;
+    geistr_message turn[2];
+    size_t         n = 0;
+    if (cfg.system[0])
+        turn[n++] = (geistr_message) {"system", cfg.system};
+    turn[n++] = (geistr_message) {"user", prompt};
+    md_init(&view, cfg.markdown && tty_out() ? MD_ANSI : MD_RAW, stdout);
+    geistr_status s = geistr_chat_run(x.chat, n, turn, print_piece, nullptr);
+    md_finish(&view);
+    putchar('\n');
+    speed(x.chat, stderr);
+    if (s != GEISTR_OK && s != GEISTR_CANCELLED)
+        fprintf(stderr, "geistr: %s: %s\n", geistr_status_text(s), geistr_chat_error(x.chat));
+    running = nullptr;
+    session_close(&x);
+    return s == GEISTR_OK ? OK : s == GEISTR_CANCELLED ? CANCELLED : ERROR;
+}
+
+static int chat(const char *name, const char *processor) {
+    struct session x;
+    int            rc = session_open(&x, name, processor, cfg.temperature, true);
+    if (rc != OK)
+        return rc;
+    if (strcmp(cfg.model, name) && config_path[0]) { /* remember the model for the next chat */
+        snprintf(cfg.model, sizeof cfg.model, "%s", name);
         (void) config_save();
     }
     struct sigaction sa = {.sa_handler = on_interrupt};
     sigaction(SIGINT, &sa, nullptr); /* no SA_RESTART: Ctrl-C at the prompt ends fgets */
-    running             = chat;
-    rc                  = OK;
-    enum md_mode mode   = cfg.markdown && tty_out() ? MD_ANSI : MD_RAW;
-    bool         fresh  = true; /* the system prompt opens a conversation */
-    geistr_message turn[2];
-    if (!interactive) {
-        size_t n = 0;
-        if (cfg.system[0])
-            turn[n++] = (geistr_message) {"system", cfg.system};
-        turn[n++] = (geistr_message) {"user", prompt};
-        md_init(&view, mode, stdout);
-        s = geistr_chat_run(chat, n, turn, print_piece, nullptr);
-        md_finish(&view);
-        putchar('\n');
-        speed(chat, stderr);
-        rc = s == GEISTR_OK ? OK : s == GEISTR_CANCELLED ? CANCELLED : ERROR;
-    } else {
-        static char line[1 << 16];
-        const char *symbol = gpu ? "⚡" : "⚙";
-        for (;;) {
-            interrupted = 0;
-            if (tty_out())
-                printf("\033[2m%s\033[0m > ", symbol);
+    running = x.chat;
+    char system[sizeof cfg.system];
+    snprintf(system, sizeof system, "%s", cfg.system);
+    struct transcript said  = {};
+    bool              carry = false; /* a new session reads `said` with the next message */
+    static char       line[1 << 16];
+    for (;;) {
+        interrupted = 0;
+        if (tty_out())
+            printf("\033[2m%s\033[0m > ", on_gpu(&x) ? "⚡" : "⚙");
+        else
+            printf("%s > ", on_gpu(&x) ? "⚡" : "⚙");
+        fflush(stdout);
+        if (!fgets(line, sizeof line, stdin)) {
+            if (interrupted && !feof(stdin)) { /* Ctrl-C at the prompt: a new prompt */
+                clearerr(stdin);
+                putchar('\n');
+                continue;
+            }
+            break;
+        }
+        line[strcspn(line, "\n")] = 0;
+        if (!line[0])
+            continue;
+        if (line[0] == '/') {
+            char *arg = strchr(line, ' ');
+            if (arg)
+                *arg++ = 0;
             else
-                printf("%s > ", symbol);
-            fflush(stdout);
-            if (!fgets(line, sizeof line, stdin)) {
-                if (interrupted && !feof(stdin)) { /* Ctrl-C at the prompt: a new prompt */
-                    clearerr(stdin);
-                    putchar('\n');
+                arg = line + strlen(line);
+            const char *processor_now = !strcmp(line, "/gpu")    ? "gpu"
+                                        : !strcmp(line, "/cpu")  ? "cpu"
+                                        : !strcmp(line, "/auto") ? "auto"
+                                                                 : nullptr;
+            if (!strcmp(line, "/exit") || !strcmp(line, "/quit"))
+                break;
+            if (processor_now || (!strcmp(line, "/model") && *arg)) {
+                /* Open the new session first: a failure keeps the current one. */
+                struct session next;
+                const char    *name_now = processor_now ? x.name : arg;
+                if (session_open(&next, name_now, processor_now ? processor_now : x.processor, x.temperature, true) !=
+                    OK)
+                    continue;
+                running = nullptr;
+                session_close(&x);
+                x       = next;
+                running = x.chat;
+                carry   = said.n > 0;
+                status_line(&x, carry ? " · the conversation moves along" : "");
+            } else if (!strcmp(line, "/temp")) {
+                char  *end = nullptr;
+                double t   = strtod(arg, &end);
+                if (!*arg || *end || !(t >= 0 && t <= 2)) {
+                    puts("/temp 0 … 2");
                     continue;
                 }
-                break;
-            }
-            line[strcspn(line, "\n")] = 0;
-            if (!line[0])
-                continue;
-            if (line[0] == '/') {
-                if (!strcmp(line, "/exit") || !strcmp(line, "/quit"))
+                geistr_chat_close(x.chat); /* sampling is a chat option: a new chat, same model */
+                x.temperature = t;
+                geistr_reasoning reasoning;
+                char             path[4200];
+                if (resolve(x.name, path, sizeof path, &reasoning) != OK || !session_chat(&x, reasoning, true))
                     break;
-                if (!strcmp(line, "/clear")) {
-                    (void) geistr_chat_rewind(chat, 0);
-                    fresh = true;
-                } else
-                    chat_help();
-                continue;
-            }
-            size_t n = 0;
-            if (fresh && cfg.system[0])
-                turn[n++] = (geistr_message) {"system", cfg.system};
-            turn[n++] = (geistr_message) {"user", line};
-            fresh     = false;
-            md_init(&view, mode, stdout);
-            s = geistr_chat_run(chat, n, turn, print_piece, nullptr);
-            md_finish(&view);
-            puts(s == GEISTR_CANCELLED ? " [stopped]" : "");
-            if (s == GEISTR_OK)
-                speed(chat, stdout);
+                running = x.chat;
+                carry   = said.n > 0;
+                printf("temperature %g\n", t);
+            } else if (!strcmp(line, "/system")) {
+                snprintf(system, sizeof system, "%s", arg);
+                if (said.n && !strcmp(said.role[0], "system")) { /* replace it in the conversation */
+                    free(said.content[0]);
+                    said.content[0] = strdup(system);
+                    if (!system[0]) {
+                        free(said.role[0]), free(said.content[0]);
+                        memmove(said.role, said.role + 1, (said.n - 1) * sizeof *said.role);
+                        memmove(said.content, said.content + 1, (said.n - 1) * sizeof *said.content);
+                        said.n--;
+                    }
+                } else if (said.n && system[0]) {
+                    transcript_push(&said, "system", system); /* then move it to the front */
+                    char *r = said.role[said.n - 1], *c = said.content[said.n - 1];
+                    memmove(said.role + 1, said.role, (said.n - 1) * sizeof *said.role);
+                    memmove(said.content + 1, said.content, (said.n - 1) * sizeof *said.content);
+                    said.role[0] = r, said.content[0] = c;
+                }
+                if (said.n) { /* the chat holds the old one: read the conversation anew */
+                    geistr_chat_close(x.chat);
+                    geistr_reasoning reasoning;
+                    char             path[4200];
+                    if (resolve(x.name, path, sizeof path, &reasoning) != OK || !session_chat(&x, reasoning, true))
+                        break;
+                    running = x.chat;
+                    carry   = true;
+                }
+                puts(system[0] ? "system prompt set" : "no system prompt");
+            } else if (!strcmp(line, "/info")) {
+                status_line(&x, "");
+                printf("chat format %s · context %u · temperature %g%s%s\n", x.format, x.context, x.temperature,
+                       system[0] ? " · system: " : "", system);
+            } else if (!strcmp(line, "/save")) {
+                snprintf(cfg.model, sizeof cfg.model, "%s", x.name);
+                snprintf(cfg.processor, sizeof cfg.processor, "%s", x.processor);
+                snprintf(cfg.system, sizeof cfg.system, "%s", system);
+                cfg.temperature = x.temperature;
+                puts(config_path[0] && config_save() ? "saved for the next chat" : "cannot save the settings");
+            } else if (!strcmp(line, "/clear")) {
+                (void) geistr_chat_rewind(x.chat, 0);
+                transcript_clear(&said);
+                carry = false;
+            } else
+                chat_help();
+            continue;
         }
-        putchar('\n');
+        /* Normally only the new message; after a switch, the conversation once. */
+        size_t before = said.n;
+        if (!said.n && system[0])
+            transcript_push(&said, "system", system);
+        transcript_push(&said, "user", line);
+        size_t          from  = carry ? 0 : before;
+        size_t          count = said.n - from;
+        geistr_message *turn  = calloc(count, sizeof *turn);
+        if (!turn)
+            break;
+        for (size_t i = 0; i < count; i++)
+            turn[i] = (geistr_message) {said.role[from + i], said.content[from + i]};
+        answer_len = 0;
+        if (answer)
+            answer[0] = 0;
+        md_init(&view, cfg.markdown && tty_out() ? MD_ANSI : MD_RAW, stdout);
+        geistr_status s = geistr_chat_run(x.chat, count, turn, print_piece, nullptr);
+        md_finish(&view);
+        free(turn);
+        puts(s == GEISTR_CANCELLED ? " [stopped]" : "");
+        if (s == GEISTR_OK || s == GEISTR_CANCELLED) {
+            carry = false;
+            transcript_push(&said, "assistant", answer ? answer : "");
+            if (s == GEISTR_OK)
+                speed(x.chat, stdout);
+        } else {
+            said.n--; /* not part of the conversation: the chat refused it */
+            free(said.role[said.n]), free(said.content[said.n]);
+            fprintf(stderr, "geistr: %s: %s\n", geistr_status_text(s), geistr_chat_error(x.chat));
+        }
     }
-    if (s != GEISTR_OK && s != GEISTR_CANCELLED)
-        fprintf(stderr, "geistr: %s: %s\n", geistr_status_text(s), geistr_chat_error(chat));
+    putchar('\n');
     running = nullptr;
-    geistr_chat_close(chat);
-    return rc;
+    session_close(&x);
+    transcript_clear(&said);
+    free(said.role), free(said.content), free(answer);
+    return OK;
 }
 
 static int pull(const char *id) {
@@ -624,10 +830,10 @@ int main(int argc, char **argv) {
             fputs("geistr: which model? geistr chat <model> (see geistr catalog)\n", stderr);
             return USAGE;
         }
-        return converse(model, nullptr, true, processor);
+        return chat(model, processor);
     }
     if (!strcmp(command, "chat") && n == 2)
-        return converse(args[1], nullptr, true, processor);
+        return chat(args[1], processor);
     if (!strcmp(command, "pull") && n == 2)
         return pull(args[1]);
     if (!strcmp(command, "run") && n >= 2) {
@@ -643,7 +849,7 @@ int main(int argc, char **argv) {
             fputs("geistr: empty prompt\n", stderr);
             return USAGE;
         }
-        return converse(args[1], prompt, false, processor);
+        return answer_once(args[1], prompt, processor);
     }
     return usage();
 }
