@@ -38,7 +38,8 @@ make chat-real && build/chat-real model.gguf
 A minimal CLI on the runtime; the model runs in-process (`make geistr`).
 
 ```sh
-geistr catalog                     # ✓ installed (SHA-256 verified), ↓ available, ⚠/✗ fit on this computer
+geistr catalog                     # ✓ installed (SHA-256 verified), ↓ available, ⚠/✗ fit, tokens/s on ⚙ and ⚡
+geistr bench [model…]              # measure tokens/s on CPU and GPU (default: every installed model)
 geistr catalog --installed | --available | --json
 geistr run gemma4-e2b "prompt"     # one answer to stdout; a catalog id or a .gguf path; prompt from stdin if none
 geistr chat gemma4-e2b             # Ctrl-C stops the answer, not the chat; /help in the chat
@@ -53,6 +54,12 @@ terminal, one record per row when the columns cannot fit) and LaTeX math as Unic
 → e^(iπ), a/b; α, ∑, ², ₁, √, ℝ …); piped output stays plain text. The prompt
 shows the processor (⚙ CPU, ⚡ GPU), and each answer ends with its speed
 (`79.4 tok/s · 4.1 s`).
+
+Every complete answer (chat, run, bench) records its speed in `speed.tsv` in
+the data folder. `geistr catalog` draws the median of the last ten per model
+and processor as bars on one scale (`⚙ 113 ██████▉  ⚡ 196 ████████████`);
+values from the catalog's reference computer are dim until measured here.
+The measured speeds also feed the fit verdicts (`geistr_rank`).
 
 In a terminal the chat continues the last conversation: `↻ 6 · „the last
 question“ · /clear new` shows where it was, and only on its first message does
@@ -116,7 +123,8 @@ else the built-in copy). Exit codes: 0 ok, 1 error, 2 usage, 130 cancelled.
 network code. `--json` is schema 1: `schema`, `models_dir`, and per model
 `id`, `name`, `quantization`, `file`, `url`, `sha256`, `bytes`,
 `recommended_ram_gib`, `state` (available, unverified, installed, mismatch),
-`resource` (fits, limited, unavailable), `resource_reason`.
+`resource` (fits, limited, unavailable), `resource_reason`, `tokens_per_s`
+(`cpu`, `gpu`: measured here, or null).
 
 ### As a service
 

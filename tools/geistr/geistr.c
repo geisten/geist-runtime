@@ -7,6 +7,7 @@
  *   geistr catalog [--installed | --available] [--json]
  *   geistr pull <id>                 download and verify (builds with the download module)
  *   geistr config [key [value]]      settings, remembered between runs (geistr.conf)
+ *   geistr bench [model…]            measure tokens/s on CPU and GPU (shown by catalog)
  *   geistr serve <model> [--socket=PATH] [--chats N]
  *                                    the model as a service on a Unix socket (service.h)
  *   geistr chat --socket[=PATH]      chat with that service
@@ -247,6 +248,7 @@ static int usage(void) {
           "       geistr catalog [--installed | --available] [--json]\n"
           "       geistr pull <id>\n"
           "       geistr config [key [value]]   (keys: model processor temperature system markdown stats intro resume)\n"
+          "       geistr bench [model…]          tokens/s on ⚙ CPU and ⚡ GPU, shown in geistr catalog\n"
           "       geistr serve <model> [--socket=PATH] [--chats N]\n"
           "       geistr chat --socket[=PATH]\n"
           "options: --models DIR  --catalog FILE  --cpu  --gpu  --new (chat)\n"
@@ -357,21 +359,135 @@ static void json_string(const char *s) {
     json_to(stdout, s);
 }
 
+static bool tty_out(void);
+
+static int compare_doubles(const void *a, const void *b) {
+    double x = *(const double *) a, y = *(const double *) b;
+    return (x > y) - (x < y);
+}
+
+static double median(double *v, size_t n) {
+    qsort(v, n, sizeof *v, compare_doubles);
+    return n ? (n % 2 ? v[n / 2] : (v[n / 2 - 1] + v[n / 2]) / 2) : 0;
+}
+
+/* The speeds measured here (speed.tsv) into local[], indexed like the catalog:
+ * the median of the last ten per model and processor. A model recorded by
+ * path counts for the catalog entry with that file name. */
+static void speeds_load(const geistr_catalog *c, geistr_local *local) {
+    enum { LAST = 10 };
+    size_t n = geistr_catalog_count(c);
+    struct {
+        double   rate[LAST], first[LAST];
+        unsigned count;
+    } (*seen)[2] = calloc(n, sizeof *seen);
+    char path[4200];
+    snprintf(path, sizeof path, "%s/speed.tsv", data_dir);
+    FILE  *f    = seen && data_dir[0] ? fopen(path, "r") : nullptr;
+    char  *line = nullptr;
+    size_t cap  = 0;
+    while (f && getline(&line, &cap, f) > 0) { /* ponytail: reads it all; trim the file if it ever matters */
+        char  *model = strtok(line, "\t"), *proc = strtok(nullptr, "\t"), *rate = strtok(nullptr, "\t"),
+              *first = strtok(nullptr, "\t");
+        if (!model || !proc || !rate || !first)
+            continue;
+        const char *base = strrchr(model, '/') ? strrchr(model, '/') + 1 : model;
+        for (size_t i = 0; i < n; i++) {
+            const geistr_catalog_entry *m = geistr_catalog_get(c, i);
+            if (strcmp(m->id, model) && strcmp(m->file, base))
+                continue;
+            unsigned k = !strcmp(proc, "gpu"), slot = seen[i][k].count++ % LAST;
+            seen[i][k].rate[slot]  = strtod(rate, nullptr);
+            seen[i][k].first[slot] = strtod(first, nullptr);
+        }
+    }
+    free(line);
+    if (f)
+        fclose(f);
+    for (size_t i = 0; seen && i < n; i++)
+        for (unsigned k = 0; k < 2; k++) {
+            size_t        m = seen[i][k].count < LAST ? seen[i][k].count : LAST;
+            geistr_speed *s = k ? &local[i].gpu : &local[i].cpu;
+            s->rate         = median(seen[i][k].rate, m);
+            s->first        = median(seen[i][k].first, m);
+        }
+    free(seen);
+}
+
+/* The catalog's reference tokens/s for cpu or gpu (another computer), or 0. */
+static double reference_rate(const geistr_catalog_entry *m, const char *proc) {
+    double best = 0;
+    for (const char *o = m->reference ? strchr(m->reference, '{') : nullptr; o; o = strchr(o + 1, '{')) {
+        const char *end = strchr(o, '}');
+        char        object[512], backend[16], rate[32];
+        if (!end || (size_t) (end - o) >= sizeof object)
+            break;
+        snprintf(object, sizeof object, "%.*s", (int) (end - o + 1), o);
+        service_field(object, "backend", backend, sizeof backend);
+        service_field(object, "tokens_per_s", rate, sizeof rate);
+        if (!strcmp(backend, proc) && strtod(rate, nullptr) > best)
+            best = strtod(rate, nullptr);
+    }
+    return best;
+}
+
+/* "⚙  41 ███▌      ": the value and a bar of width cells (eighths), dim when
+ * it is the catalog's reference rather than measured here. */
+static void speed_bar(const char *symbol, double measured, double reference, double max, int width, bool tty) {
+    static const char *const eighths[] = {"", "▏", "▎", "▍", "▌", "▋", "▊", "▉"};
+    if (!tty) /* piped: measured values only, nothing to tell them apart */
+        reference = 0;
+    double v = measured > 0 ? measured : reference;
+    bool                     dim       = tty && measured <= 0 && reference > 0;
+    printf("  %s%s ", dim ? "\033[2m" : "", symbol);
+    if (v <= 0) {
+        printf("%4s%*s", "·", width ? width + 1 : 0, "");
+        return;
+    }
+    printf("%4.0f%s", v, width ? " " : "");
+    int units = max > 0 ? (int) (v / max * width * 8 + 0.5) : 0, cells = 0;
+    for (; units >= 8; units -= 8, cells++)
+        fputs("█", stdout);
+    if (units)
+        fputs(eighths[units], stdout), cells++;
+    printf("%*s%s", width - cells, "", dim ? "\033[0m" : "");
+}
+
 static int catalog(bool installed_only, bool available_only, bool json) {
     geistr_catalog *c = load_catalog();
     if (!c)
         return ERROR;
+    size_t         n = geistr_catalog_count(c);
+    geistr_install state[1024];
+    geistr_local  *local = calloc(n ? n : 1, sizeof *local);
+    for (size_t i = 0; i < n; i++)
+        state[i] = install_state(geistr_catalog_get(c, i), json);
+    for (size_t i = 0; local && i < n; i++)
+        local[i] = (geistr_local) {.size = sizeof *local, .installed = state[i] == GEISTR_INSTALL_OK};
+    if (local)
+        speeds_load(c, local);
     geistr_device   d = {};
     geistr_ranking *r = nullptr;
-    if (geistr_device_probe(models_dir, &d) != GEISTR_OK || geistr_rank(c, &d, nullptr, nullptr, &r) != GEISTR_OK) {
+    if (!local || geistr_device_probe(models_dir, &d) != GEISTR_OK ||
+        geistr_rank(c, &d, local, nullptr, &r) != GEISTR_OK) {
         fprintf(stderr, "geistr: cannot read this computer's memory\n");
+        free(local);
         geistr_catalog_free(c);
         return ERROR;
     }
-    size_t         n = geistr_catalog_count(c);
-    geistr_install state[1024];
-    for (size_t i = 0; i < n; i++)
-        state[i] = install_state(geistr_catalog_get(c, i), json);
+    /* The bars share one scale; their width is what the terminal leaves. */
+    bool           tty = tty_out();
+    struct winsize ws;
+    int            columns = tty && ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col ? ws.ws_col : 80;
+    int            bar     = (columns - 66 - 2 * 9) / 2;
+    bar                    = !tty ? 0 : bar > 12 ? 12 : bar < 4 ? 0 : bar;
+    double max             = 0;
+    for (size_t i = 0; i < n; i++) {
+        double v[] = {local[i].cpu.rate, local[i].gpu.rate, reference_rate(geistr_catalog_get(c, i), "cpu"),
+                      reference_rate(geistr_catalog_get(c, i), "gpu")};
+        for (size_t k = 0; k < 4; k++)
+            max = v[k] > max ? v[k] : max;
+    }
     if (json)
         printf("{\"schema\":1,\"models_dir\":"), json_string(models_dir), printf(",\"models\":[");
     bool first = true;
@@ -401,7 +517,11 @@ static int catalog(bool installed_only, bool available_only, bool json) {
                        (unsigned long long) m->bytes, m->recommended_ram_gib, states[state[i]],
                        resources[f->resource]);
                 json_string(f->resource_reason);
-                printf("}");
+                printf(",\"tokens_per_s\":{\"cpu\":");
+                local[i].cpu.rate > 0 ? (void) printf("%.1f", local[i].cpu.rate) : (void) printf("null");
+                printf(",\"gpu\":");
+                local[i].gpu.rate > 0 ? (void) printf("%.1f", local[i].gpu.rate) : (void) printf("null");
+                printf("}}");
             } else {
                 char        size[16];
                 const char *mark = installed                             ? "✓"
@@ -411,6 +531,8 @@ static int catalog(bool installed_only, bool available_only, bool json) {
                 bool quant = m->quantization && !strstr(m->name, m->quantization);
                 snprintf(label, sizeof label, "%s%s%s", m->name, quant ? " · " : "", quant ? m->quantization : "");
                 printf("%s %-18s %-36s %8s", mark, m->id, label, size_text(m->bytes, size));
+                speed_bar("⚙", local[i].cpu.rate, reference_rate(m, "cpu"), max, bar, tty);
+                speed_bar("⚡", local[i].gpu.rate, reference_rate(m, "gpu"), max, bar, tty);
                 if (state[i] == GEISTR_INSTALL_MISMATCH)
                     printf("  ✗ file does not match; geistr pull %s", m->id);
                 else if (f->resource != GEISTR_RESOURCE_FITS)
@@ -422,8 +544,11 @@ static int catalog(bool installed_only, bool available_only, bool json) {
         }
     if (json)
         puts("]}");
+    else if (tty)
+        puts("\033[2m⚙ CPU · ⚡ GPU: tokens/s measured here (geistr bench), dim: the catalog's reference\033[0m");
     geistr_ranking_free(r);
     geistr_catalog_free(c);
+    free(local);
     return OK;
 }
 
@@ -517,10 +642,31 @@ static void speed_line(unsigned tokens, double generation_ms, double total_ms, F
     fprintf(out, "%s  %.1f tok/s · %.1f s%s\n", dim ? "\033[2m" : "", rate, total_ms / 1000, dim ? "\033[0m" : "");
 }
 
-static void speed(geistr_chat *chat, FILE *out) {
+/* ---- speeds measured here: <data>/speed.tsv, a line per complete answer ----
+ * model, cpu|gpu, tokens/s, seconds to the first answer text, time. The
+ * catalog shows the median of the last ten per model and processor. */
+static void speed_record(const char *model, const char *backend, unsigned tokens, double generation_ms,
+                         double first_ms) {
+    char path[4200];
+    snprintf(path, sizeof path, "%s/speed.tsv", data_dir);
+    if (!data_dir[0] || tokens < 8 || generation_ms <= 0 || !make_dirs(data_dir)) /* too short to tell */
+        return;
+    FILE *f = fopen(path, "a");
+    if (!f)
+        return;
+    fprintf(f, "%s\t%s\t%.1f\t%.3f\t%lld\n", model, strcmp(backend, "cpu") ? "gpu" : "cpu",
+            tokens / (generation_ms / 1000), first_ms >= 0 ? first_ms / 1000 : -1, (long long) time(nullptr));
+    fclose(f);
+}
+
+/* An answer's speed line; a complete one is also recorded. */
+static void speed(geistr_chat *chat, const char *model, const char *backend, bool complete, FILE *out) {
     geistr_stats st = {.size = sizeof st};
-    if (geistr_chat_stats(chat, &st) == GEISTR_OK)
-        speed_line(st.output_tokens, st.generation_ms, st.total_ms, out);
+    if (geistr_chat_stats(chat, &st) != GEISTR_OK)
+        return;
+    speed_line(st.output_tokens, st.generation_ms, st.total_ms, out);
+    if (complete)
+        speed_record(model, backend, st.output_tokens, st.generation_ms, st.first_answer_ms);
 }
 
 /* ---- while a model loads: a spinner with its size and the time ----------- */
@@ -899,7 +1045,7 @@ static int answer_once(const char *name, const char *prompt, const char *process
     geistr_status s = geistr_chat_run(x.chat, n, turn, print_piece, nullptr);
     md_finish(&view);
     putchar('\n');
-    speed(x.chat, stderr);
+    speed(x.chat, x.name, x.backend, s == GEISTR_OK, stderr);
     if (s != GEISTR_OK && s != GEISTR_CANCELLED)
         fprintf(stderr, "geistr: %s: %s\n", geistr_status_text(s), geistr_chat_error(x.chat));
     running = nullptr;
@@ -1155,10 +1301,11 @@ static int chat(const char *name, const char *processor) {
             carry = false;
             transcript_push(&said, "assistant", answer ? answer : "");
             chat_store(&said);
-            if (s == GEISTR_OK && remote)
+            if (s == GEISTR_OK && remote) {
                 speed_line(rs.output_tokens, rs.generation_ms, rs.total_ms, stdout);
-            else if (s == GEISTR_OK)
-                speed(x.chat, stdout);
+                speed_record(x.name, x.backend, rs.output_tokens, rs.generation_ms, rs.prefill_ms);
+            } else if (s == GEISTR_OK)
+                speed(x.chat, x.name, x.backend, true, stdout);
         } else {
             said.n--; /* not part of the conversation: the chat refused it */
             free(said.role[said.n]), free(said.content[said.n]);
@@ -1174,6 +1321,53 @@ static int chat(const char *name, const char *processor) {
     transcript_clear(&said);
     free(said.role), free(said.content), free(answer);
     return OK;
+}
+
+/* geistr bench [model…]: one fixed answer per model on ⚙ and ⚡ (where there
+ * is a GPU), recorded like any other; then the installed models' chart. */
+static int discard(void *context, const geistr_piece *piece) {
+    (void) context, (void) piece;
+    return 1;
+}
+
+static int bench(int n, const char **ids) {
+    geistr_catalog *c = load_catalog();
+    geistr_device   d = {.size = sizeof d};
+    if (!c || geistr_device_probe(models_dir, &d) != GEISTR_OK) {
+        geistr_catalog_free(c);
+        return ERROR;
+    }
+    const char *all[64];
+    if (!n) /* every installed model */
+        for (size_t i = 0; i < geistr_catalog_count(c) && n < 64; i++)
+            if (install_state(geistr_catalog_get(c, i), true) == GEISTR_INSTALL_OK)
+                all[n++] = geistr_catalog_get(c, i)->id;
+    const char *const *models = ids ? ids : all;
+    struct sigaction   sa     = {.sa_handler = on_interrupt};
+    sigaction(SIGINT, &sa, nullptr);
+    const geistr_message ask[] = {{"user", "Write a short paragraph about the sea."}};
+    for (int i = 0; i < n && !interrupted; i++)
+        for (int k = 0; k < (d.gpu ? 2 : 1) && !interrupted; k++) { /* ponytail: Vulkan is not probed yet */
+            struct session x;
+            if (session_open(&x, models[i], k ? "gpu" : "cpu", 0, false) != OK)
+                continue;
+            running         = x.chat;
+            geistr_status s = geistr_chat_limit(x.chat, 128);
+            if (s == GEISTR_OK)
+                s = geistr_chat_run(x.chat, 1, ask, discard, nullptr);
+            running = nullptr;
+            printf("%s %-18s", on_gpu(&x) ? "⚡" : "⚙", models[i]);
+            if (s == GEISTR_OK)
+                speed(x.chat, x.name, x.backend, true, stdout);
+            else
+                printf("  %s\n", geistr_status_text(s));
+            session_close(&x);
+        }
+    geistr_catalog_free(c);
+    if (interrupted)
+        return CANCELLED;
+    putchar('\n');
+    return catalog(true, false, false);
 }
 
 static volatile sig_atomic_t stopping;
@@ -1315,6 +1509,8 @@ int main(int argc, char **argv) {
     }
     if (!strcmp(command, "chat") && n == 2)
         return chat(args[1], processor);
+    if (!strcmp(command, "bench"))
+        return bench(n - 1, n > 1 ? args + 1 : nullptr);
     if (!strcmp(command, "pull") && n == 2)
         return pull(args[1]);
     if (!strcmp(command, "run") && n >= 2) {

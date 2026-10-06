@@ -49,12 +49,14 @@ def listing():
     # schema 1: the fields scripts rely on, with their types
     assert set(doc) == {'schema', 'models_dir', 'models'} and doc['schema'] == 1 and doc['models_dir'] == models
     types = {'id': str, 'name': str, 'quantization': (str, type(None)), 'file': str, 'url': str, 'sha256': str,
-             'bytes': int, 'recommended_ram_gib': int, 'state': str, 'resource': str, 'resource_reason': str}
+             'bytes': int, 'recommended_ram_gib': int, 'state': str, 'resource': str, 'resource_reason': str,
+             'tokens_per_s': dict}
     for m in doc['models']:
         assert set(m) == set(types), m
         assert all(isinstance(m[k], t) for k, t in types.items()), m
         assert m['state'] in ('available', 'unverified', 'installed', 'mismatch')
         assert m['resource'] in ('fits', 'limited', 'unavailable')
+        assert set(m['tokens_per_s']) == {'cpu', 'gpu'} and all(v is None or v > 0 for v in m['tokens_per_s'].values())
     return {m['id']: m for m in doc['models']}
 
 # ---- catalog: available → installed (verified) → mismatch ----------------------
@@ -293,6 +295,20 @@ assert service.wait(30) == 0 and not os.path.exists(sock)
 r = geistr_run('chat', '--socket=' + sock)
 assert r.returncode == 1 and 'no service' in r.stderr, r.stderr
 print('geistr serve / chat --socket: protocol, 0600 socket, cache hit, rewind, two clients, disconnect, context, SIGTERM passed')
+
+# ---- bench and the speed chart --------------------------------------------------
+speeds = os.path.join(tmp, 'home', 'speed.tsv')
+before = open(speeds).read().count('\n') if os.path.exists(speeds) else 0  # chats above recorded theirs
+r = geistr_run('bench', 'ref')
+assert r.returncode == 0 and 'tok/s' in r.stdout and 'ref' in r.stdout, (r.stdout, r.stderr)
+rows = [l.split('\t') for l in open(speeds).read().splitlines()]
+assert len(rows) > before and rows[-1][0] == 'ref' and rows[-1][1] in ('cpu', 'gpu') and float(rows[-1][2]) > 0, rows
+with open(speeds, 'a') as f:  # a model recorded by path counts for its catalog entry
+    f.write(f'{model_path}\tcpu\t1000.0\t0.1\t0\n' * 11)
+measured = listing()['ref']['tokens_per_s']
+assert measured['cpu'] == 1000.0, measured  # the median of the last ten
+assert listing()['tiny']['tokens_per_s'] == {'cpu': None, 'gpu': None}
+print('geistr bench / catalog speeds: recorded per answer, median of the last ten, by id or path passed')
 
 # ---- pull -------------------------------------------------------------------
 r = geistr_run('pull', 'tiny', binary=nonet)
