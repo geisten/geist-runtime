@@ -141,7 +141,36 @@ saved = geistr_run('config').stdout
 assert 'temperature  0.3' in saved and 'processor    cpu' in saved and 'Answer briefly.' in saved, saved
 assert geistr_run('config', 'processor', 'auto').returncode == 0 and geistr_run('config', 'system', '').returncode == 0
 assert geistr_run('config', 'temperature', '0').returncode == 0 and geistr_run('config', 'model', 'ref').returncode == 0
-print('geistr run/chat: answers, prompt from stdin, Ctrl-C (130 / stopped answer), exit codes, settings passed')
+# Tab completion in a real terminal (pty): commands, model ids, the list, history
+import pty, select
+def until(fd, text, seconds=60):
+    seen, deadline = b'', time.time() + seconds
+    while text.encode() not in seen and time.time() < deadline:
+        if select.select([fd], [], [], 1)[0]:
+            try: seen += os.read(fd, 4096)
+            except OSError: break
+    assert text.encode() in seen, (text, seen[-400:])
+    return seen
+pid, fd = pty.fork()
+if pid == 0:
+    os.execve(geistr, [geistr, 'chat', 'ref', *base], {**env, 'TERM': 'xterm'})
+until(fd, '> ')
+os.write(fd, b'/he\t'); until(fd, '/help')                       # unique: completed
+os.write(fd, b'\r'); until(fd, 'Tab completes')                  # and it runs
+os.write(fd, b'/model r\t'); until(fd, '/model ref')             # installed model ids
+os.write(fd, b'\x15/c\t'); out = until(fd, '/clear')             # several: listed with help
+assert b'/cpu' in out and b'a new conversation' in out, out[-400:]
+os.write(fd, b'\x15\x1b[A'); until(fd, '/help')                  # history: the last line
+os.write(fd, b'\x15/exit\r')
+until_exit = time.time() + 30   # keep reading: a full pty would block the child
+while time.time() < until_exit:
+    try:
+        if select.select([fd], [], [], 1)[0] and not os.read(fd, 4096): break
+    except OSError: break
+_, status = os.waitpid(pid, 0)
+assert os.WEXITSTATUS(status) == 0, status
+os.close(fd)
+print('geistr run/chat: answers, prompt from stdin, Ctrl-C (130 / stopped answer), exit codes, settings, Tab completion in a terminal passed')
 
 # ---- pull -------------------------------------------------------------------
 r = geistr_run('pull', 'tiny', binary=nonet)
