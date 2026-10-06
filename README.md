@@ -105,6 +105,27 @@ network code. `--json` is schema 1: `schema`, `models_dir`, and per model
 `recommended_ram_gib`, `state` (available, unverified, installed, mismatch),
 `resource` (fits, limited, unavailable), `resource_reason`.
 
+### As a service
+
+One process holds the model; chats connect to it over a Unix socket (owner
+only, 0600):
+
+```sh
+geistr serve gemma4-e2b [--chats 2]        # SIGTERM or Ctrl-C stops it
+geistr chat --socket                       # in another terminal
+```
+
+The socket defaults to `geistr.sock` next to the model folder
+(`--socket=PATH` for another). The client sends the whole conversation with
+every message; the service keeps up to `--chats` conversations and continues
+the one that matches, processing only what is new. `/model`, `/gpu`, `/cpu`
+and `/auto` belong to the service. The protocol is one JSON object per line,
+documented in `tools/geistr/service.h`:
+
+```sh
+echo '{"op":"chat","messages":[{"role":"user","content":"Hi"}]}' | nc -U ~/…/geistr.sock
+```
+
 ## Python
 
 ```python
