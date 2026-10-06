@@ -198,6 +198,18 @@ $(BUILD)/geistr: tools/geistr/geistr.c tools/geistr/render.c tools/geistr/render
 
 geistr: $(BUILD)/geistr
 
+# ---- make install: the built geistr into $(DESTDIR)$(PREFIX)/bin ------------------
+# Not an engine goal: `sudo make install` copies, it never builds (as root) in
+# the engine checkout. geistlib and (on macOS) libomp are linked in statically.
+PREFIX ?= /usr/local
+install:
+	@test -x $(BUILD)/geistr || { echo "build it first: make geistr"; exit 1; }
+	install -d $(DESTDIR)$(PREFIX)/bin
+	install -m 755 $(BUILD)/geistr $(DESTDIR)$(PREFIX)/bin/geistr
+
+uninstall:
+	rm -f $(DESTDIR)$(PREFIX)/bin/geistr
+
 # The CLI against the reference model: run, chat, cancellation, catalog
 # (--json schema), pull from a local server (a GEISTR_TESTING build).
 test-geistr:
@@ -241,4 +253,4 @@ sanitize:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: core all test sanitize parity clean runtime test-real chat-real fetch-model geistr test-geistr shared wheel test-python FORCE
+.PHONY: install uninstall core all test sanitize parity clean runtime test-real chat-real fetch-model geistr test-geistr shared wheel test-python FORCE
