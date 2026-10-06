@@ -1397,9 +1397,11 @@ static int compare(int n, const char **refs) {
     if (!engine[0] || !engine[1]) {
         if (n)
             fprintf(stderr, "geistr: no bench rows for %s%s%s\n", refs[0], n > 1 ? " or " : "", n > 1 ? refs[1] : "");
+        else if (count)
+            printf("only one engine measured so far (%.7s): geistr bench again after a geistlib update\n",
+                   rows[0].engine);
         else
-            printf("measured with %s so far: geistr bench again after a geistlib update\n",
-                   count ? "one engine" : "no engine (geistr bench)");
+            puts("no bench measurements yet: geistr bench");
         free(rows);
         return n ? ERROR : OK;
     }

@@ -317,7 +317,7 @@ measured = listing()['ref']['tokens_per_s']
 assert measured['cpu'] == 1000.0, measured  # the median of the last ten with this engine
 assert listing()['tiny']['tokens_per_s'] == {'cpu': None, 'gpu': None}
 r = geistr_run('bench', '--compare')  # one engine so far
-assert r.returncode == 0 and 'one engine' in r.stdout, r.stdout
+assert r.returncode == 0 and f'only one engine measured so far ({engine[:7]})' in r.stdout, r.stdout
 with open(speeds, 'a') as f:  # two engines' bench rows; an answer row does not compare
     f.write('cmp\tcpu\t100.0\t0.1\t10\taaaa111\tbench\n' 'cmp\tcpu\t150.0\t0.1\t4000000000\tbbbb222\tbench\n'
             'cmp\tcpu\t999.0\t0.1\t4000000001\tbbbb222\tanswer\n')
@@ -362,4 +362,14 @@ if pull:
     print('geistr pull: download, restart after an ignored range, verify, refuse a mismatch; PULL=0 has no network code passed')
 else:
     print('geistr pull: PULL=0 has no network code passed (no libcurl: download not tested)')
+# ---- make install: DESTDIR and PREFIX -------------------------------------------
+stage = os.path.join(tmp, 'stage')
+r = subprocess.run(['make', '-s', 'install', 'BUILD=' + os.path.dirname(geistr), 'DESTDIR=' + stage, 'PREFIX=/opt/g'],
+                   capture_output=True, text=True)
+installed = os.path.join(stage, 'opt', 'g', 'bin', 'geistr')
+assert r.returncode == 0 and os.access(installed, os.X_OK), r.stderr
+assert subprocess.run([installed, '--version'], capture_output=True, text=True).stdout.startswith('geistr ')
+assert subprocess.run(['make', '-s', 'uninstall', 'DESTDIR=' + stage, 'PREFIX=/opt/g']).returncode == 0
+assert not os.path.exists(installed)
+print('make install / uninstall: DESTDIR, PREFIX passed')
 subprocess.run(['rm', '-rf', tmp])

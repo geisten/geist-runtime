@@ -35,21 +35,45 @@ make chat-real && build/chat-real model.gguf
 
 ## geistr
 
-A minimal CLI on the runtime; the model runs in-process (`make geistr`).
+A minimal CLI on the runtime; the model runs in-process.
+
+### Install
 
 ```sh
-geistr catalog                     # ✓ installed (SHA-256 verified), ↓ available, ⚠/✗ fit, tokens/s on ⚙ and ⚡
-geistr bench [model…]              # measure tokens/s on CPU and GPU (default: every installed model)
-geistr bench --compare [A [B]]     # bench speeds of two geistlib commits and the change (▲/▼ %)
-geistr catalog --installed | --available | --json
-geistr run gemma4-e2b "prompt"     # one answer to stdout; a catalog id or a .gguf path; prompt from stdin if none
-geistr chat gemma4-e2b             # Ctrl-C stops the answer, not the chat; /help in the chat
-geistr chat                        # the last model again (else the geisten app's)
-geistr chat --new                  # a new conversation instead of the last one
-geistr pull gemma4-e4b             # download, resume, verify (builds with the download module)
-geistr pull                        # update the installed models to this catalog
-geistr --version                   # geistr, catalog revision, engine
+git clone https://github.com/geisten/geist-runtime && cd geist-runtime
+make geistr                        # fetches and builds the pinned geistlib, then build/geistr
+sudo make install                  # → /usr/local/bin/geistr
+make install PREFIX=~/.local       # or without sudo (~/.local/bin on the PATH)
+make install DESTDIR=/tmp/stage    # staged, for packaging
+make uninstall                     # the same PREFIX/DESTDIR
 ```
+
+Needs a C23 compiler (clang 18+ or gcc 14+) and python3; on macOS also
+`brew install libomp`. With libcurl (`curl-config`) it gets the download
+module for `pull`, else it builds without network code (`PULL=0` forces
+that). The binary is self-contained: geistlib and, on macOS, libomp are
+linked statically; it needs only system libraries (macOS: Accelerate,
+libcurl; Linux: libc, libm, libgomp, libcurl).
+
+### Commands
+
+| command | does |
+|---|---|
+| `geistr catalog [--installed \| --available] [--json]` | the models: ✓ installed (SHA-256 verified), ↓ available, ⟳ to update, ⚠/✗ fit on this computer, tokens/s on ⚙ CPU and ⚡ GPU |
+| `geistr pull <id>` | download, resume, verify |
+| `geistr pull` | update the installed models to this catalog (after a geistr update) |
+| `geistr run <model> [prompt…]` | one answer to stdout; the prompt from stdin if none |
+| `geistr chat [<model>]` | interactive (see below); without a model the last one; continues the last conversation |
+| `geistr chat --new` | a new conversation instead of the last one |
+| `geistr bench [model…]` | tokens/s on ⚙ and ⚡ with a fixed prompt (default: every installed model) |
+| `geistr bench --compare [A [B]]` | two geistlib commits' bench speeds and the change (▲/▼ %) |
+| `geistr serve <model> [--socket=PATH] [--chats N]` | the model as a service on a Unix socket |
+| `geistr chat --socket[=PATH]` | chat with that service |
+| `geistr config [key [value]]` | settings, remembered between runs |
+| `geistr --version` | geistr, catalog revision, engine commit |
+
+`<model>` is a catalog id or a path to a `.gguf` file. Options anywhere:
+`--cpu`/`--gpu` (the processor for this run), `--models DIR`, `--catalog FILE`.
 
 In a terminal the chat shows Markdown (headings, **bold**, *italic*, `code`,
 lists, quotes, code blocks, tables: compact and aligned, wrapped to the
