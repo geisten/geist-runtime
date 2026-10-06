@@ -41,8 +41,27 @@ A minimal CLI on the runtime; the model runs in-process (`make geistr`).
 geistr catalog                     # ✓ installed (SHA-256 verified), ↓ available, ⚠/✗ fit on this computer
 geistr catalog --installed | --available | --json
 geistr run gemma4-e2b "prompt"     # one answer to stdout; a catalog id or a .gguf path; prompt from stdin if none
-geistr chat gemma4-e2b             # Ctrl-C stops the answer, not the chat
+geistr chat gemma4-e2b             # Ctrl-C stops the answer, not the chat; /clear /help /exit
+geistr chat                        # the last model again (else the geisten app's)
 geistr pull gemma4-e4b             # download, resume, verify (builds with the download module)
+```
+
+In a terminal the chat shows Markdown (headings, **bold**, *italic*, `code`,
+lists, quotes, code blocks) and LaTeX math as Unicode (`$e^{i\pi}$`, `$$\frac{a}{b}$$`
+→ e^(iπ), a/b; α, ∑, ², ₁, √, ℝ …); piped output stays plain text. The prompt
+shows the processor (⚙ CPU, ⚡ GPU), and each answer ends with its speed
+(`79.4 tok/s · 4.1 s`).
+
+Settings live in `geistr.conf` next to the model folder:
+
+```sh
+geistr config                              # all settings and the file
+geistr config processor gpu                # auto (default), cpu, gpu; --cpu/--gpu for one run
+geistr config temperature 0.7              # 0 to 2
+geistr config system Antworte auf Deutsch. # a system prompt for every new chat
+geistr config markdown off                 # plain text
+geistr config stats off                    # no speed line
+geistr config model ""                     # forget the last model
 ```
 
 Options: `--models DIR` (default: the geisten app's model folder, so models

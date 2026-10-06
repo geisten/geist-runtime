@@ -109,7 +109,25 @@ p.send_signal(signal.SIGINT)
 time.sleep(.5)
 out, err = p.communicate('What is the capital of France? Answer in one word.\n', timeout=120)
 assert p.returncode == 0 and '[stopped]' in out and 'Paris' in out.split('[stopped]')[1], (out, err)
-print('geistr run/chat: answers, prompt from stdin, Ctrl-C (130 / stopped answer), exit codes passed')
+assert ('⚙ >' in out or '⚡ >' in out) and 'tok/s' in out, out  # processor symbol, speed per answer
+
+# ---- settings: geistr.conf, the last model remembered -------------------------
+conf = os.path.join(tmp, 'home', 'geistr.conf')
+assert os.path.exists(conf) and 'model = ref' in open(conf).read(), 'chat remembers its model'
+r = geistr_run('chat', input='What is the capital of France? Answer in one word.\n')
+assert r.returncode == 0 and 'Paris' in r.stdout, (r.stdout, r.stderr)  # no model given: the last one
+assert geistr_run('config', 'processor', 'turbo').returncode == 2
+assert geistr_run('config', 'temperature', '3').returncode == 2
+assert geistr_run('config', 'colour', 'blue').returncode == 2
+assert geistr_run('config', 'system', 'Answer', 'in', 'one', 'word.').returncode == 0
+assert geistr_run('config', 'system').stdout.strip() == 'Answer in one word.'
+assert geistr_run('config', 'stats', 'off').returncode == 0
+settings = geistr_run('config').stdout
+assert conf in settings and 'stats        off' in settings and 'processor    auto' in settings, settings
+r = geistr_run('chat', 'ref', input='What is the capital of Italy?\n/clear\n/help\n/exit\n')
+assert r.returncode == 0 and 'Rome' in r.stdout and 'tok/s' not in r.stdout and '/clear' in r.stdout, r.stdout
+assert geistr_run('config', 'stats', 'on').returncode == 0 and geistr_run('config', 'system', '').returncode == 0
+print('geistr run/chat: answers, prompt from stdin, Ctrl-C (130 / stopped answer), exit codes, settings passed')
 
 # ---- pull -------------------------------------------------------------------
 r = geistr_run('pull', 'tiny', binary=nonet)
