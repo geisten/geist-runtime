@@ -3,7 +3,8 @@
 schema, run, chat, Ctrl-C, exit codes, pull from a local server, and a
 build without the download module.
 Usage: test_geistr.py <geistr (GEISTR_TESTING)> <geistr PULL=0> <model.gguf> <pull 0|1>"""
-import functools, hashlib, http.server, json, os, signal, subprocess, sys, tempfile, threading, time
+import faulthandler, functools, hashlib, http.server, json, os, signal, subprocess, sys, tempfile, threading, time
+faulthandler.dump_traceback_later(900, exit=True)  # a hang shows where, instead of the CI timeout
 
 geistr, nonet, model_path, pull = sys.argv[1], sys.argv[2], os.path.abspath(sys.argv[3]), sys.argv[4] == '1'
 tmp = tempfile.mkdtemp(prefix='geistr-test-')
@@ -372,4 +373,30 @@ assert subprocess.run([installed, '--version'], capture_output=True, text=True).
 assert subprocess.run(['make', '-s', 'uninstall', 'DESTDIR=' + stage, 'PREFIX=/opt/g']).returncode == 0
 assert not os.path.exists(installed)
 print('make install / uninstall: DESTDIR, PREFIX passed')
+# ---- install.sh: the archive for this computer, checked against SHA256SUMS ----------
+import tarfile, platform
+release = os.path.join(tmp, 'release')
+os.makedirs(release)
+names = ['geistr-linux-amd64', 'geistr-linux-arm64', 'geistr-macos-arm64']
+with open(os.path.join(release, 'SHA256SUMS'), 'w') as sums:
+    for name in names:
+        with tarfile.open(os.path.join(release, name + '.tar.gz'), 'w:gz') as t:
+            t.add(geistr, arcname='geistr')
+        sums.write(f'{sha(os.path.join(release, name + ".tar.gz"))}  {name}.tar.gz\n')
+handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=release)
+handler.log_message = lambda *a: None
+server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), handler)
+threading.Thread(target=server.serve_forever, daemon=True).start()
+url = f'http://127.0.0.1:{server.server_port}'
+prefix = os.path.join(tmp, 'prefix')
+here = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'install.sh')
+r = subprocess.run(['sh', here], capture_output=True, text=True, env={**env, 'GEISTR_BASE_URL': url, 'PREFIX': prefix})
+assert r.returncode == 0 and 'geistr ' in r.stdout and os.access(os.path.join(prefix, 'bin', 'geistr'), os.X_OK), (r.stdout, r.stderr)
+with open(os.path.join(release, 'SHA256SUMS'), 'w') as sums:  # a download that does not match: nothing installed
+    sums.write(''.join(f'{"0" * 64}  {n}.tar.gz\n' for n in names))
+os.unlink(os.path.join(prefix, 'bin', 'geistr'))
+r = subprocess.run(['sh', here], capture_output=True, text=True, env={**env, 'GEISTR_BASE_URL': url, 'PREFIX': prefix})
+assert r.returncode == 1 and 'does not match' in r.stderr and not os.path.exists(os.path.join(prefix, 'bin', 'geistr')), r.stderr
+server.shutdown()
+print('install.sh: the archive for this computer, SHA256SUMS checked, a mismatch installs nothing passed')
 subprocess.run(['rm', '-rf', tmp])

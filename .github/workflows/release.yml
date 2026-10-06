@@ -1,0 +1,105 @@
+name: release
+
+# geistr binaries for install.sh: a fully static Linux build per architecture
+# (musl, scripts/build-static.sh) and macOS arm64 (system libraries only).
+#
+# Run by hand (Actions → release → Run workflow): builds and tests the
+# archives and keeps them as workflow artifacts; nothing is published.
+# A pushed tag vX.Y.Z (= geistr --version) also creates a *draft* release
+# with the archives and SHA256SUMS; a maintainer reviews and publishes it.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: ubuntu-24.04, target: linux-amd64}
+          - {runner: ubuntu-24.04-arm, target: linux-arm64}
+    name: ${{ matrix.target }} (musl, static)
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: build in Alpine
+        run: docker run --rm -v "$PWD:/src" -w /src alpine:3.21 sh scripts/build-static.sh
+      - name: no dynamic dependencies, and it answers
+        run: |
+          info=$(file build/static/geistr) && echo "$info"
+          grep -q 'statically linked' <<<"$info"
+          make fetch-model
+          answer=$(GEISTEN_HOME="$RUNNER_TEMP/h" build/static/geistr run \
+            geistlib/gguf_artifacts/smollm2-360m-instruct-q8_0.gguf 'What is the capital of France? One word.')
+          echo "$answer" && grep -qi paris <<<"$answer"
+      - name: archive
+        run: |
+          mkdir -p dist && cp build/static/geistr LICENSE dist/
+          tar -C dist -czf geistr-${{ matrix.target }}.tar.gz geistr LICENSE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: geistr-${{ matrix.target }}
+          path: geistr-${{ matrix.target }}.tar.gz
+
+  macos:
+    name: macos-arm64
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: build
+        run: |
+          brew install libomp
+          make geistr
+          strip build/geistr
+      - name: only system libraries, and it answers
+        run: |
+          otool -L build/geistr
+          other=$(otool -L build/geistr | tail -n +2 | awk '{print $1}' | grep -v -E '^(/usr/lib/|/System/)' || true)
+          test -z "$other" || { echo "not a system library: $other"; exit 1; }
+          make fetch-model
+          answer=$(GEISTEN_HOME="$RUNNER_TEMP/h" build/geistr run \
+            geistlib/gguf_artifacts/smollm2-360m-instruct-q8_0.gguf 'What is the capital of France? One word.')
+          echo "$answer" && grep -qi paris <<<"$answer"
+      - name: archive
+        run: |
+          mkdir -p dist && cp build/geistr LICENSE dist/
+          tar -C dist -czf geistr-macos-arm64.tar.gz geistr LICENSE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: geistr-macos-arm64
+          path: geistr-macos-arm64.tar.gz
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: the tag is the version geistr reports
+        run: |
+          version=$(sed -n 's/.*return "\([0-9.]*\)";.*/\1/p' src/runtime.c | head -1)
+          test "v$version" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} but geistr_version() is $version"; exit 1; }
+      - name: draft release (published by hand)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist && sha256sum geistr-*.tar.gz > SHA256SUMS && cat SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" --draft --title "geistr $GITHUB_REF_NAME" \
+            --notes "Install: curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh | sh" \
+            geistr-*.tar.gz SHA256SUMS

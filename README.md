@@ -39,6 +39,22 @@ A minimal CLI on the runtime; the model runs in-process.
 
 ### Install
 
+From a release (Linux x86_64 and arm64, macOS on Apple Silicon):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/geisten/geist-runtime/main/install.sh | sh
+curl -fsSL …/install.sh | PREFIX=~/.local GEISTR_VERSION=v0.1.0 sh   # without sudo, a given release
+```
+
+It downloads `geistr-<os>-<arch>.tar.gz`, checks it against the release's
+`SHA256SUMS` and installs `geistr` to `$PREFIX/bin` (default `/usr/local`).
+The Linux binaries are fully static (musl, with libcurl, OpenSSL and
+libgomp): no libc dependency, they run on any distribution. Releases are
+built by `.github/workflows/release.yml` (a `vX.Y.Z` tag makes a draft
+release; publishing is a maintainer's step).
+
+From source:
+
 ```sh
 git clone https://github.com/geisten/geist-runtime && cd geist-runtime
 make geistr                        # fetches and builds the pinned geistlib, then build/geistr
@@ -53,7 +69,9 @@ Needs a C23 compiler (clang 18+ or gcc 14+) and python3; on macOS also
 module for `pull`, else it builds without network code (`PULL=0` forces
 that). The binary is self-contained: geistlib and, on macOS, libomp are
 linked statically; it needs only system libraries (macOS: Accelerate,
-libcurl; Linux: libc, libm, libgomp, libcurl).
+libcurl; Linux: libc, libm, libgomp, libcurl). For a fully static Linux build (musl), as
+in the releases: `docker run --rm -v "$PWD:/src" -w /src alpine:3.21 sh
+scripts/build-static.sh` → `build/static/geistr`.
 
 ### Commands
 
