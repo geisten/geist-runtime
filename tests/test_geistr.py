@@ -127,6 +127,20 @@ assert conf in settings and 'stats        off' in settings and 'processor    aut
 r = geistr_run('chat', 'ref', input='What is the capital of Italy?\n/clear\n/help\n/exit\n')
 assert r.returncode == 0 and 'Rome' in r.stdout and 'tok/s' not in r.stdout and '/clear' in r.stdout, r.stdout
 assert geistr_run('config', 'stats', 'on').returncode == 0 and geistr_run('config', 'system', '').returncode == 0
+# runtime switches: the session changes, the conversation moves along
+script = ('Remember the word lighthouse.\n/cpu\n/info\n/temp 9\n/temp 0.3\n/model nope\n'
+          f'/model {model_path}\n/system Answer briefly.\nWhich word did I ask you to remember?\n/save\n/exit\n')
+r = geistr_run('chat', 'ref', input=script)
+assert r.returncode == 0, r.stderr
+assert '⚙ cpu · ref · the conversation moves along' in r.stdout, r.stdout   # /cpu with history
+assert 'chat format' in r.stdout and '/temp 0 … 2' in r.stdout and 'temperature 0.3' in r.stdout, r.stdout
+assert 'unknown model nope' in r.stderr, r.stderr                                 # a failed switch keeps the session
+assert f'· {model_path} · the conversation moves along' in r.stdout and 'system prompt set' in r.stdout, r.stdout
+assert 'saved for the next chat' in r.stdout, r.stdout
+saved = geistr_run('config').stdout
+assert 'temperature  0.3' in saved and 'processor    cpu' in saved and 'Answer briefly.' in saved, saved
+assert geistr_run('config', 'processor', 'auto').returncode == 0 and geistr_run('config', 'system', '').returncode == 0
+assert geistr_run('config', 'temperature', '0').returncode == 0 and geistr_run('config', 'model', 'ref').returncode == 0
 print('geistr run/chat: answers, prompt from stdin, Ctrl-C (130 / stopped answer), exit codes, settings passed')
 
 # ---- pull -------------------------------------------------------------------
