@@ -9,6 +9,7 @@
  *   geistr pull                      update installed models to this catalog (after a geistr update)
  *   geistr config [key [value]]      settings, remembered between runs (geistr.conf)
  *   geistr bench [model…]            measure tokens/s on CPU and GPU (shown by catalog)
+ *   geistr bench --compare [A [B]]   two engines' bench speeds side by side, the change in %
  *   geistr serve <model> [--socket=PATH] [--chats N]
  *                                    the model as a service on a Unix socket (service.h)
  *   geistr chat --socket[=PATH]      chat with that service
@@ -254,6 +255,7 @@ static int usage(void) {
           "       geistr pull [id]               a model, or: update the installed ones to this catalog\n"
           "       geistr config [key [value]]   (keys: model processor temperature system markdown stats intro resume)\n"
           "       geistr bench [model…]          tokens/s on ⚙ CPU and ⚡ GPU, shown in geistr catalog\n"
+          "       geistr bench --compare [A [B]] two geistlib commits' bench speeds and the change in %\n"
           "       geistr serve <model> [--socket=PATH] [--chats N]\n"
           "       geistr chat --socket[=PATH]\n"
           "options: --models DIR  --catalog FILE  --cpu  --gpu  --new (chat)\n"
@@ -892,7 +894,8 @@ static void transcript_clear(struct transcript *t) {
  * line); the next chat continues the newest and, once it writes, removes it.
  * Only in a terminal: piped chats stay reproducible. */
 static char chat_file[4400], resumed_from[4400];
-static bool fresh; /* --new */
+static bool fresh;     /* --new */
+static bool comparing; /* bench --compare */
 
 static void chat_file_new(void) {
     struct timespec t;
@@ -1330,6 +1333,111 @@ static int discard(void *context, const geistr_piece *piece) {
     return 1;
 }
 
+/* geistr bench --compare [A [B]]: the bench rows of two geistlib commits side
+ * by side, per model and processor (median of the last ten each), and the
+ * change in %. Default: the two engines measured last; A and B are commit
+ * prefixes. */
+struct bench_row {
+    char      model[128], engine[48];
+    bool      gpu;
+    double    rate;
+    long long when;
+};
+
+/* The engine with the latest bench row, other than but; nullptr if none. */
+static const char *newest_engine(const struct bench_row *rows, size_t count, const char *but) {
+    const char *engine = nullptr;
+    long long   last   = -1;
+    for (size_t i = 0; i < count; i++)
+        if (rows[i].when > last && (!but || strcmp(rows[i].engine, but)))
+            last = rows[i].when, engine = rows[i].engine;
+    return engine;
+}
+
+static int compare(int n, const char **refs) {
+    char path[4200];
+    snprintf(path, sizeof path, "%s/speed.tsv", data_dir);
+    FILE             *f    = data_dir[0] ? fopen(path, "r") : nullptr;
+    struct bench_row *rows = nullptr;
+    size_t            count = 0, cap = 0, line_cap = 0;
+    char             *line = nullptr;
+    while (f && getline(&line, &line_cap, f) > 0) {
+        char *field[7] = {};
+        field[0]       = strtok(line, "\t\n");
+        for (int k = 1; k < 7 && field[k - 1]; k++)
+            field[k] = strtok(nullptr, "\t\n");
+        if (!field[6] || strcmp(field[6], "bench")) /* only the fixed prompt compares */
+            continue;
+        if (count == cap) {
+            struct bench_row *grown = realloc(rows, (cap = cap ? cap * 2 : 64) * sizeof *rows);
+            if (!grown)
+                break;
+            rows = grown;
+        }
+        struct bench_row *r = &rows[count++];
+        snprintf(r->model, sizeof r->model, "%s", field[0]);
+        snprintf(r->engine, sizeof r->engine, "%s", field[5]);
+        r->gpu  = !strcmp(field[1], "gpu");
+        r->rate = strtod(field[2], nullptr);
+        r->when = strtoll(field[4], nullptr, 10);
+    }
+    free(line);
+    if (f)
+        fclose(f);
+    /* A and B by name; else B is the engine measured last, A the one before. */
+    const char *engine[2] = {};
+    for (int k = 0; k < n && k < 2; k++)
+        for (size_t i = 0; i < count && !engine[k]; i++)
+            if (strlen(refs[k]) >= 4 && !strncmp(rows[i].engine, refs[k], strlen(refs[k])))
+                engine[k] = rows[i].engine;
+    if (n == 0)
+        engine[1] = newest_engine(rows, count, nullptr), engine[0] = newest_engine(rows, count, engine[1]);
+    else if (n == 1 && engine[0])
+        engine[1] = newest_engine(rows, count, engine[0]);
+    if (!engine[0] || !engine[1]) {
+        if (n)
+            fprintf(stderr, "geistr: no bench rows for %s%s%s\n", refs[0], n > 1 ? " or " : "", n > 1 ? refs[1] : "");
+        else
+            printf("measured with %s so far: geistr bench again after a geistlib update\n",
+                   count ? "one engine" : "no engine (geistr bench)");
+        free(rows);
+        return n ? ERROR : OK;
+    }
+    bool tty = tty_out();
+    printf("%-22s %9.7s %9.7s\n", "", engine[0], engine[1]);
+    for (size_t i = 0; i < count; i++) { /* each model and processor once, as first measured */
+        bool first = true;
+        for (size_t j = 0; j < i && first; j++)
+            first = strcmp(rows[j].model, rows[i].model) || rows[j].gpu != rows[i].gpu;
+        if (!first)
+            continue;
+        double v[2];
+        for (int k = 0; k < 2; k++) {
+            double last[10];
+            size_t m = 0;
+            for (size_t j = count; j-- > 0 && m < 10;)
+                if (!strcmp(rows[j].model, rows[i].model) && rows[j].gpu == rows[i].gpu &&
+                    !strcmp(rows[j].engine, engine[k]))
+                    last[m++] = rows[j].rate;
+            v[k] = median(last, m);
+        }
+        if (v[0] <= 0 && v[1] <= 0)
+            continue;
+        printf("%s %-20s", rows[i].gpu ? "⚡" : "⚙", rows[i].model);
+        for (int k = 0; k < 2; k++)
+            v[k] > 0 ? printf(" %9.1f", v[k]) : printf(" %9s", "·");
+        if (v[0] > 0 && v[1] > 0) {
+            double change = (v[1] / v[0] - 1) * 100;
+            bool   up     = change >= 0;
+            printf("   %s%s %.1f %%%s", tty ? (up ? "\033[32m" : "\033[31m") : "", up ? "▲" : "▼", up ? change : -change,
+                   tty ? "\033[0m" : "");
+        }
+        putchar('\n');
+    }
+    free(rows);
+    return OK;
+}
+
 static int bench(int n, const char **ids) {
     geistr_catalog *c = load_catalog();
     geistr_device   d = {.size = sizeof d};
@@ -1463,7 +1571,9 @@ int main(int argc, char **argv) {
             chats = strtol(argv[++i], &end, 10);
             if (*end || chats < 1 || chats > 64)
                 return usage();
-        } else if (!strcmp(argv[i], "--new"))
+        } else if (!strcmp(argv[i], "--compare"))
+            comparing = true;
+        else if (!strcmp(argv[i], "--new"))
             fresh = true;
         else if (!strcmp(argv[i], "--cpu") || !strcmp(argv[i], "--gpu"))
             processor = argv[i] + 2;
@@ -1539,7 +1649,7 @@ int main(int argc, char **argv) {
     if (!strcmp(command, "chat") && n == 2)
         return chat(args[1], processor);
     if (!strcmp(command, "bench"))
-        return bench(n - 1, n > 1 ? args + 1 : nullptr);
+        return comparing ? compare(n - 1, args + 1) : bench(n - 1, n > 1 ? args + 1 : nullptr);
     if (!strcmp(command, "pull") && n <= 2)
         return n == 2 ? pull(args[1]) : pull_all();
     if (!strcmp(command, "run") && n >= 2) {

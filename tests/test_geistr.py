@@ -316,7 +316,20 @@ with open(speeds, 'a') as f:  # a model recorded by path counts for its catalog 
 measured = listing()['ref']['tokens_per_s']
 assert measured['cpu'] == 1000.0, measured  # the median of the last ten with this engine
 assert listing()['tiny']['tokens_per_s'] == {'cpu': None, 'gpu': None}
-print('geistr bench / catalog speeds: recorded per answer with the engine, median of the last ten, by id or path passed')
+r = geistr_run('bench', '--compare')  # one engine so far
+assert r.returncode == 0 and 'one engine' in r.stdout, r.stdout
+with open(speeds, 'a') as f:  # two engines' bench rows; an answer row does not compare
+    f.write('cmp\tcpu\t100.0\t0.1\t10\taaaa111\tbench\n' 'cmp\tcpu\t150.0\t0.1\t4000000000\tbbbb222\tbench\n'
+            'cmp\tcpu\t999.0\t0.1\t4000000001\tbbbb222\tanswer\n')
+r = geistr_run('bench', '--compare')  # the engine measured last against the one before
+header = r.stdout.split('\n')[0].split()
+assert r.returncode == 0 and header == [engine[:7], 'bbbb222'], r.stdout  # this engine (bench ref), then bbbb
+r = geistr_run('bench', '--compare', 'aaaa', 'bbbb')
+assert r.returncode == 0 and '▲ 50.0 %' in r.stdout and '999' not in r.stdout, r.stdout
+r = geistr_run('bench', '--compare', 'bbbb', 'aaaa')
+assert '▼ 33.3 %' in r.stdout, r.stdout
+assert geistr_run('bench', '--compare', 'zzzz').returncode == 1
+print('geistr bench / catalog speeds: recorded per answer with the engine, median of the last ten, by id or path, --compare passed')
 
 # ---- pull -------------------------------------------------------------------
 r = geistr_run('pull', 'tiny', binary=nonet)
