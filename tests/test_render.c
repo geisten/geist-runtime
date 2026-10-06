@@ -2,11 +2,13 @@
  * Every case also checks that the output does not depend on where the
  * text is split into pieces: whole, every 2-split, and char by char. */
 #include "render.h"
+#include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-static int failures;
+static int      failures;
+static unsigned test_width; /* terminal columns for tables; 0: the default */
 
 static char *run(const char *const *pieces, size_t n, enum md_mode mode) {
     char  *buf = nullptr;
@@ -14,6 +16,7 @@ static char *run(const char *const *pieces, size_t n, enum md_mode mode) {
     FILE  *f   = open_memstream(&buf, &len);
     struct md m;
     md_init(&m, mode, f);
+    m.width = test_width;
     for (size_t i = 0; i < n; i++)
         md_feed(&m, pieces[i]);
     md_finish(&m);
@@ -69,6 +72,10 @@ static void math(const char *tex, const char *want) {
 }
 
 int main(void) {
+    if (!setlocale(LC_CTYPE, "C.UTF-8") && !setlocale(LC_CTYPE, "en_US.UTF-8")) {
+        puts("render: SKIPPED (no UTF-8 locale)");
+        return 0;
+    }
     /* inline */
     check("Die Hauptstadt ist **Ottawa**.", "Die Hauptstadt ist «b»Ottawa«».");
     check("ein *kursives* Wort", "ein «i»kursives«» Wort");
@@ -96,6 +103,29 @@ int main(void) {
     check("$$\\frac{a+b}{2}$$", "«m»  (a+b)/2«»");
     check("\\(x_1^2\\) und \\[\\sum_{i=1}^{n} i\\]", "«m»x₁²«» und «m»  ∑ᵢ₌₁ⁿ i«»");
     check("$nicht geschlossen\nweiter", "$nicht geschlossen\nweiter");
+    /* tables: compact, aligned, wrapped to the width, records when too wide */
+    test_width = 80;
+    check("| A | B |\n|:-|-:|\n| x | 1 |\n| **y** | 22 |\nText",
+          " «b»A«»    «b»B«»\n─── ────\n x    1\n «b»y«»   22\nText"); /* alignment, bold header, text right after */
+    test_width = 80;
+    check("| a | b |\nkein Trenner\n",
+          "| a | b |\nkein Trenner\n"); /* not a table: text as written */
+    test_width = 80;
+    check("| Code | Pipe |\n|--|--|\n| `a|b` | x \\| y |\n",
+          " «b»Code«»   «b»Pipe«»\n────── ───────\n «c»a|b«»    x | y\n"); /* pipes in code and escaped */
+    test_width = 14;
+    check("| Name | Wert |\n|--|--|\n| lang lang | 1 |\n",
+          " «b»Name«»   «b»Wert«»\n────── ──────\n lang   1\n lang\n"); /* wrapped to the width */
+    test_width = 10;
+    check("| Kopf | Lang |\n|--|--|\n| abcdefgh | ijklmnop |\n| a | b |\n",
+          "«b»Kopf«»  abcdefgh\n«b»Lang«»  ijklmnop\n─────\n«b»Kopf«»  a\n«b»Lang«»  b\n"); /* records when columns cannot fit */
+    test_width = 80;
+    check("| Größe | ⚡ |\n|--|:-:|\n| ä | $x^2$ |",
+          " «b»Größe«»   «b»⚡«»\n─────── ────\n ä       «m»x²«»\n"); /* display widths, centred, math, at the end */
+    test_width = 80;
+    check("Vorher:\n| a | b |\n|--|--|\n| 1 | 2 |\n\nNachher **fett**.\n",
+          "Vorher:\n «b»a«»   «b»b«»\n─── ───\n 1   2\n\nNachher «b»fett«».\n"); /* between paragraphs */
+    test_width = 0;
     math("\\alpha + \\beta \\leq \\gamma", "α + β ≤ γ");
     math("\\sqrt{x^2 + y^2}", "√(x² + y²)");
     math("\\sqrt[3]{8}", "³√8");
@@ -110,6 +140,6 @@ int main(void) {
         fprintf(stderr, "render: %d failures\n", failures);
         return 1;
     }
-    puts("render: Markdown and math for the terminal, split-invariant, raw mode untouched passed");
+    puts("render: Markdown, tables and math for the terminal, split-invariant, raw mode untouched passed");
     return 0;
 }

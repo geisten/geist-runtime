@@ -1,8 +1,11 @@
 /* render.c — see render.h. A character-level state machine: every byte is
  * handled with only the bytes before it, so piece boundaries never matter. */
+#define _XOPEN_SOURCE 700 /* wcwidth */
 #include "render.h"
 #include <ctype.h>
+#include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 
 /* ---- styles ------------------------------------------------------------- */
 
@@ -261,6 +264,407 @@ void md_math(const char *tex, char *out, size_t cap) {
     expr(tex, tex + strlen(tex), &o);
 }
 
+/* ---- tables ------------------------------------------------------------- */
+
+static void feed_char(struct md *m, char c);
+
+/* Display columns: wide characters count two; ANSI escapes and the test
+ * mode's «…» tags count none. */
+static unsigned cols(const char *s, size_t n) {
+    unsigned  w  = 0;
+    mbstate_t st = {};
+    for (size_t i = 0; i < n;) {
+        if (s[i] == '\033') {
+            i++;
+            if (i < n && s[i] == '[')
+                for (i++; i < n && !(s[i] >= '@' && s[i] <= '~'); i++) {
+                }
+            i++;
+            continue;
+        }
+        if (!strncmp(s + i, "«", 2)) {
+            const char *close = strstr(s + i, "»");
+            i                 = close ? (size_t) (close - s) + 2 : n;
+            continue;
+        }
+        wchar_t wc;
+        size_t  k = mbrtowc(&wc, s + i, n - i, &st);
+        if (k == (size_t) -1 || k == (size_t) -2 || k == 0) {
+            memset(&st, 0, sizeof st);
+            w++, i++;
+            continue;
+        }
+        int cw = wcwidth(wc);
+        w += cw < 0 ? 1 : (unsigned) cw;
+        i += k;
+    }
+    return w;
+}
+
+static void table_add(struct md *m, char c) {
+    if (m->n_table + 2 > m->cap_table) {
+        size_t cap  = m->cap_table ? m->cap_table * 2 : 1024;
+        char  *grow = realloc(m->table, cap);
+        if (!grow)
+            return;
+        m->table = grow, m->cap_table = cap;
+    }
+    m->table[m->n_table++] = c;
+    m->table[m->n_table]   = 0;
+}
+
+/* Cells of one row: '|' separates, except escaped (\|) or inside `code`. */
+#define MAX_COLS 32
+static size_t split_row(const char *line, size_t len, char *cells[MAX_COLS]) {
+    size_t n = 0, i = 0;
+    while (i < len && line[i] == ' ')
+        i++;
+    if (i < len && line[i] == '|')
+        i++;
+    char  *cell = malloc(len + 1);
+    size_t k    = 0;
+    bool   code = false;
+    for (; cell && i <= len; i++) {
+        char c   = i < len ? line[i] : 0;
+        bool end = i == len || (c == '|' && !code);
+        if (!end) {
+            if (c == '\\' && i + 1 < len && line[i + 1] == '|' && !code)
+                c = line[++i];
+            else if (c == '`')
+                code = !code;
+            cell[k++] = c;
+            continue;
+        }
+        cell[k] = 0;
+        char *a = cell, *b = cell + k;
+        while (*a == ' ')
+            a++;
+        while (b > a && b[-1] == ' ')
+            b--;
+        *b = 0;
+        if (n < MAX_COLS && (i < len || *a || n == 0)) /* a trailing '|' ends the row */
+            cells[n++] = strdup(a);
+        k = 0;
+    }
+    free(cell);
+    return n;
+}
+
+static bool delimiter_row(char *cells[], size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        const char *c = cells[i];
+        if (*c == ':')
+            c++;
+        size_t dashes = strspn(c, "-");
+        c += dashes;
+        if (*c == ':')
+            c++;
+        if (!dashes || *c)
+            return false;
+    }
+    return n > 0;
+}
+
+/* A cell with inline Markdown, as the terminal shows it. */
+static char *cell_render(const struct md *m, const char *text, bool bold) {
+    char  *buf = nullptr;
+    size_t len = 0;
+    FILE  *f   = open_memstream(&buf, &len);
+    if (!f)
+        return strdup(text);
+    struct md inner;
+    md_init(&inner, m->mode, f);
+    inner.line_start = false; /* no headings or bullets inside a cell */
+    inner.bold       = bold;
+    style(&inner);
+    md_feed(&inner, text);
+    md_finish(&inner);
+    fclose(f);
+    return buf;
+}
+
+/* The longest word of a rendered cell, in columns. */
+static unsigned longest_word(const char *s) {
+    unsigned best = 0;
+    for (const char *p = s; *p;) {
+        const char *e = strchr(p, ' ');
+        size_t      n = e ? (size_t) (e - p) : strlen(p);
+        unsigned    w = cols(p, n);
+        best          = w > best ? w : best;
+        p += n;
+        while (*p == ' ')
+            p++;
+    }
+    return best;
+}
+
+/* Word-wrap a rendered cell to w columns. A style that spans a break is
+ * closed at the line end and opened again on the next line. */
+struct lines {
+    char  *line[64];
+    size_t n;
+};
+
+static void wrap(const struct md *m, const char *s, unsigned w, struct lines *out) {
+    out->n         = 0;
+    char  *cur     = calloc(1, strlen(s) * 2 + 64);
+    size_t len     = 0;
+    unsigned width = 0;
+    char   active[64] = ""; /* the last style sequence seen */
+    const char *reset = m->mode == MD_TAGS ? "«»" : "\033[0m";
+    for (const char *p = s; cur && *p && out->n < 63;) {
+        /* the next word with the style sequences inside it */
+        const char *e = p;
+        while (*e && *e != ' ')
+            e++;
+        size_t   n = (size_t) (e - p);
+        unsigned ww = cols(p, n);
+        if (width && width + 1 + ww > w) { /* a new line */
+            if (*active && strcmp(active, reset))
+                strcpy(cur + len, reset), len += strlen(reset);
+            cur[len]         = 0;
+            out->line[out->n++] = cur;
+            cur              = calloc(1, strlen(s) * 2 + 64);
+            if (!cur)
+                break;
+            len = width = 0;
+            if (*active && strcmp(active, reset))
+                strcpy(cur, active), len = strlen(active);
+        }
+        if (width)
+            cur[len++] = ' ', width++;
+        for (size_t i = 0; i < n;) { /* copy, hard-breaking a word longer than w */
+            if (p[i] == '\033' || !strncmp(p + i, "«", 2)) {
+                const char *end = p[i] == '\033' ? p + i + 1 : strstr(p + i, "»");
+                if (p[i] == '\033' && end < e && *end == '[')
+                    for (end++; end < e && !(*end >= '@' && *end <= '~'); end++) {
+                    }
+                size_t k = end && end < e ? (size_t) (end - (p + i)) + (p[i] == '\033' ? 1 : 2) : n - i;
+                if (k < sizeof active) { /* runs of escapes: style() starts each with a reset */
+                    size_t have = strlen(active);
+                    if (!strncmp(p + i, reset, strlen(reset)) || m->mode == MD_TAGS || have + k >= sizeof active)
+                        have = 0;
+                    memcpy(active + have, p + i, k);
+                    active[have + k] = 0;
+                }
+                memcpy(cur + len, p + i, k), len += k, i += k;
+                continue;
+            }
+            size_t k = 1;
+            while (i + k < n && ((unsigned char) p[i + k] & 0xc0) == 0x80)
+                k++;
+            unsigned cw = cols(p + i, k);
+            if (width + cw > w && width) {
+                cur[len]            = 0;
+                out->line[out->n++] = cur;
+                cur                 = calloc(1, strlen(s) * 2 + 64);
+                if (!cur || out->n >= 63)
+                    break;
+                len = width = 0;
+            }
+            memcpy(cur + len, p + i, k), len += k, i += k, width += cw;
+        }
+        p = e;
+        while (*p == ' ')
+            p++;
+    }
+    if (cur) {
+        cur[len]            = 0;
+        out->line[out->n++] = cur;
+    }
+}
+
+static void lines_free(struct lines *l) {
+    for (size_t i = 0; i < l->n; i++)
+        free(l->line[i]);
+    l->n = 0;
+}
+
+static void pad(FILE *out, unsigned n) {
+    while (n--)
+        fputc(' ', out);
+}
+
+static void table_draw(struct md *m) {
+    char  *rows[256][MAX_COLS] = {};
+    size_t n_cells[256]        = {}, n_rows = 0;
+    for (char *line = m->table; line && *line && n_rows < 256;) {
+        char  *nl  = strchr(line, '\n');
+        size_t len = nl ? (size_t) (nl - line) : strlen(line);
+        n_cells[n_rows] = split_row(line, len, rows[n_rows]);
+        n_rows++;
+        line += len + (nl ? 1 : 0);
+    }
+    size_t n = n_cells[0];
+    char   align[MAX_COLS]; /* l, c, r from the delimiter row */
+    for (size_t c = 0; c < n; c++) {
+        const char *d = c < n_cells[1] ? rows[1][c] : "";
+        size_t      l = strlen(d);
+        align[c]      = l && d[0] == ':' && d[l - 1] == ':' ? 'c' : l && d[l - 1] == ':' ? 'r' : 'l';
+    }
+    /* the rendered cells (row 1 is the delimiter: skipped) */
+    static char *cell[256][MAX_COLS];
+    unsigned     natural[MAX_COLS] = {}, least[MAX_COLS] = {};
+    for (size_t r = 0; r < n_rows; r++)
+        for (size_t c = 0; c < n; c++) {
+            if (r == 1)
+                continue;
+            cell[r][c]   = cell_render(m, c < n_cells[r] ? rows[r][c] : "", r == 0);
+            unsigned w   = cols(cell[r][c], strlen(cell[r][c]));
+            unsigned lw  = longest_word(cell[r][c]);
+            natural[c]   = w > natural[c] ? w : natural[c];
+            lw           = lw < 12 ? lw : 12;
+            least[c]     = lw > least[c] ? lw : least[c];
+        }
+    unsigned avail = (m->width ? m->width : 80) - 1, width[MAX_COLS], total = 0;
+    for (size_t c = 0; c < n; c++) {
+        least[c] = least[c] < 3 ? 3 : least[c];
+        least[c] = least[c] > natural[c] ? natural[c] : least[c];
+        width[c] = natural[c];
+        total += width[c] + 2 + (c ? 1 : 0);
+    }
+    while (total > avail) { /* narrow the widest column that can give */
+        size_t widest = n;
+        for (size_t c = 0; c < n; c++)
+            if (width[c] > least[c] && (widest == n || width[c] > width[widest]))
+                widest = c;
+        if (widest == n)
+            break;
+        width[widest]--, total--;
+    }
+    if (m->mode == MD_ANSI)
+        fputs("\r\033[2K", m->out); /* the placeholder goes */
+    struct lines wrapped[MAX_COLS];
+    if (total <= avail) {
+        for (size_t r = 0; r < n_rows; r++) {
+            if (r == 1) { /* under the header: a rule per column */
+                for (size_t c = 0; c < n; c++) {
+                    fputs(c ? " " : "", m->out);
+                    for (unsigned k = 0; k < width[c] + 2; k++)
+                        fputs("─", m->out);
+                }
+                fputc('\n', m->out);
+                continue;
+            }
+            size_t height = 1;
+            for (size_t c = 0; c < n; c++) {
+                wrap(m, cell[r][c], width[c], &wrapped[c]);
+                height = wrapped[c].n > height ? wrapped[c].n : height;
+            }
+            for (size_t h = 0; h < height; h++) {
+                unsigned spaces = 0; /* written only when text follows: no trailing spaces */
+                for (size_t c = 0; c < n; c++) {
+                    const char *t    = h < wrapped[c].n ? wrapped[c].line[h] : "";
+                    unsigned    w    = cols(t, strlen(t)), gap = width[c] > w ? width[c] - w : 0;
+                    unsigned    left = align[c] == 'r' ? gap : align[c] == 'c' ? gap / 2 : 0;
+                    spaces += (c ? 3 : 1) + left; /* inside each column's rule */
+                    if (*t) {
+                        pad(m->out, spaces);
+                        fputs(t, m->out);
+                        spaces = 0;
+                    }
+                    spaces += gap - left;
+                }
+                fputc('\n', m->out);
+            }
+            for (size_t c = 0; c < n; c++)
+                lines_free(&wrapped[c]);
+        }
+    } else { /* too many columns: one record per row */
+        unsigned head = 0;
+        for (size_t c = 0; c < n; c++) {
+            unsigned w = cols(cell[0][c], strlen(cell[0][c]));
+            head       = w > head ? w : head;
+        }
+        unsigned value = avail > head + 12 ? avail - head - 2 : 10;
+        for (size_t r = 2; r < n_rows; r++) {
+            if (r > 2)
+                fputs(m->mode == MD_ANSI ? "\033[2m─────\033[0m\n" : "─────\n", m->out);
+            for (size_t c = 0; c < n; c++) {
+                struct lines v;
+                wrap(m, cell[r][c], value, &v);
+                for (size_t h = 0; h < v.n; h++) {
+                    if (h == 0) {
+                        fputs(cell[0][c], m->out);
+                        pad(m->out, head - cols(cell[0][c], strlen(cell[0][c])) + 2);
+                    } else
+                        pad(m->out, head + 2);
+                    fputs(v.line[h], m->out);
+                    fputc('\n', m->out);
+                }
+                lines_free(&v);
+            }
+        }
+    }
+    for (size_t r = 0; r < n_rows; r++) {
+        for (size_t c = 0; c < n_cells[r]; c++)
+            free(rows[r][c]);
+        for (size_t c = 0; c < n && r != 1; c++)
+            free(cell[r][c]), cell[r][c] = nullptr;
+    }
+    m->n_table = m->table_rows = 0;
+    m->table_state = 0;
+}
+
+/* Not a table after all: its lines as text. */
+static void table_replay(struct md *m) {
+    char *text = m->table;
+    size_t n   = m->n_table;
+    m->table   = nullptr;
+    m->n_table = m->cap_table = m->table_rows = 0;
+    m->table_state = 0;
+    m->replaying   = true;
+    for (size_t i = 0; i < n; i++)
+        feed_char(m, text[i]);
+    m->replaying = false;
+    free(text);
+}
+
+static void placeholder(struct md *m) {
+    if (m->mode == MD_ANSI)
+    {
+        size_t rows = m->table_rows - 2; /* without header and delimiter */
+        if (rows)
+            fprintf(m->out, "\r\033[2K\033[2m▦ table · %zu row%s…\033[0m", rows, rows == 1 ? "" : "s");
+        else
+            fputs("\r\033[2K\033[2m▦ table…\033[0m", m->out);
+    }
+}
+
+/* A table line is complete. */
+static void table_line_end(struct md *m) {
+    m->table_line = false;
+    table_add(m, '\n');
+    m->table_rows++;
+    if (m->table_state == 0) {
+        m->table_state = 1;
+        return;
+    }
+    if (m->table_state == 1) { /* the second line decides */
+        const char *second = m->table + (strchr(m->table, '\n') - m->table) + 1;
+        char       *cells[MAX_COLS];
+        size_t      n  = split_row(second, strlen(second) - 1, cells);
+        bool        ok = delimiter_row(cells, n);
+        for (size_t i = 0; i < n; i++)
+            free(cells[i]);
+        if (!ok) {
+            table_replay(m);
+            return;
+        }
+        m->table_state = 2;
+    }
+    placeholder(m);
+}
+
+static void table_end(struct md *m) {
+    if (m->table_line)
+        table_line_end(m);
+    if (m->table_state == 1)
+        table_replay(m);
+    else if (m->table_state == 2)
+        table_draw(m);
+}
+
 /* ---- the stream --------------------------------------------------------- */
 
 static void text(struct md *m, char c) {
@@ -509,6 +913,22 @@ static void feed_char(struct md *m, char c) {
         text(m, c);
         return;
     }
+    if (m->table_line) { /* a table line is collected whole */
+        if (c == '\n')
+            table_line_end(m);
+        else
+            table_add(m, c);
+        return;
+    }
+    if (m->line_start && !m->n_prefix && !m->block && !m->math && !m->replaying) {
+        if (c == '|') {
+            m->table_line = true;
+            table_add(m, c);
+            return;
+        }
+        if (m->table_state) /* any other line ends the table */
+            table_end(m);
+    }
     if ((m->math == 'D' || m->math == '[') && !m->pending) {
         math_char(m, c == '\n' ? ' ' : c); /* display math may span lines */
         return;
@@ -542,6 +962,10 @@ void md_feed(struct md *m, const char *s) {
 void md_finish(struct md *m) {
     if (m->mode == MD_RAW)
         return;
+    table_end(m);
+    free(m->table);
+    m->table   = nullptr;
+    m->n_table = m->cap_table = 0;
     if (m->line_start && m->n_prefix)
         prefix_release(m, true);
     if (m->pending)

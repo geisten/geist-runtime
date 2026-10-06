@@ -47,7 +47,8 @@ geistr pull gemma4-e4b             # download, resume, verify (builds with the d
 ```
 
 In a terminal the chat shows Markdown (headings, **bold**, *italic*, `code`,
-lists, quotes, code blocks) and LaTeX math as Unicode (`$e^{i\pi}$`, `$$\frac{a}{b}$$`
+lists, quotes, code blocks, tables: compact and aligned, wrapped to the
+terminal, one record per row when the columns cannot fit) and LaTeX math as Unicode (`$e^{i\pi}$`, `$$\frac{a}{b}$$`
 → e^(iπ), a/b; α, ∑, ², ₁, √, ℝ …); piped output stays plain text. The prompt
 shows the processor (⚙ CPU, ⚡ GPU), and each answer ends with its speed
 (`79.4 tok/s · 4.1 s`).

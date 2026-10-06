@@ -6,7 +6,14 @@
  * fences. Inline: **bold**, *italic*, `code`, $math$, $$math$$, \(math\),
  * \[math\]; math becomes Unicode (α, ∑, x², xᵢ, a/b, √x). Dollars follow
  * Pandoc: no space after the opening '$', none before the closing one, and no
- * digit after it, so "$5 or $10" stays money. */
+ * digit after it, so "$5 or $10" stays money.
+ *
+ * Tables (GitHub style: a line starting with '|', then a delimiter row such
+ * as |---|:-:|--:|) need every row before their widths are known: they are
+ * collected, a one-line placeholder counts the rows, and the table replaces
+ * it when it ends, compact (no outer frame), aligned, cells with inline
+ * Markdown, wrapped to the terminal width or as one record per row when the
+ * columns cannot fit. A first line not followed by a delimiter is text. */
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
@@ -31,11 +38,17 @@ struct md {
     char         math_buf[2048];
     size_t       n_math;
     char         last[8]; /* the style last emitted */
+    unsigned     width;   /* terminal columns for tables (0: 80) */
+    char        *table;   /* the table's lines so far, raw */
+    size_t       n_table, cap_table, table_rows;
+    int          table_state; /* 0, 1 (a first line), 2 (confirmed) */
+    bool         table_line;  /* collecting a table line */
+    bool         replaying;   /* not a table after all: its text again */
 };
 
 void md_init(struct md *m, enum md_mode mode, FILE *out);
 void md_feed(struct md *m, const char *text);
-void md_finish(struct md *m); /* flushes what is held, resets the style */
+void md_finish(struct md *m); /* flushes what is held (a table: drawn), resets the style */
 
 /* LaTeX → Unicode into out[0..cap) (always NUL-terminated). */
 void md_math(const char *tex, char *out, size_t cap);
