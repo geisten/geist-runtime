@@ -73,7 +73,11 @@ states = listing()
 assert states['ref']['state'] == 'installed' and states['wrong']['state'] == 'mismatch', states
 assert list(states)[0] == 'ref'  # installed first
 text = geistr_run('catalog').stdout
-assert '✓ ref' in text and '↓ tiny' in text and '✗ wrong' in text and '✗' in text.split('huge')[1], text
+assert '✓ ref' in text and '↓ tiny' in text and '⟳ wrong' in text and '✗' in text.split('huge')[1], text
+r = geistr_run('pull', binary=nonet)  # update: wrong is not this catalog's file, so it would be downloaded again
+assert r.returncode == 1 and 'no download module' in r.stderr, r.stderr
+r = geistr_run('--version')
+assert r.returncode == 0 and r.stdout.startswith('geistr ') and 'catalog revision' in r.stdout and 'engine ' in r.stdout, r.stdout
 assert geistr_run('catalog', '--installed').stdout.count('\n') == 1
 assert 'ref' not in geistr_run('catalog', '--available').stdout
 print('geistr catalog: states, receipts, --json schema, filters passed')
@@ -339,6 +343,8 @@ if pull:
         f.write(tiny)
     r = geistr_run('pull', 'wrong')  # served bytes do not match the catalog
     assert r.returncode == 1 and 'does not match' in r.stderr and not os.path.exists(os.path.join(models, 'wrong.gguf')), r.stderr
+    r = geistr_run('pull')  # nothing left to update
+    assert r.returncode == 0 and 'installed models are current' in r.stdout, (r.stdout, r.stderr)
     server.shutdown()
     print('geistr pull: download, restart after an ignored range, verify, refuse a mismatch; PULL=0 has no network code passed')
 else:

@@ -6,6 +6,7 @@
  *   geistr chat <model>              interactive; Ctrl-C stops the answer, not the chat
  *   geistr catalog [--installed | --available] [--json]
  *   geistr pull <id>                 download and verify (builds with the download module)
+ *   geistr pull                      update installed models to this catalog (after a geistr update)
  *   geistr config [key [value]]      settings, remembered between runs (geistr.conf)
  *   geistr bench [model…]            measure tokens/s on CPU and GPU (shown by catalog)
  *   geistr serve <model> [--socket=PATH] [--chats N]
@@ -18,8 +19,8 @@
  * Markdown with math as Unicode; the prompt shows ⚙ (CPU) or ⚡ (GPU), and
  * each answer ends with its speed. Options anywhere:
  *   --models DIR    model folder (default: the geisten app's, see geistr_models_dir)
- *   --catalog FILE  catalog JSON (default: the app's catalog.json next to the
- *                   model folder if present, else the one built in)
+ *   --catalog FILE  catalog JSON (default: the one built in, which matches
+ *                   this engine; a new geistr brings a new one)
  *   --cpu, --gpu    the processor for this run
  *   --new           chat: a new conversation instead of the last one
  *   --socket[=PATH] the service's socket (default: geistr.sock next to the model folder)
@@ -250,7 +251,7 @@ static int usage(void) {
     fputs("usage: geistr run <model> [prompt…]\n"
           "       geistr chat <model>\n"
           "       geistr catalog [--installed | --available] [--json]\n"
-          "       geistr pull <id>\n"
+          "       geistr pull [id]               a model, or: update the installed ones to this catalog\n"
           "       geistr config [key [value]]   (keys: model processor temperature system markdown stats intro resume)\n"
           "       geistr bench [model…]          tokens/s on ⚙ CPU and ⚡ GPU, shown in geistr catalog\n"
           "       geistr serve <model> [--socket=PATH] [--chats N]\n"
@@ -279,24 +280,12 @@ static char *slurp(const char *path, size_t *len) {
     return s;
 }
 
-/* --catalog, else the app's catalog.json (the app may hold a newer one),
- * else the built-in copy. */
+/* --catalog, else the built-in copy: it ships with this engine, so it lists
+ * only models the engine runs. An update of geistr is the catalog's update. */
 static geistr_catalog *load_catalog(void) {
-    char            path[4200], error[256];
-    geistr_catalog *c = nullptr;
+    char            error[256];
+    geistr_catalog *c    = nullptr;
     const char     *file = catalog_file;
-    if (!file && models_dir == default_models) {
-        snprintf(path, sizeof path, "%s", default_models);
-        char *slash = strrchr(path, '/');
-        if (slash) {
-            strcpy(slash, "/catalog.json");
-            FILE *f = fopen(path, "r");
-            if (f) {
-                fclose(f);
-                file = path;
-            }
-        }
-    }
     if (file) {
         size_t len  = 0;
         char  *text = slurp(file, &len);
@@ -531,7 +520,7 @@ static int catalog(bool installed_only, bool available_only, bool json) {
             } else {
                 char        size[16];
                 const char *mark = installed                             ? "✓"
-                                   : state[i] == GEISTR_INSTALL_MISMATCH ? "✗"
+                                   : state[i] == GEISTR_INSTALL_MISMATCH ? "⟳"
                                                                          : "↓";
                 char        label[160];
                 bool quant = m->quantization && !strstr(m->name, m->quantization);
@@ -540,7 +529,7 @@ static int catalog(bool installed_only, bool available_only, bool json) {
                 speed_bar("⚙", local[i].cpu.rate, reference_rate(m, "cpu"), max, bar, tty);
                 speed_bar("⚡", local[i].gpu.rate, reference_rate(m, "gpu"), max, bar, tty);
                 if (state[i] == GEISTR_INSTALL_MISMATCH)
-                    printf("  ✗ file does not match; geistr pull %s", m->id);
+                    printf("  ⟳ not this catalog's file: geistr pull");
                 else if (f->resource != GEISTR_RESOURCE_FITS)
                     printf("  %s %s", f->resource == GEISTR_RESOURCE_UNAVAILABLE ? "✗" : "⚠",
                            limit_text(f->resource_reason));
@@ -1411,6 +1400,26 @@ static int serve(const char *name, const char *processor, const char *socket, si
     return rc;
 }
 
+/* geistr pull without a model: every installed model whose file is not the
+ * one this catalog lists (a new geistr brought a new catalog), downloaded
+ * again. The old file stays until the new one is complete. */
+static int pull_all(void) {
+    geistr_catalog *c = load_catalog();
+    if (!c)
+        return ERROR;
+    int rc = OK, updated = 0;
+    for (size_t i = 0; i < geistr_catalog_count(c) && rc != CANCELLED; i++)
+        if (install_state(geistr_catalog_get(c, i), true) == GEISTR_INSTALL_MISMATCH) {
+            int one = geistr_pull(geistr_catalog_get(c, i), models_dir);
+            rc      = one == OK ? rc : one;
+            updated += one == OK;
+        }
+    if (rc == OK && !updated)
+        printf("✓ the installed models are current (catalog revision %u)\n", geistr_catalog_revision(c));
+    geistr_catalog_free(c);
+    return rc;
+}
+
 static int pull(const char *id) {
     geistr_catalog *c = load_catalog();
     if (!c)
@@ -1458,7 +1467,16 @@ int main(int argc, char **argv) {
             fresh = true;
         else if (!strcmp(argv[i], "--cpu") || !strcmp(argv[i], "--gpu"))
             processor = argv[i] + 2;
-        else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h"))
+        else if (!strcmp(argv[i], "--version")) {
+            geistr_catalog *c = nullptr;
+            char            error[8];
+            (void) geistr_catalog_parse((const char *) embedded_catalog, sizeof embedded_catalog, &c, error,
+                                        sizeof error);
+            printf("geistr %s · catalog revision %u · engine %.7s\n", geistr_version(),
+                   c ? geistr_catalog_revision(c) : 0, GEISTR_ENGINE);
+            geistr_catalog_free(c);
+            return OK;
+        } else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h"))
             return usage(), OK;
         else if (!strncmp(argv[i], "--", 2) || n == 64)
             return usage();
@@ -1522,8 +1540,8 @@ int main(int argc, char **argv) {
         return chat(args[1], processor);
     if (!strcmp(command, "bench"))
         return bench(n - 1, n > 1 ? args + 1 : nullptr);
-    if (!strcmp(command, "pull") && n == 2)
-        return pull(args[1]);
+    if (!strcmp(command, "pull") && n <= 2)
+        return n == 2 ? pull(args[1]) : pull_all();
     if (!strcmp(command, "run") && n >= 2) {
         static char prompt[1 << 20];
         size_t      len = 0;

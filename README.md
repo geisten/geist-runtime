@@ -46,6 +46,8 @@ geistr chat gemma4-e2b             # Ctrl-C stops the answer, not the chat; /hel
 geistr chat                        # the last model again (else the geisten app's)
 geistr chat --new                  # a new conversation instead of the last one
 geistr pull gemma4-e4b             # download, resume, verify (builds with the download module)
+geistr pull                        # update the installed models to this catalog
+geistr --version                   # geistr, catalog revision, engine
 ```
 
 In a terminal the chat shows Markdown (headings, **bold**, *italic*, `code`,
@@ -120,14 +122,23 @@ geistr config model ""                     # forget the last model
 ```
 
 Options: `--models DIR` (default: the geisten app's model folder, so models
-are shared), `--catalog FILE` (default: the app's `catalog.json` if present,
-else the built-in copy). Exit codes: 0 ok, 1 error, 2 usage, 130 cancelled.
+are shared), `--catalog FILE` (default: the built-in copy, see Updates). Exit codes: 0 ok, 1 error, 2 usage, 130 cancelled.
 `make geistr PULL=0` builds without the download module and without any
 network code. `--json` is schema 1: `schema`, `models_dir`, and per model
 `id`, `name`, `quantization`, `file`, `url`, `sha256`, `bytes`,
 `recommended_ram_gib`, `state` (available, unverified, installed, mismatch),
 `resource` (fits, limited, unavailable), `resource_reason`, `tokens_per_s`
 (`cpu`, `gpu`: measured here, or null).
+
+### Updates
+
+The catalog ships inside geistr and lists only models its engine runs, so a
+new model arrives with a new geistr (`brew upgrade`, `pip install -U
+geistr`); there is no separate catalog download. After an update `geistr
+catalog` marks installed models whose file the new catalog replaced with ⟳,
+and `geistr pull` downloads them again (the old file stays until the new one
+is complete and verified). `geistr --version` names all three:
+`geistr 0.1.0 · catalog revision 9 · engine 5dd7e17`.
 
 ### As a service
 
