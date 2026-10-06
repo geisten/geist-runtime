@@ -59,6 +59,9 @@ Every complete answer (chat, run, bench) records its speed and the geistlib
 commit in `speed.tsv` in the data folder. `geistr catalog` draws the median of
 the last ten per model and processor with this engine as bars on one scale (`⚙ 113 ██████▉  ⚡ 196 ████████████`);
 values from the catalog's reference computer are dim until measured here.
+The file is only ever appended to, so it keeps the history to compare
+geistlib versions (a line: model, cpu|gpu, tokens/s, seconds to the first
+answer, Unix time, geistlib commit).
 The measured speeds also feed the fit verdicts (`geistr_rank`).
 
 In a terminal the chat continues the last conversation: `↻ 6 · „the last

@@ -390,7 +390,8 @@ static void speeds_load(const geistr_catalog *c, geistr_local *local) {
     FILE  *f    = seen && data_dir[0] ? fopen(path, "r") : nullptr;
     char  *line = nullptr;
     size_t cap  = 0;
-    while (f && getline(&line, &cap, f) > 0) { /* ponytail: reads it all; trim the file if it ever matters */
+    while (f && getline(&line, &cap, f) > 0) { /* ponytail: reads it all; an index if it ever gets slow,
+                                                * never trimmed: it is the history across engines */
         char *model = strtok(line, "\t"), *proc = strtok(nullptr, "\t"), *rate = strtok(nullptr, "\t"),
              *first = strtok(nullptr, "\t"), *when = strtok(nullptr, "\t"), *engine = strtok(nullptr, "\t\n");
         if (!model || !proc || !rate || !first || !when || !engine || strcmp(engine, GEISTR_ENGINE))
@@ -649,7 +650,8 @@ static void speed_line(unsigned tokens, double generation_ms, double total_ms, F
 /* ---- speeds measured here: <data>/speed.tsv, a line per complete answer ----
  * model, cpu|gpu, tokens/s, seconds to the first answer text, time, geistlib
  * commit. The catalog shows the median of the last ten per model and
- * processor measured with this engine: another one may be faster or slower. */
+ * processor measured with this engine: another one may be faster or slower.
+ * Only ever appended to, never shortened: the history compares engines. */
 static void speed_record(const char *model, const char *backend, unsigned tokens, double generation_ms,
                          double first_ms) {
     char path[4200];
