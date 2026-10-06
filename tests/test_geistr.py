@@ -154,14 +154,17 @@ def until(fd, text, seconds=60):
 pid, fd = pty.fork()
 if pid == 0:
     os.execve(geistr, [geistr, 'chat', 'ref', *base], {**env, 'TERM': 'xterm'})
-until(fd, '> ')
-os.write(fd, b'/he\t'); until(fd, '/help')                       # unique: completed
-os.write(fd, b'\r'); until(fd, 'Tab completes')                  # and it runs
+until(fd, 'Ctrl-C twice exits')                                  # the intro (geistr config intro)
+os.write(fd, b'/'); until(fd, 'another model')                     # / opens the list with what each does
+os.write(fd, b'\x15/he\t'); until(fd, '/help')                    # Tab takes the chosen entry
+os.write(fd, b'\r'); until(fd, 'Tab take')                  # and it runs
 os.write(fd, b'/model r\t'); until(fd, '/model ref')             # installed model ids
 os.write(fd, b'\x15/c\t'); out = until(fd, '/clear')             # several: listed with help
 assert b'/cpu' in out and b'a new conversation' in out, out[-400:]
 os.write(fd, b'\x15\x1b[A'); until(fd, '/help')                  # history: the last line
-os.write(fd, b'\x15/exit\r')
+os.write(fd, b'\x15?'); until(fd, 'Esc stop the answer')          # ? on an empty line: the shortcuts
+os.write(fd, b'\x03'); until(fd, 'Ctrl-C again to exit')           # once: a hint
+os.write(fd, b'\x03')                                               # twice: the chat ends
 until_exit = time.time() + 30   # keep reading: a full pty would block the child
 while time.time() < until_exit:
     try:

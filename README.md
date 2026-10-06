@@ -53,11 +53,21 @@ terminal, one record per row when the columns cannot fit) and LaTeX math as Unic
 shows the processor (⚙ CPU, ⚡ GPU), and each answer ends with its speed
 (`79.4 tok/s · 4.1 s`).
 
-In a terminal the chat line is editable: Tab completes the `/` commands and,
-after `/model `, the installed models (several matches: their common part,
-then a list with what each does); the rest of a unique command appears dim
-and → or Tab takes it; ↑/↓ recall earlier lines; Ctrl-A/E/U/K/W/L as usual.
-UTF-8 aware, no readline or libedit dependency (`tools/geistr/lineedit.c`).
+In a terminal the chat starts with a two-line intro (what ⚙/⚡ mean, the
+keys; `geistr config intro off`), shows a spinner with size and time while a
+model loads, and uses Claude Code's keys:
+
+| key | does |
+|---|---|
+| `/` | a list of the commands under the line, filtered as you type; ↑↓ choose, Tab takes, Enter takes and runs (or waits for the argument, e.g. `/model `), Esc closes; after `/model ` the installed models |
+| Esc | stops the answer (Ctrl-C too) |
+| Ctrl-C | clears the line; on an empty line twice: exit |
+| `?` | on an empty line: the shortcuts |
+| ↑↓ | earlier lines; → takes the dim hint |
+| Ctrl-A/E/U/K/W/L, Ctrl-D | as in a shell; Ctrl-D on an empty line exits |
+
+Keys typed while an answer runs are kept for the next prompt. UTF-8 aware, no
+readline or libedit dependency (`tools/geistr/lineedit.c`).
 
 In the chat, switch while it runs; the conversation moves along (the new
 session reads it once with your next message), and a switch that fails keeps
@@ -82,6 +92,7 @@ geistr config temperature 0.7              # 0 to 2
 geistr config system Antworte auf Deutsch. # a system prompt for every new chat
 geistr config markdown off                 # plain text
 geistr config stats off                    # no speed line
+geistr config intro off                    # no intro at the start
 geistr config model ""                     # forget the last model
 ```
 

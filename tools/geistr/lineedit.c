@@ -3,6 +3,7 @@
 #include "lineedit.h"
 #include <stdlib.h>
 #include <string.h>
+#include <poll.h>
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
@@ -80,38 +81,53 @@ static size_t candidates(struct le *e, struct le_candidate *c) {
     return e->complete(e->ctx, line, c, CANDIDATES_MAX);
 }
 
-/* The longest prefix all candidates share (at least the line itself). */
-static size_t common(const struct le_candidate *c, size_t n) {
-    size_t k = strlen(c[0].line);
-    for (size_t i = 1; i < n; i++) {
-        size_t j = 0;
-        while (j < k && c[i].line[j] && c[i].line[j] == c[0].line[j])
-            j++;
-        k = j;
-    }
-    while (k && ((unsigned char) c[0].line[k] & 0xc0) == 0x80) /* never inside a character */
-        k--;
-    return k;
+/* The list under the line: while a / command is typed (at its end), unless
+ * Esc closed it or the line already is the only entry. */
+#define MENU_ROWS 8
+static size_t menu(struct le *e, struct le_candidate c[CANDIDATES_MAX]) {
+    if (e->closed || e->pos != e->len || !e->len || e->buf[0] != '/')
+        return 0;
+    size_t n = candidates(e, c);
+    if (n == 1 && !strcmp(c[0].line, e->buf))
+        return 0;
+    if (e->sel >= n)
+        e->sel = n ? n - 1 : 0;
+    return n;
 }
 
-/* What would complete the line, shown dim after it: only at its end. */
+/* The chosen entry's rest, dim after the line. */
 static const char *hint(struct le *e, char out[static 256]) {
     out[0] = 0;
     struct le_candidate c[CANDIDATES_MAX];
-    size_t              n = e->pos == e->len && e->len ? candidates(e, c) : 0;
-    if (!n)
-        return out;
-    size_t k = common(c, n);
-    if (k > e->len && !strncmp(c[0].line, e->buf, e->len))
-        snprintf(out, 256, "%.*s", (int) (k - e->len), c[0].line + e->len);
+    size_t              n = menu(e, c);
+    if (n && !strncmp(c[e->sel].line, e->buf, e->len))
+        snprintf(out, 256, "%s", c[e->sel].line + e->len);
     return out;
 }
 
 /* ---- drawing ------------------------------------------------------------ */
 
-static void draw(struct le *e, bool with_hint) {
-    char        h[256];
-    const char *tail = with_hint ? hint(e, h) : "";
+/* s cut to at most w columns. */
+static void put_cut(FILE *out, const char *s, unsigned w) {
+    unsigned used = 0;
+    for (const char *p = s; *p;) {
+        size_t k = 1;
+        while (((unsigned char) p[k] & 0xc0) == 0x80)
+            k++;
+        unsigned cw = columns(p, k);
+        if (used + cw > w)
+            break;
+        fwrite(p, 1, k, out);
+        used += cw;
+        p += k;
+    }
+}
+
+static void draw(struct le *e, bool with_menu) {
+    char                h[256];
+    struct le_candidate c[CANDIDATES_MAX];
+    size_t              n    = with_menu ? menu(e, c) : 0;
+    const char         *tail = with_menu ? hint(e, h) : "";
     if (e->cursor_row)
         fprintf(e->out, "\033[%uA", e->cursor_row);
     fputs("\r\033[J", e->out);
@@ -126,12 +142,41 @@ static void draw(struct le *e, bool with_hint) {
     if (total && total % w == 0)
         fputs("\r\n", e->out); /* leave the pending wrap: the cursor is on the next row */
     unsigned end_row = total / w, row = cursor / w, col = cursor % w;
-    if (end_row > row)
-        fprintf(e->out, "\033[%uA", end_row - row);
+    /* the list: a window of MENU_ROWS around the chosen entry */
+    unsigned shown = 0;
+    if (n) {
+        size_t   first = e->sel >= MENU_ROWS ? e->sel - MENU_ROWS + 1 : 0;
+        unsigned name  = 0;
+        for (size_t i = 0; i < n; i++) {
+            unsigned cw = columns(c[i].line, strlen(c[i].line));
+            name        = cw > name ? cw : name;
+        }
+        for (size_t i = first; i < n && shown < MENU_ROWS; i++, shown++) {
+            fputs("\r\n  ", e->out);
+            bool chosen = i == e->sel;
+            fputs(chosen ? "\033[7m" : "", e->out);
+            put_cut(e->out, c[i].line, w > 4 ? w - 4 : 1);
+            unsigned used = 2 + columns(c[i].line, strlen(c[i].line));
+            for (unsigned k = columns(c[i].line, strlen(c[i].line)); k < name && used < w - 1; k++, used++)
+                fputc(' ', e->out);
+            fputs(chosen ? "\033[0m" : "", e->out);
+            if (c[i].help && used + 3 < w) {
+                fputs("  \033[2m", e->out);
+                put_cut(e->out, c[i].help, w - used - 3);
+                fputs("\033[0m", e->out);
+            }
+        }
+        if (n > shown)
+            fprintf(e->out, "\r\n  \033[2m… %zu more\033[0m", n - shown), shown++;
+    }
+    unsigned up = end_row - row + shown;
+    if (up)
+        fprintf(e->out, "\033[%uA", up);
     fputs("\r", e->out);
     if (col)
         fprintf(e->out, "\033[%uC", col);
-    e->rows       = end_row + 1;
+    e->rows       = end_row + 1 + shown;
+    e->menu_rows  = shown;
     e->cursor_row = row;
     fflush(e->out);
 }
@@ -170,28 +215,25 @@ static void history_move(struct le *e, int step) {
     set_line(e, e->browsing == e->n_history ? e->draft : e->history[e->browsing]);
 }
 
-static void complete(struct le *e) {
-    e->pos = e->len;
+/* ↑/↓: through the list while it is open, else the history. */
+static void up_down(struct le *e, int step) {
     struct le_candidate c[CANDIDATES_MAX];
-    size_t              n = candidates(e, c);
-    if (!n) {
-        fputc('\a', e->out);
-        return;
-    }
-    size_t k = common(c, n);
-    if (k > e->len && !strncmp(c[0].line, e->buf, e->len)) { /* extend to what all share */
-        char line[sizeof e->buf];
-        snprintf(line, sizeof line, "%.*s", (int) k, c[0].line);
-        set_line(e, line);
-        return;
-    }
-    if (n == 1)
-        return;
-    draw(e, false); /* several: list them under the line, then the line again */
-    fputs("\r\n", e->out);
-    for (size_t i = 0; i < n; i++)
-        fprintf(e->out, "  %-24s\033[2m%s\033[0m\r\n", c[i].line, c[i].help ? c[i].help : "");
-    e->rows = e->cursor_row = 0;
+    size_t              n = menu(e, c);
+    if (n)
+        e->sel = (e->sel + n + (size_t) (step > 0 ? 1 : n - 1)) % n;
+    else
+        history_move(e, step);
+}
+
+/* Take the chosen entry; true if it is complete (no argument to follow). */
+static bool take(struct le *e) {
+    struct le_candidate c[CANDIDATES_MAX];
+    size_t              n = menu(e, c);
+    if (!n)
+        return true;
+    set_line(e, c[e->sel].line);
+    e->sel = 0;
+    return e->len && e->buf[e->len - 1] != ' ';
 }
 
 static void escape(struct le *e) {
@@ -199,17 +241,14 @@ static void escape(struct le *e) {
     char        final = e->esc[e->n_esc - 1];
     if (*s == '[' || *s == 'O') {
         if (final == 'A')
-            history_move(e, -1);
+            up_down(e, -1);
         else if (final == 'B')
-            history_move(e, +1);
+            up_down(e, +1);
         else if (final == 'C') {
             if (e->pos == e->len) { /* at the end, → takes the hint */
                 char h[256];
-                if (*hint(e, h)) {
-                    char line[sizeof e->buf];
-                    snprintf(line, sizeof line, "%.*s%s", (int) e->len, e->buf, h);
-                    set_line(e, line);
-                }
+                if (*hint(e, h))
+                    (void) take(e);
             } else
                 e->pos = next_char(e, e->pos);
         } else if (final == 'D')
@@ -222,6 +261,19 @@ static void escape(struct le *e) {
             erase(e, e->pos, next_char(e, e->pos));
     }
     e->n_esc = 0;
+}
+
+void le_escape(struct le *e) {
+    e->n_esc  = 0;
+    e->closed = true;
+    draw(e, true);
+}
+
+void le_type_ahead(struct le *e, const unsigned char *keys, size_t n) {
+    if (n > sizeof e->ahead - e->n_ahead)
+        n = sizeof e->ahead - e->n_ahead;
+    memcpy(e->ahead + e->n_ahead, keys, n);
+    e->n_ahead += n;
 }
 
 void le_init(struct le *e, FILE *out, unsigned width, le_complete_fn fn, void *ctx) {
@@ -263,6 +315,8 @@ void le_begin(struct le *e, const char *prompt) {
     e->rows     = e->cursor_row = 0;
     e->n_esc    = 0;
     e->browsing = e->n_history;
+    e->sel      = 0;
+    e->closed   = false;
     draw(e, true);
 }
 
@@ -279,18 +333,31 @@ enum le_event le_feed(struct le *e, unsigned char c) {
         }
         return LE_MORE;
     }
+    if (c != '\t' && c != 16 && c != 14 && c != '\r' && c != '\n' && c != 27) { /* the line changes: a new list */
+        e->sel    = 0;
+        e->closed = false;
+    }
     switch (c) {
     case '\r':
     case '\n':
+        if (!take(e)) { /* a command that needs its argument: keep editing */
+            draw(e, true);
+            return LE_MORE;
+        }
         e->pos = e->len;
         draw(e, false);
         fputs("\r\n", e->out);
         fflush(e->out);
         return LE_SUBMIT;
-    case 3: /* Ctrl-C */
-        e->pos = e->len;
+    case 3: /* Ctrl-C: clears the line; on an empty one the caller decides */
+        if (e->len) {
+            e->len = e->pos = 0;
+            e->buf[0]       = 0;
+            e->closed       = false;
+            break;
+        }
         draw(e, false);
-        fputs("^C\r\n", e->out);
+        fputs("\r\n", e->out);
         fflush(e->out);
         return LE_INTERRUPT;
     case 4: /* Ctrl-D */
@@ -306,9 +373,15 @@ enum le_event le_feed(struct le *e, unsigned char c) {
         e->esc[0] = 27;
         e->n_esc  = 1;
         return LE_MORE;
-    case '\t':
-        complete(e);
+    case '\t': {
+        struct le_candidate list[CANDIDATES_MAX];
+        e->pos = e->len;
+        if (menu(e, list))
+            (void) take(e);
+        else
+            fputc('\a', e->out);
         break;
+    }
     case 127:
     case 8:
         if (e->pos)
@@ -346,14 +419,20 @@ enum le_event le_feed(struct le *e, unsigned char c) {
         e->rows = e->cursor_row = 0;
         break;
     case 16:
-        history_move(e, -1);
+        up_down(e, -1);
         break;
     case 14:
-        history_move(e, +1);
+        up_down(e, +1);
         break;
     default:
         if (c < 32 || e->len + 1 >= sizeof e->buf)
             return LE_MORE;
+        if (c == '?' && !e->len) { /* ? on an empty line: the shortcuts */
+            draw(e, false);
+            fputs("\r\n", e->out);
+            fflush(e->out);
+            return LE_HELP;
+        }
         memmove(e->buf + e->pos + 1, e->buf + e->pos, e->len - e->pos);
         e->buf[e->pos++] = (char) c;
         e->buf[++e->len] = 0;
@@ -380,11 +459,19 @@ enum le_event le_read(struct le *e, const char *prompt) {
     le_begin(e, prompt);
     enum le_event ev = LE_MORE;
     unsigned char c;
+    for (size_t i = 0; i < e->n_ahead && ev == LE_MORE; i++) /* typed while the answer ran */
+        ev = le_feed(e, e->ahead[i]);
+    e->n_ahead = 0;
     while (ev == LE_MORE) {
         ssize_t n = read(STDIN_FILENO, &c, 1);
         if (n <= 0) {
             ev = LE_EOF;
             break;
+        }
+        struct pollfd more = {.fd = STDIN_FILENO, .events = POLLIN};
+        if (c == 27 && !e->n_esc && poll(&more, 1, 30) == 0) { /* Esc alone, not a key sequence */
+            le_escape(e);
+            continue;
         }
         ev = le_feed(e, c);
     }

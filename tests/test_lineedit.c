@@ -16,7 +16,8 @@ static int failures;
 
 static const struct le_candidate commands[] = {
         {"/gpu", "processor"}, {"/cpu", "processor"},  {"/clear", "new conversation"}, {"/model ", "another model"},
-        {"/temp ", "temperature"}, {"/system ", "system prompt"}, {"/info", "what runs"}, {"/exit", "end"}};
+        {"/temp ", "temperature"}, {"/system ", "system prompt"}, {"/info", "what runs"}, {"/help", "help"},
+        {"/save", "keep"}, {"/exit", "end"}};
 static const char *const models[] = {"gemma4-e2b", "gemma4-e4b", "qwen3-0.6b"};
 
 static size_t complete(void *ctx, const char *line, struct le_candidate *out, size_t max) {
@@ -82,17 +83,31 @@ int main(void) {
     line_is(&e, "ab\x1b[H\x1b[3~\r", "b", "Home, Delete");
 
     /* completion */
-    line_is(&e, "/mo\t\r", "/model ", "a unique command completes (with its space)");
+    line_is(&e, "/mo\tx\r", "/model x", "Tab completes a command with its space");
     line_is(&e, "/model q\t\r", "/model qwen3-0.6b", "model ids complete");
-    line_is(&e, "/model gem\t\r", "/model gemma4-e", "several: the common part");
+    line_is(&e, "/model gem\t\r", "/model gemma4-e2b", "Tab takes the chosen entry (the first)");
+    line_is(&e, "/model gem\x1b[B\t\r", "/model gemma4-e4b", "↓ chooses in the list");
+    line_is(&e, "/model gem\x1b[B\x1b[B\t\r", "/model gemma4-e2b", "the list wraps around");
+    line_is(&e, "/he\r", "/help", "Enter takes and runs a complete command");
+    line_is(&e, "/mo\rq\r", "/model qwen3-0.6b", "Enter on a command with an argument waits for it");
+    line_is(&e, "/c\x1b[B\r", "/clear", "↓ then Enter");
     line_is(&e, "/i\x1b[C\r", "/info", "→ takes the hint");
     char *screen = nullptr;
-    keys(&e, "/c\t", &screen); /* /cpu and /clear: both listed with their help */
-    CHECK(strstr(screen, "/cpu") && strstr(screen, "/clear") && strstr(screen, "new conversation"), "candidate list");
+    keys(&e, "/c", &screen); /* the list opens while typing: /cpu and /clear with their help */
+    CHECK(strstr(screen, "\033[7m/cpu") && strstr(screen, "/clear") && strstr(screen, "new conversation"),
+          "a selection list under the line, the first entry chosen");
+    CHECK(e.menu_rows == 2, "two entries listed");
+    free(screen);
+    keys(&e, "/", &screen);
+    CHECK(e.menu_rows == 8 + 1 && strstr(screen, "more"), "/ alone: all commands, a window and '… more'");
     free(screen);
     keys(&e, "/inf", &screen);
-    CHECK(strstr(screen, "\033[2mo\033[0m"), "dim hint for the rest of a unique command");
+    CHECK(strstr(screen, "\033[2mo\033[0m"), "dim hint for the rest of the chosen entry");
     free(screen);
+    keys(&e, "/c", &screen);
+    free(screen);
+    le_escape(&e);
+    CHECK(e.menu_rows == 0, "Esc closes the list");
     keys(&e, "hello", &screen);
     CHECK(!strstr(screen, "\033[2m") || strstr(screen, "\033[2m⚡"), "no hint for ordinary text");
     free(screen);
@@ -112,8 +127,13 @@ int main(void) {
     /* events */
     CHECK(keys(&e, "\x04", &screen) == LE_EOF, "Ctrl-D on an empty line ends");
     free(screen);
-    CHECK(keys(&e, "abc\x03", &screen) == LE_INTERRUPT, "Ctrl-C");
+    CHECK(keys(&e, "abc\x03", &screen) == LE_MORE && e.len == 0, "Ctrl-C clears the line");
     free(screen);
+    CHECK(keys(&e, "\x03", &screen) == LE_INTERRUPT, "Ctrl-C on an empty line: the caller decides");
+    free(screen);
+    CHECK(keys(&e, "?", &screen) == LE_HELP, "? on an empty line: the shortcuts");
+    free(screen);
+    line_is(&e, "a?\r", "a?", "? inside a line is text");
     line_is(&e, "ab\x01\x04\r", "b", "Ctrl-D in a line deletes");
 
     /* a line longer than the terminal wraps: the cursor goes back over rows */
@@ -126,6 +146,6 @@ int main(void) {
         fprintf(stderr, "lineedit: %d failures\n", failures);
         return 1;
     }
-    puts("lineedit: UTF-8 editing, keys, completion, list, hint, history, wrapping passed");
+    puts("lineedit: UTF-8 editing, keys, selection list, hint, Esc, Ctrl-C, ?, history, wrapping passed");
     return 0;
 }
