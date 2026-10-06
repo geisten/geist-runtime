@@ -40,6 +40,7 @@ A minimal CLI on the runtime; the model runs in-process (`make geistr`).
 ```sh
 geistr catalog                     # ✓ installed (SHA-256 verified), ↓ available, ⚠/✗ fit, tokens/s on ⚙ and ⚡
 geistr bench [model…]              # measure tokens/s on CPU and GPU (default: every installed model)
+geistr bench --compare [A [B]]     # bench speeds of two geistlib commits and the change (▲/▼ %)
 geistr catalog --installed | --available | --json
 geistr run gemma4-e2b "prompt"     # one answer to stdout; a catalog id or a .gguf path; prompt from stdin if none
 geistr chat gemma4-e2b             # Ctrl-C stops the answer, not the chat; /help in the chat
@@ -63,7 +64,15 @@ the last ten per model and processor with this engine as bars on one scale (`⚙
 values from the catalog's reference computer are dim until measured here.
 The file is only ever appended to, so it keeps the history to compare
 geistlib versions (a line: model, cpu|gpu, tokens/s, seconds to the first
-answer, Unix time, geistlib commit, source: `bench` or `answer`).
+answer, Unix time, geistlib commit, source: `bench` or `answer`). `geistr bench --compare` sets the bench rows of two engines side by side
+(default: the one measured last against the one before; or commit prefixes
+A and B), per model and processor the median of the last ten each:
+
+```
+                         5dd7e17   a1b2c3d
+⚙ smollm2-360m             112.8     130.1   ▲ 15.3 %
+⚡ smollm2-360m             195.9     191.0   ▼ 2.5 %
+```
 The measured speeds also feed the fit verdicts (`geistr_rank`).
 
 In a terminal the chat continues the last conversation: `↻ 6 · „the last
