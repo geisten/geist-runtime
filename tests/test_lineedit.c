@@ -104,9 +104,14 @@ int main(void) {
     keys(&e, "/inf", &screen);
     CHECK(strstr(screen, "\033[2mo\033[0m"), "dim hint for the rest of the chosen entry");
     free(screen);
-    keys(&e, "/c", &screen);
-    free(screen);
+    size_t len = 0;
+    FILE  *f   = open_memstream(&screen, &len); /* le_escape draws: a live stream */
+    e.out      = f;
+    le_begin(&e, "> ");
+    le_feed(&e, '/'), le_feed(&e, 'c');
     le_escape(&e);
+    fclose(f);
+    free(screen);
     CHECK(e.menu_rows == 0, "Esc closes the list");
     keys(&e, "hello", &screen);
     CHECK(!strstr(screen, "\033[2m") || strstr(screen, "\033[2m⚡"), "no hint for ordinary text");

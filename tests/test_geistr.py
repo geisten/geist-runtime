@@ -162,7 +162,8 @@ os.write(fd, b'/model r\t'); until(fd, '/model ref')             # installed mod
 os.write(fd, b'\x15/c\t'); out = until(fd, '/clear')             # several: listed with help
 assert b'/cpu' in out and b'a new conversation' in out, out[-400:]
 os.write(fd, b'\x15\x1b[A'); until(fd, '/help')                  # history: the last line
-os.write(fd, b'\x15?'); until(fd, 'Esc stop the answer')          # ? on an empty line: the shortcuts
+os.write(fd, b'\x15?'); until(fd, 'Ctrl-L clear screen')          # ? on an empty line: the shortcuts
+time.sleep(.5)                                                      # the editor reads keys again (raw mode)
 os.write(fd, b'\x03'); until(fd, 'Ctrl-C again to exit')           # once: a hint
 os.write(fd, b'\x03')                                               # twice: the chat ends
 until_exit = time.time() + 30   # keep reading: a full pty would block the child
