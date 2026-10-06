@@ -176,6 +176,65 @@ assert os.WEXITSTATUS(status) == 0, status
 os.close(fd)
 print('geistr run/chat: answers, prompt from stdin, Ctrl-C (130 / stopped answer), exit codes, settings, Tab completion in a terminal passed')
 
+# ---- serve and chat --socket --------------------------------------------------
+import socket as unix
+sock = f'/tmp/geistr-test-{os.getpid()}.sock'  # short: sun_path holds ~100 bytes
+service = subprocess.Popen([geistr, 'serve', 'ref', '--socket=' + sock, '--chats', '2', '--cpu', *base],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, env=env)
+deadline = time.time() + 120
+while not os.path.exists(sock):
+    assert service.poll() is None and time.time() < deadline, service.stderr.read()
+    time.sleep(0.1)
+assert os.stat(sock).st_mode & 0o777 == 0o600
+
+def request(o, keep=None):
+    s = unix.socket(unix.AF_UNIX)
+    s.connect(sock)
+    s.sendall((json.dumps(o) + '\n').encode())
+    lines = []
+    for line in s.makefile(encoding='utf-8'):
+        lines.append(json.loads(line))
+        if keep and len(lines) == keep:
+            break
+    s.close()
+    return lines
+
+def ask(messages, **kw):
+    lines = request({'op': 'chat', 'messages': messages, 'max': 12, **kw})
+    assert lines and lines[-1].get('done'), lines
+    return ''.join(l['text'] for l in lines[:-1]), lines[-1]
+
+info = request({'op': 'info'})[0]
+assert info['model'] == 'ref' and info['backend'] == 'cpu' and info['chats'] == 2 and info['context'] > 0, info
+a1 = [{'role': 'user', 'content': 'Name a color.'}]
+text, first = ask(a1)
+assert text and first['finish'] in ('stop', 'length'), first
+a2 = a1 + [{'role': 'assistant', 'content': text}, {'role': 'user', 'content': 'Another one?'}]
+_, hit = ask(a2)  # continues the held conversation: only the new messages are processed
+assert hit['input_tokens'] < hit['context_tokens'] - hit['output_tokens'], hit
+b = [{'role': 'user', 'content': 'Count to three, ünïcode “quoted” \\ \n line.'}]
+ask(b)  # a second client between two turns of the first
+_, again = ask(a2 + [{'role': 'assistant', 'content': 'x'}, {'role': 'user', 'content': 'And?'}])
+assert again['input_tokens'] < again['context_tokens'] - again['output_tokens'], again  # A's is still held
+edited = [{'role': 'user', 'content': 'Name a fruit.'}] + a2[1:]
+_, rewound = ask(edited)  # differs at the first message: processed in full
+assert rewound['input_tokens'] == rewound['context_tokens'] - rewound['output_tokens'], rewound
+assert len(request({'op': 'chat', 'messages': a1, 'max': 400}, keep=2)) == 2  # leave mid-answer
+t0 = time.time()
+assert ask(a1)[1]['finish'] in ('stop', 'length') and time.time() - t0 < 60  # served after the cancel
+big = request({'op': 'chat', 'messages': [{'role': 'user', 'content': 'word ' * (info['context'] * 2)}]})
+assert big[-1].get('status') == 'context', big[-1]
+assert request({'op': 'nope'})[0]['status'] == 'invalid'
+r = subprocess.run([geistr, 'chat', '--socket=' + sock, *base], input='Say hi.\n/model ref\n/temp 0.5\n/info\n',
+                   capture_output=True, text=True, env=env, timeout=120)
+assert r.returncode == 0 and 'the service has its model' in r.stdout and 'temperature 0.5' in r.stdout, r
+assert '· service' in r.stdout and 'chatml' in r.stdout, r.stdout
+service.send_signal(signal.SIGTERM)
+assert service.wait(30) == 0 and not os.path.exists(sock)
+r = geistr_run('chat', '--socket=' + sock)
+assert r.returncode == 1 and 'no service' in r.stderr, r.stderr
+print('geistr serve / chat --socket: protocol, 0600 socket, cache hit, rewind, two clients, disconnect, context, SIGTERM passed')
+
 # ---- pull -------------------------------------------------------------------
 r = geistr_run('pull', 'tiny', binary=nonet)
 assert r.returncode == 1 and 'no download module' in r.stderr, r.stderr

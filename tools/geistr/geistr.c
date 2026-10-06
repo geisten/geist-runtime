@@ -7,6 +7,9 @@
  *   geistr catalog [--installed | --available] [--json]
  *   geistr pull <id>                 download and verify (builds with the download module)
  *   geistr config [key [value]]      settings, remembered between runs (geistr.conf)
+ *   geistr serve <model> [--socket=PATH] [--chats N]
+ *                                    the model as a service on a Unix socket (service.h)
+ *   geistr chat --socket[=PATH]      chat with that service
  *
  * <model> is a catalog id or a path to a GGUF; chat without one continues with
  * the last model (or the geisten app's). In a terminal the answer is shown as
@@ -16,6 +19,7 @@
  *   --catalog FILE  catalog JSON (default: the app's catalog.json next to the
  *                   model folder if present, else the one built in)
  *   --cpu, --gpu    the processor for this run
+ *   --socket[=PATH] the service's socket (default: geistr.sock next to the model folder)
  *
  * Exit codes: 0 ok, 1 error, 2 usage, 130 cancelled.
  */
@@ -24,6 +28,7 @@
 #include "pull.h"
 #include "lineedit.h"
 #include "render.h"
+#include "service.h"
 
 #include <errno.h>
 #include <poll.h>
@@ -210,6 +215,8 @@ static int usage(void) {
           "       geistr catalog [--installed | --available] [--json]\n"
           "       geistr pull <id>\n"
           "       geistr config [key [value]]   (keys: model processor temperature system markdown stats intro)\n"
+          "       geistr serve <model> [--socket=PATH] [--chats N]\n"
+          "       geistr chat --socket[=PATH]\n"
           "options: --models DIR  --catalog FILE  --cpu  --gpu\n"
           "<model> is a catalog id or a path to a .gguf file\n",
           stderr);
@@ -466,13 +473,18 @@ static void view_begin(void) {
 }
 
 /* "  42.3 tok/s · 1.8 s" after an answer: generation speed and the whole turn. */
-static void speed(geistr_chat *chat, FILE *out) {
-    geistr_stats st = {.size = sizeof st};
-    if (!cfg.stats || geistr_chat_stats(chat, &st) != GEISTR_OK || !st.output_tokens)
+static void speed_line(unsigned tokens, double generation_ms, double total_ms, FILE *out) {
+    if (!cfg.stats || !tokens)
         return;
     bool   dim  = out == stdout ? tty_out() : isatty(STDERR_FILENO);
-    double rate = st.generation_ms > 0 ? st.output_tokens / (st.generation_ms / 1000) : 0;
-    fprintf(out, "%s  %.1f tok/s · %.1f s%s\n", dim ? "\033[2m" : "", rate, st.total_ms / 1000, dim ? "\033[0m" : "");
+    double rate = generation_ms > 0 ? tokens / (generation_ms / 1000) : 0;
+    fprintf(out, "%s  %.1f tok/s · %.1f s%s\n", dim ? "\033[2m" : "", rate, total_ms / 1000, dim ? "\033[0m" : "");
+}
+
+static void speed(geistr_chat *chat, FILE *out) {
+    geistr_stats st = {.size = sizeof st};
+    if (geistr_chat_stats(chat, &st) == GEISTR_OK)
+        speed_line(st.output_tokens, st.generation_ms, st.total_ms, out);
 }
 
 /* ---- while a model loads: a spinner with its size and the time ----------- */
@@ -547,6 +559,7 @@ static void *watch_keys(void *unused) {
         if (read(STDIN_FILENO, &c, 1) != 1)
             break;
         if (c == 27 && poll(&in, 1, 30) == 0) { /* Esc alone: stop the answer */
+            interrupted = 1; /* a service's answer (chat --socket) */
             if (running)
                 geistr_chat_cancel(running);
             continue;
@@ -782,14 +795,41 @@ static int answer_once(const char *name, const char *prompt, const char *process
     return s == GEISTR_OK ? OK : s == GEISTR_CANCELLED ? CANCELLED : ERROR;
 }
 
+/* chat --socket: the model is the service's; this process holds the conversation. */
+static const char *remote;
+
+static bool remote_part(void *ctx, const char *text) {
+    geistr_piece p = {.size = sizeof p, .part = GEISTR_PART_ANSWER, .text = text, .len = strlen(text)};
+    return print_piece(ctx, &p);
+}
+
+static bool remote_cancel(void *ctx) {
+    (void) ctx;
+    return interrupted;
+}
+
 static int chat(const char *name, const char *processor) {
-    struct session x;
-    int            rc = session_open(&x, name, processor, cfg.temperature, true);
-    if (rc != OK)
-        return rc;
-    if (strcmp(cfg.model, name) && config_path[0]) { /* remember the model for the next chat */
-        snprintf(cfg.model, sizeof cfg.model, "%s", name);
-        (void) config_save();
+    struct session x = {};
+    if (remote) {
+        char info[1024], context[16];
+        if (service_info(remote, info, sizeof info) != GEISTR_OK) {
+            fprintf(stderr, "geistr: no service on %s (geistr serve <model>)\n", remote);
+            return ERROR;
+        }
+        service_field(info, "model", x.name, sizeof x.name);
+        service_field(info, "backend", x.backend, sizeof x.backend);
+        service_field(info, "chat_format", x.format, sizeof x.format);
+        service_field(info, "context", context, sizeof context);
+        x.context     = (uint32_t) strtoul(context, nullptr, 10);
+        x.temperature = cfg.temperature;
+    } else {
+        int rc = session_open(&x, name, processor, cfg.temperature, true);
+        if (rc != OK)
+            return rc;
+        if (strcmp(cfg.model, name) && config_path[0]) { /* remember the model for the next chat */
+            snprintf(cfg.model, sizeof cfg.model, "%s", name);
+            (void) config_save();
+        }
     }
     struct sigaction sa = {.sa_handler = on_interrupt};
     sigaction(SIGINT, &sa, nullptr); /* no SA_RESTART: Ctrl-C at the prompt ends fgets */
@@ -856,6 +896,10 @@ static int chat(const char *name, const char *processor) {
                                                                  : nullptr;
             if (!strcmp(line, "/exit") || !strcmp(line, "/quit"))
                 break;
+            if (remote && (processor_now || !strcmp(line, "/model"))) {
+                puts("the service has its model: geistr serve <model> [--cpu | --gpu]");
+                continue;
+            }
             if (processor_now || (!strcmp(line, "/model") && *arg)) {
                 /* Open the new session first: a failure keeps the current one. */
                 struct session next;
@@ -876,8 +920,12 @@ static int chat(const char *name, const char *processor) {
                     puts("/temp 0 … 2");
                     continue;
                 }
-                geistr_chat_close(x.chat); /* sampling is a chat option: a new chat, same model */
                 x.temperature = t;
+                if (remote) {
+                    printf("temperature %g\n", t);
+                    continue;
+                }
+                geistr_chat_close(x.chat); /* sampling is a chat option: a new chat, same model */
                 geistr_reasoning reasoning;
                 char             path[4200];
                 if (resolve(x.name, path, sizeof path, &reasoning) != OK || !session_chat(&x, reasoning, true))
@@ -903,7 +951,7 @@ static int chat(const char *name, const char *processor) {
                     memmove(said.content + 1, said.content, (said.n - 1) * sizeof *said.content);
                     said.role[0] = r, said.content[0] = c;
                 }
-                if (said.n) { /* the chat holds the old one: read the conversation anew */
+                if (said.n && !remote) { /* the chat holds the old one: read the conversation anew */
                     geistr_chat_close(x.chat);
                     geistr_reasoning reasoning;
                     char             path[4200];
@@ -914,12 +962,14 @@ static int chat(const char *name, const char *processor) {
                 }
                 puts(system[0] ? "system prompt set" : "no system prompt");
             } else if (!strcmp(line, "/info")) {
-                status_line(&x, "");
+                status_line(&x, remote ? " · service" : "");
                 printf("chat format %s · context %u · temperature %g%s%s\n", x.format, x.context, x.temperature,
                        system[0] ? " · system: " : "", system);
             } else if (!strcmp(line, "/save")) {
-                snprintf(cfg.model, sizeof cfg.model, "%s", x.name);
-                snprintf(cfg.processor, sizeof cfg.processor, "%s", x.processor);
+                if (!remote) { /* a service's model is not this chat's choice */
+                    snprintf(cfg.model, sizeof cfg.model, "%s", x.name);
+                    snprintf(cfg.processor, sizeof cfg.processor, "%s", x.processor);
+                }
                 snprintf(cfg.system, sizeof cfg.system, "%s", system);
                 cfg.temperature = x.temperature;
                 puts(config_path[0] && config_save() ? "saved for the next chat" : "cannot save the settings");
@@ -931,12 +981,13 @@ static int chat(const char *name, const char *processor) {
                 chat_help();
             continue;
         }
-        /* Normally only the new message; after a switch, the conversation once. */
+        /* Normally only the new message; after a switch, the conversation once.
+         * A service always gets the whole conversation (it finds what it holds). */
         size_t before = said.n;
         if (!said.n && system[0])
             transcript_push(&said, "system", system);
         transcript_push(&said, "user", line);
-        size_t          from  = carry ? 0 : before;
+        size_t          from  = carry || remote ? 0 : before;
         size_t          count = said.n - from;
         geistr_message *turn  = calloc(count, sizeof *turn);
         if (!turn)
@@ -949,7 +1000,15 @@ static int chat(const char *name, const char *processor) {
         view_begin();
         if (edit)
             watch_start(&editor);
-        geistr_status s = geistr_chat_run(x.chat, count, turn, print_piece, nullptr);
+        struct svc_stats rs = {};
+        char             why[512];
+        geistr_status    s;
+        if (remote) {
+            static_assert(sizeof(struct svc_message) == sizeof(geistr_message));
+            s = service_chat(remote, count, (const struct svc_message *) turn, 0, x.temperature, remote_part,
+                             remote_cancel, nullptr, &rs, why, sizeof why);
+        } else
+            s = geistr_chat_run(x.chat, count, turn, print_piece, nullptr);
         if (edit)
             watch_stop();
         md_finish(&view);
@@ -958,12 +1017,14 @@ static int chat(const char *name, const char *processor) {
         if (s == GEISTR_OK || s == GEISTR_CANCELLED) {
             carry = false;
             transcript_push(&said, "assistant", answer ? answer : "");
-            if (s == GEISTR_OK)
+            if (s == GEISTR_OK && remote)
+                speed_line(rs.output_tokens, rs.generation_ms, rs.total_ms, stdout);
+            else if (s == GEISTR_OK)
                 speed(x.chat, stdout);
         } else {
             said.n--; /* not part of the conversation: the chat refused it */
             free(said.role[said.n]), free(said.content[said.n]);
-            fprintf(stderr, "geistr: %s: %s\n", geistr_status_text(s), geistr_chat_error(x.chat));
+            fprintf(stderr, "geistr: %s: %s\n", geistr_status_text(s), remote ? why : geistr_chat_error(x.chat));
         }
     }
     if (edit)
@@ -975,6 +1036,36 @@ static int chat(const char *name, const char *processor) {
     transcript_clear(&said);
     free(said.role), free(said.content), free(answer);
     return OK;
+}
+
+static volatile sig_atomic_t stopping;
+
+static void on_stop(int signal) {
+    (void) signal;
+    stopping = 1;
+}
+
+static int serve(const char *name, const char *processor, const char *socket, size_t chats) {
+    /* Idle OpenMP workers on the CPU spin forever otherwise (geistlib #651);
+     * set before the engine starts its threads. */
+    setenv("KMP_BLOCKTIME", "200", 0);
+    struct session x;
+    geistr_reasoning reasoning;
+    char             path[4200];
+    int              rc = resolve(name, path, sizeof path, &reasoning);
+    if (rc == OK)
+        rc = session_open(&x, name, processor, 0, true);
+    if (rc != OK)
+        return rc;
+    geistr_chat_close(x.chat); /* the service opens its own */
+    struct sigaction sa = {.sa_handler = on_stop};
+    sigaction(SIGINT, &sa, nullptr);
+    sigaction(SIGTERM, &sa, nullptr);
+    struct svc_options o = {.model = x.model, .reasoning = reasoning, .name = x.name, .socket = socket,
+                            .chats = chats, .stop = &stopping};
+    rc = service_run(&o) ? ERROR : OK;
+    geistr_model_close(x.model);
+    return rc;
 }
 
 static int pull(const char *id) {
@@ -1000,7 +1091,8 @@ int main(int argc, char **argv) {
     const char *args[64];
     int         n = 0;
     bool        installed = false, available = false, json = false;
-    const char *processor = nullptr;
+    const char *processor = nullptr, *socket = nullptr;
+    long        chats = 2;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--models") && i + 1 < argc)
             models_dir = argv[++i];
@@ -1012,7 +1104,14 @@ int main(int argc, char **argv) {
             available = true;
         else if (!strcmp(argv[i], "--json"))
             json = true;
-        else if (!strcmp(argv[i], "--cpu") || !strcmp(argv[i], "--gpu"))
+        else if (!strcmp(argv[i], "--socket") || !strncmp(argv[i], "--socket=", 9))
+            socket = argv[i][8] ? argv[i] + 9 : "";
+        else if (!strcmp(argv[i], "--chats") && i + 1 < argc) {
+            char *end;
+            chats = strtol(argv[++i], &end, 10);
+            if (*end || chats < 1 || chats > 64)
+                return usage();
+        } else if (!strcmp(argv[i], "--cpu") || !strcmp(argv[i], "--gpu"))
             processor = argv[i] + 2;
         else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h"))
             return usage(), OK;
@@ -1041,6 +1140,23 @@ int main(int argc, char **argv) {
         return catalog(installed, available, json);
     if (installed || available || json)
         return usage();
+    static char socket_path[4300];
+    if (!socket && !strcmp(command, "serve"))
+        socket = "";
+    if (socket && !*socket) {
+        if (!data_dir[0]) {
+            fputs("geistr: no data folder for the socket: use --socket=PATH\n", stderr);
+            return ERROR;
+        }
+        snprintf(socket_path, sizeof socket_path, "%s/geistr.sock", data_dir);
+        socket = socket_path;
+    }
+    if (!strcmp(command, "serve") && n == 2)
+        return serve(args[1], processor, socket, (size_t) chats);
+    if (!strcmp(command, "chat") && socket) {
+        remote = socket;
+        return n == 1 ? chat("", processor) : usage();
+    }
     if (!strcmp(command, "chat") && n == 1) { /* the last model, else the geisten app's */
         static char selected[256];
         char        file[4300];
