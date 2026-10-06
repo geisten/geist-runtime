@@ -49,12 +49,14 @@ def listing():
     # schema 1: the fields scripts rely on, with their types
     assert set(doc) == {'schema', 'models_dir', 'models'} and doc['schema'] == 1 and doc['models_dir'] == models
     types = {'id': str, 'name': str, 'quantization': (str, type(None)), 'file': str, 'url': str, 'sha256': str,
-             'bytes': int, 'recommended_ram_gib': int, 'state': str, 'resource': str, 'resource_reason': str}
+             'bytes': int, 'recommended_ram_gib': int, 'state': str, 'resource': str, 'resource_reason': str,
+             'tokens_per_s': dict}
     for m in doc['models']:
         assert set(m) == set(types), m
         assert all(isinstance(m[k], t) for k, t in types.items()), m
         assert m['state'] in ('available', 'unverified', 'installed', 'mismatch')
         assert m['resource'] in ('fits', 'limited', 'unavailable')
+        assert set(m['tokens_per_s']) == {'cpu', 'gpu'} and all(v is None or v > 0 for v in m['tokens_per_s'].values())
     return {m['id']: m for m in doc['models']}
 
 # ---- catalog: available → installed (verified) → mismatch ----------------------
@@ -202,7 +204,7 @@ def terminal_chat(message, *flags):
     seen = until(fd, 'Ctrl-C twice exits')
     time.sleep(.3)
     os.write(fd, message.encode() + b'\r')
-    seen += until(fd, 'tok/s')
+    seen += until(fd, 'tok/s', 180)  # a whole answer: slow on a busy machine
     os.write(fd, b'\x03'); until(fd, 'Ctrl-C again to exit')   # right after the answer: still counts
     os.write(fd, b'\x03')
     deadline, status, tail = time.time() + 30, None, b''
@@ -293,6 +295,24 @@ assert service.wait(30) == 0 and not os.path.exists(sock)
 r = geistr_run('chat', '--socket=' + sock)
 assert r.returncode == 1 and 'no service' in r.stderr, r.stderr
 print('geistr serve / chat --socket: protocol, 0600 socket, cache hit, rewind, two clients, disconnect, context, SIGTERM passed')
+
+# ---- bench and the speed chart --------------------------------------------------
+speeds = os.path.join(tmp, 'home', 'speed.tsv')
+before = open(speeds).read().count('\n') if os.path.exists(speeds) else 0  # chats above recorded theirs
+r = geistr_run('bench', 'ref')
+assert r.returncode == 0 and 'tok/s' in r.stdout and 'ref' in r.stdout, (r.stdout, r.stderr)
+rows = [l.split('\t') for l in open(speeds).read().splitlines()]
+assert len(rows) > before and rows[-1][0] == 'ref' and rows[-1][1] in ('cpu', 'gpu') and float(rows[-1][2]) > 0, rows
+engine = rows[-1][5]
+assert len(engine) == 40 and rows[-1][6] == 'bench', rows[-1]  # the geistlib commit, the source
+assert all(r[6] == 'answer' for r in rows[:before]), rows[:before]  # chats and runs above
+with open(speeds, 'a') as f:  # a model recorded by path counts for its catalog entry
+    f.write(f'{model_path}\tcpu\t1000.0\t0.1\t0\t{engine}\n' * 11)
+    f.write(f'ref\tcpu\t5.0\t0.1\t0\tanother-engine\n' * 11)  # not this engine's: ignored
+measured = listing()['ref']['tokens_per_s']
+assert measured['cpu'] == 1000.0, measured  # the median of the last ten with this engine
+assert listing()['tiny']['tokens_per_s'] == {'cpu': None, 'gpu': None}
+print('geistr bench / catalog speeds: recorded per answer with the engine, median of the last ten, by id or path passed')
 
 # ---- pull -------------------------------------------------------------------
 r = geistr_run('pull', 'tiny', binary=nonet)
