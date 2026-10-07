@@ -198,7 +198,7 @@ geistr`); there is no separate catalog download. After an update `geistr
 catalog` marks installed models whose file the new catalog replaced with ⟳,
 and `geistr pull` downloads them again (the old file stays until the new one
 is complete and verified). `geistr --version` names all three:
-`geistr 0.1.1 · catalog revision 9 · engine b682ef8`.
+`geistr 0.1.2 · catalog revision 9 · engine b682ef8`.
 
 ### As a service
 
