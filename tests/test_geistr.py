@@ -115,6 +115,11 @@ def section_run():
     r = geistr_run('run', model_path, input='What is the capital of France? Answer in one word.')
     assert r.returncode == 0 and 'Paris' in r.stdout, (r.stdout, r.stderr)
 
+    # with a temperature, each run samples anew (geistlib's seed 0 is one fixed seed)
+    assert geistr_run('config', 'temperature', '1.5').returncode == 0
+    runs = {geistr_run('run', 'ref', 'Write one sentence about the sea.').stdout for _ in range(2)}
+    assert len(runs) == 2, runs
+    assert geistr_run('config', 'temperature', '0').returncode == 0
     # ---- Ctrl-C: run ends with 130, chat stops the answer and goes on ----------------
     p = subprocess.Popen([geistr, 'run', 'ref', 'Write a very long story about a lighthouse keeper, at least 3000 words.', *base],
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
@@ -354,6 +359,17 @@ def section_http():
     done = [json.loads(l) for l in s.makefile(encoding='utf-8')][-1]
     s.close()
     assert done.get('done') and done['input_tokens'] < done['context_tokens'] - done['output_tokens'], done
+    # a conversation full of the model's own loops: the next answer loops too, and the runtime ends it
+    loop = '"Hello, I\'m here to help you with your questions and ideas. I\'m here to listen and provide guidance. ' + \
+           "I'm here to help you with your questions and ideas. " * 30
+    poisoned = [m for _ in range(7) for m in ({'role': 'user', 'content': 'Say hello in five words.'},
+                                              {'role': 'assistant', 'content': loop})]
+    s = unix.socket(unix.AF_UNIX); s.connect(sock)
+    s.sendall((json.dumps({'op': 'chat', 'messages': poisoned + [{'role': 'user', 'content': 'Say hello in five words'}],
+                           'max': 300, 'temperature': 0}) + '\n').encode())
+    done = [json.loads(l) for l in s.makefile(encoding='utf-8')][-1]
+    s.close()
+    assert done.get('finish') != 'length' and done['output_tokens'] < 300, done  # ended by the guard (or the model)
     # OpenAI stream: role first, content, the finish, usage, [DONE]; max_tokens → length
     status, kind, body = call('POST', '/v1/chat/completions', {'messages': [{'role': 'user', 'content': 'Count to ten.'}],
                               'stream': True, 'max_tokens': 3, 'temperature': 0, 'stream_options': {'include_usage': True}})

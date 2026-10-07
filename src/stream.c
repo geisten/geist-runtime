@@ -242,3 +242,31 @@ bool str_stops_finish(struct str_stops *s, str_emit_fn emit, void *ctx) {
     s->held_len = 0;
     return ok;
 }
+
+/* Each of the last span tokens equals the one p before it. */
+static bool periodic(const int32_t *t, size_t n, size_t p, size_t span) {
+    size_t i = 0;
+    while (i < span && t[n - 1 - i] == t[n - 1 - i - p])
+        i++;
+    return i == span;
+}
+
+bool str_repeats(const int32_t *t, size_t n) {
+    enum { MIN_PERIOD = 4, MAX_PERIOD = 256, MIN_TIMES = 3, MIN_TOKENS = 48 };
+    for (size_t p = MIN_PERIOD; p <= MAX_PERIOD; p++) {
+        size_t times = (MIN_TOKENS + p - 1) / p;
+        times        = times < MIN_TIMES ? MIN_TIMES : times;
+        if (times * p > n)
+            break;
+        size_t span = (times - 1) * p;
+        if (!periodic(t, n, p, span))
+            continue;
+        /* A run of 1 to 3 tokens again and again (64 zeros, "| 0 |" cells, a
+         * rule of =====) is a unit of data, not a loop: not counted. */
+        bool short_unit = false;
+        for (size_t d = 1; d < MIN_PERIOD && !short_unit; d++)
+            short_unit = periodic(t, n, d, span + p - d);
+        return !short_unit;
+    }
+    return false;
+}

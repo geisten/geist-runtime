@@ -222,6 +222,48 @@ int main(void) {
         assert(str_output_feed(&q, "</think>fin", emit_answer, &big));
         assert(big.thought_n == sent && big.boundaries && big.chunks > 1000 && !strcmp(big.answer.text, "fin"));
     }
-    puts("stream: UTF-8, output protocol (all splits, literal Markdown, Unicode, EOF, 6 MB bounded discard, thinking), stop strings passed");
+    { /* repetition: a cycle of 4..256 tokens, 3 times and 48 tokens at least, at the end */
+        static int32_t t[2048];
+        size_t         n = 0;
+        for (int32_t k = 0; k < 20; k++) /* an opening that does not repeat */
+            t[n++] = 1000 + k;
+        for (int r = 0; r < 3; r++) /* a 12-token sentence, 3 times: 36 tokens, not yet */
+            for (int32_t k = 0; k < 12; k++)
+                t[n++] = k;
+        assert(!str_repeats(t, n));
+        for (int32_t k = 0; k < 12; k++) /* the 4th time: 48 tokens */
+            t[n++] = k;
+        assert(str_repeats(t, n));
+        t[n++] = 99; /* it moved on: not at the end any more */
+        assert(!str_repeats(t, n));
+        n = 0;
+        for (int r = 0; r < 11; r++) /* period 4: 12 times needed, 11 is not */
+            for (int32_t k = 0; k < 4; k++)
+                t[n++] = k;
+        assert(!str_repeats(t, n));
+        for (int32_t k = 0; k < 4; k++)
+            t[n++] = k;
+        assert(str_repeats(t, n));
+        n = 0;
+        for (int r = 0; r < 40; r++) /* period 3 ("| 0 |" cells) never counts */
+            for (int32_t k = 0; k < 3; k++)
+                t[n++] = k;
+        assert(!str_repeats(t, n));
+        n = 0;
+        for (int r = 0; r < 3; r++) /* period 300: longer than 256, not watched */
+            for (int32_t k = 0; k < 300; k++)
+                t[n++] = k;
+        assert(!str_repeats(t, n));
+        for (n = 0; n < 200; n++) /* 200 equal tokens (a rule of =====) and "0, 0, 0, …": data */
+            t[n] = 7;
+        assert(!str_repeats(t, n));
+        for (n = 0; n < 200; n++)
+            t[n] = n % 2 ? 44 : 15;
+        assert(!str_repeats(t, n));
+        for (n = 0; n < 1000; n++) /* no repeat at all */
+            t[n] = (int32_t) n;
+        assert(!str_repeats(t, n) && !str_repeats(t, 0));
+    }
+    puts("stream: UTF-8, output protocol (all splits, literal Markdown, Unicode, EOF, 6 MB bounded discard, thinking), stop strings, repetition passed");
     return 0;
 }

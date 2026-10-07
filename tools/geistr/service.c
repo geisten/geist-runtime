@@ -157,8 +157,8 @@ static size_t common(const struct held *c, const geistr_message *m, size_t n) {
 }
 
 const char *svc_finish(geistr_finish finish) {
-    static const char *const names[] = {"none", "stop", "length", "context", "cancelled", "error"};
-    return finish <= GEISTR_FINISH_ERROR ? names[finish] : "error";
+    static const char *const names[] = {"none", "stop", "length", "context", "cancelled", "error", "repetition"};
+    return finish < sizeof names / sizeof *names ? names[finish] : "error";
 }
 
 void svc_free_request(struct svc_request *r) {
