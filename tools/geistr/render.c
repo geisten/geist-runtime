@@ -1166,7 +1166,8 @@ static void word_flush(struct md *m) {
             const char *v = m->word;
             while (*v == '\033') /* past the style */
                 v = strchr(v, 'm') ? strchr(v, 'm') + 1 : v + 1;
-            m->hang = m->say_hang ? m->say_hang : w <= 2 && !isalnum((unsigned char) *v) ? m->col + 1 : m->lead;
+            bool symbol = (unsigned char) *v >= 0x80 || !isalnum((unsigned char) *v); /* bytes, not the locale's */
+            m->hang     = m->say_hang ? m->say_hang : w <= 2 && symbol ? m->col + 1 : m->lead;
         }
         m->head            = false;
     }
