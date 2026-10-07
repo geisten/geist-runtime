@@ -143,20 +143,23 @@ void conv_resume(struct conversation *c) {
     snprintf(dir, sizeof dir, "%s/chats", data_dir);
     DIR   *d      = opendir(dir);
     time_t newest = 0;
-    for (struct dirent *e; d && (e = readdir(d));) {
+    for (struct dirent *e; d && (e = readdir(d));) { /* names too long for best are not ours */
         size_t      n = strlen(e->d_name);
         struct stat st;
         char        path[4500];
-        snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
-        if (n > 6 && !strcmp(e->d_name + n - 6, ".jsonl") && n < sizeof best && stat(path, &st) == 0 &&
-            (st.st_mtime > newest || (st.st_mtime == newest && strcmp(e->d_name, best) > 0)))
-            newest = st.st_mtime, snprintf(best, sizeof best, "%s", e->d_name);
+        if (n <= 6 || n >= sizeof best || strcmp(e->d_name + n - 6, ".jsonl") ||
+            snprintf(path, sizeof path, "%s/%s", dir, e->d_name) >= (int) sizeof path || stat(path, &st) != 0)
+            continue;
+        if (st.st_mtime > newest || (st.st_mtime == newest && strcmp(e->d_name, best) > 0))
+            newest = st.st_mtime, memcpy(best, e->d_name, n + 1);
     }
     if (d)
         closedir(d);
-    if (!best[0])
+    if (!best[0] || snprintf(c->resumed_from, sizeof c->resumed_from, "%s/%s", dir, best) >=
+                        (int) sizeof c->resumed_from) { /* none, or a path too long to open */
+        c->resumed_from[0] = 0;
         return;
-    snprintf(c->resumed_from, sizeof c->resumed_from, "%s/%s", dir, best);
+    }
     FILE  *f    = fopen(c->resumed_from, "r");
     char  *line = nullptr;
     size_t cap  = 0;
