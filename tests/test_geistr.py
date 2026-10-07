@@ -303,6 +303,23 @@ def section_resume():
     assert b'context 0 of 512 tokens (0 %)' in out, out[-300:]
     finish_chat(pid, fd)
 
+    # /retry: the last answer again (at temperature 0 once at 0.7), the old one gone; /copy via OSC 52
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execve(geistr, [geistr, 'chat', 'ref', '--new', *base], {**env, 'TERM': 'xterm', 'TERM_PROGRAM': 'iTerm.app'})
+    until(fd, 'Ctrl-C twice exits'); time.sleep(.3)
+    os.write(fd, b'Name one colour.\r'); until(fd, 'tok/s', 180); time.sleep(.5)
+    os.write(fd, b'/retry\r'); until(fd, 'retry at temperature 0.7'); until(fd, 'tok/s', 180); time.sleep(.5)
+    newest = max(stored(), key=lambda n: os.stat(os.path.join(chats, n)).st_mtime)
+    said = lines(newest)
+    assert [m['role'] for m in said] == ['user', 'assistant'] and said[0]['content'] == 'Name one colour.', said
+    os.write(fd, b'/copy\r'); out = until(fd, 'copied')
+    sent = re.search(rb'\x1b\]52;c;([A-Za-z0-9+/=]*)\x07', out)
+    import base64
+    assert sent and base64.b64decode(sent.group(1)).decode() == said[1]['content'], out[-300:]
+    os.write(fd, b'/copy code\r'); until(fd, 'no code block')
+    finish_chat(pid, fd)
+
     # resuming a long conversation re-reads only its newest messages (the budget)
     with open(os.path.join(chats, '9999999999999-1.jsonl'), 'w') as f:
         for i in range(40):
@@ -312,7 +329,7 @@ def section_resume():
     out = terminal_chat('Say OK.')
     assert '↻ 80 · ' in out and 'resumes the last' in out, out[-400:]
     assert time.time() - started < 60, time.time() - started
-    print('geistr chat: continues the last conversation in a terminal, --new, private files, input history, context meter, drop notice, resume budget, piped chats keep nothing passed')
+    print('geistr chat: continues the last conversation in a terminal, --new, private files, input history, context meter, drop notice, resume budget, /retry, /copy, piped chats keep nothing passed')
 
 # ---- serve and chat --socket --------------------------------------------------
 def section_serve():

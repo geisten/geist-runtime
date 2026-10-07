@@ -77,6 +77,12 @@ size_t conv_say(struct conversation *c, const char *text, bool whole);
 size_t conv_budget(const struct conversation *c, size_t bytes);
 void   conv_answered(struct conversation *c, const char *answer); /* also stores it */
 void   conv_refused(struct conversation *c);                      /* the chat refused the last message */
+/* /retry: the last answer and its question leave; the question into out.
+ * false when the conversation does not end in an answer. */
+bool conv_retract(struct conversation *c, char *out, size_t cap);
+/* The last answer (Markdown), or nullptr; with code, its last fenced code
+ * block's content (*len bytes, without the fences), or nullptr if none. */
+const char *conv_last_answer(const struct conversation *c, bool code, size_t *len);
 /* The last question and its first 60 characters' bytes, for "↻ … „…“". */
 const char *conv_last_question(const struct conversation *c, int *bytes);
 void        conv_file_new(struct conversation *c);
