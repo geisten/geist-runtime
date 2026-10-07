@@ -373,7 +373,7 @@ def section_http():
                            'stream': False, 'options': {'temperature': 0, 'num_predict': 4}})  # longer than 4 tokens: length
     one = json.loads(body)
     assert status == 200 and one['done'] and one['message']['content'] and one['done_reason'] == 'length', body
-    status, kind, body = call('POST', '/api/chat', {'messages': [{'role': 'user', 'content': 'Say hi.'}],
+    status, kind, body = call('POST', '/api/chat', {'messages': [{'role': 'user', 'content': 'Count from 1 to 50 with commas.'}],
                               'options': {'num_predict': 3}})
     lines = [json.loads(l) for l in body.splitlines()]
     assert kind == 'application/x-ndjson' and not lines[0]['done'] and lines[-1]['done'] and lines[-1]['eval_count'] == 3, body
