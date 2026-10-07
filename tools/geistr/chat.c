@@ -298,6 +298,10 @@ int session_open(struct session *x, const char *name, const char *processor, dou
     mo.processor         = !strcmp(processor, "cpu")   ? GEISTR_PROCESSOR_CPU
                            : !strcmp(processor, "gpu") ? GEISTR_PROCESSOR_GPU
                                                        : GEISTR_PROCESSOR_AUTO;
+#ifdef GEISTR_TESTING
+    if (getenv("GEISTR_TEST_CONTEXT")) /* a small window: the tests fill it quickly */
+        mo.context = (uint32_t) strtoul(getenv("GEISTR_TEST_CONTEXT"), nullptr, 10);
+#endif
     char error[256];
     *x = (struct session) {.temperature = temperature, .reasoning = reasoning};
     spinner_start(name, path);
@@ -455,6 +459,27 @@ static void usage(const char *text) {
     printf("%s%s%s\n", dim(faint), text, normal(faint));
 }
 
+/* How full the context is after the last answer, in percent. */
+static unsigned fill(const struct session *x) {
+    return x->context ? (unsigned) ((uint64_t) x->used * 100 / x->context) : 0;
+}
+
+/* The prompt: the processor, and from 50 % how full the context is (yellow
+ * from 80, red from 95). */
+static void prompt_text(const struct session *x, char *out, size_t cap) {
+    const char *symbol = on_gpu(x) ? "⚡" : "⚙";
+    unsigned    pct    = fill(x);
+    if (!tty_out()) {
+        pct >= 50 ? snprintf(out, cap, "%s %u%% > ", symbol, pct) : snprintf(out, cap, "%s > ", symbol);
+        return;
+    }
+    const char *color = pct >= 95 ? "\033[31m" : pct >= 80 ? "\033[33m" : "\033[2m";
+    if (pct >= 50)
+        snprintf(out, cap, "\033[2m%s\033[0m %s%u%%\033[0m > ", symbol, color, pct);
+    else
+        snprintf(out, cap, "\033[2m%s\033[0m > ", symbol);
+}
+
 static void status_line(const struct session *x, const char *what) {
     bool faint = tty_out();
     printf("%s%s %s · %s%s%s\n", dim(faint), on_gpu(x) ? "⚡" : "⚙", x->backend, x->name, what,
@@ -591,8 +616,8 @@ static int command(struct session *x, struct conversation *said, char *line, con
         puts(said->system[0] ? "system prompt set" : "no system prompt");
     } else if (!strcmp(line, "/info")) {
         status_line(x, remote ? " · service" : "");
-        printf("chat format %s · context %u · temperature %g%s%s\n", x->format, x->context, x->temperature,
-               said->system[0] ? " · system: " : "", said->system);
+        printf("chat format %s · context %u of %u tokens (%u %%) · temperature %g%s%s\n", x->format, x->used,
+               x->context, fill(x), x->temperature, said->system[0] ? " · system: " : "", said->system);
     } else if (!strcmp(line, "/save")) {
         if (!remote) { /* a service's model is not this chat's choice */
             snprintf(cfg.model, sizeof cfg.model, "%s", x->name);
@@ -605,6 +630,7 @@ static int command(struct session *x, struct conversation *said, char *line, con
         if (x->chat)
             (void) geistr_chat_rewind(x->chat, 0);
         conv_clear(said);
+        x->used = 0;
         bool faint = tty_out(); /* what goes on: the system prompt stays */
         printf("%s○ a new conversation%s%s%s\n", dim(faint), said->system[0] ? " · system: " : "",
                said->system, normal(faint));
@@ -668,8 +694,8 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
     for (;;) {
         if (!edit) /* the editor takes a Ctrl-C that came between two reads */
             interrupted = 0;
-        char prompt[64];
-        snprintf(prompt, sizeof prompt, tty_out() ? "\033[2m%s\033[0m > " : "%s > ", on_gpu(&x) ? "⚡" : "⚙");
+        char prompt[96];
+        prompt_text(&x, prompt, sizeof prompt);
         if (edit) {
             enum le_event ev = le_read(&editor, prompt);
             if (ev == LE_EOF)
@@ -733,9 +759,11 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
         md_finish(&shown.view);
         free(turn);
         puts(s == GEISTR_CANCELLED ? " [stopped]" : "");
-        geistr_stats done = {.size = sizeof done};
-        if (remote ? !strcmp(rs.finish, "repetition")
-                   : geistr_chat_stats(x.chat, &done) == GEISTR_OK && done.finish == GEISTR_FINISH_REPETITION)
+        geistr_stats done  = {.size = sizeof done};
+        bool         known = !remote && geistr_chat_stats(x.chat, &done) == GEISTR_OK;
+        if (s == GEISTR_OK || s == GEISTR_CANCELLED)
+            x.used = remote ? rs.context_tokens : known ? done.context_tokens : x.used;
+        if (remote ? !strcmp(rs.finish, "repetition") : known && done.finish == GEISTR_FINISH_REPETITION)
             printf("%s  ⟲ it repeated itself: stopped there · /clear for a fresh conversation%s\n",
                    dim(tty_out()), normal(tty_out()));
         if (s == GEISTR_OK || s == GEISTR_CANCELLED) {

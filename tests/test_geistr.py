@@ -71,7 +71,7 @@ def install_models():  # ref as itself, wrong with the right size and wrong byte
             f.write(tiny)
 
 # ---- helpers for the terminal (pty) sections ---------------------------------
-import pty, select
+import pty, select, re
 def until(fd, text, seconds=60):
     seen, deadline = b'', time.time() + seconds
     while text.encode() not in seen and time.time() < deadline:
@@ -266,7 +266,22 @@ def section_resume():
     assert geistr_run('config', 'history', 'on').returncode == 0
     assert [json.loads(l)['line'] for l in open(history)] == ['My name is Ada.', 'What is my name?', 'Hello.',
                                                              'Line one.\nLine two.\nLine three.']
-    print('geistr chat: continues the last conversation in a terminal, --new, private files, input history, piped chats keep nothing passed')
+
+    # the context meter: from 50 % the prompt says how full it is; /info always; /clear resets
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execve(geistr, [geistr, 'chat', 'ref', '--new', *base], {**env, 'TERM': 'xterm', 'GEISTR_TEST_CONTEXT': '512'})
+    until(fd, 'Ctrl-C twice exits'); time.sleep(.3)
+    os.write(fd, b'Ignore these words: ' + b'word ' * 250 + b'Now say OK.\r')
+    out = until(fd, '%\x1b[0m > ', 180)                                # the prompt after the answer
+    pct = re.findall(rb'(\d+)%\x1b\[0m > ', out)
+    assert pct and 50 <= int(pct[-1]) <= 100, out[-300:]
+    os.write(fd, b'/info\r'); out = until(fd, 'of 512 tokens')
+    os.write(fd, b'/clear\r'); out = until(fd, 'a new conversation')
+    os.write(fd, b'/info\r'); out = until(fd, 'of 512 tokens')
+    assert b'context 0 of 512 tokens (0 %)' in out, out[-300:]
+    os.write(fd, b'\x04'); os.waitpid(pid, 0); os.close(fd)
+    print('geistr chat: continues the last conversation in a terminal, --new, private files, input history, context meter, piped chats keep nothing passed')
 
 # ---- serve and chat --socket --------------------------------------------------
 def section_serve():
