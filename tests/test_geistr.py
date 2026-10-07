@@ -318,7 +318,7 @@ def section_resume():
     import base64
     assert sent and base64.b64decode(sent.group(1)).decode() == said[1]['content'], out[-300:]
     os.write(fd, b'/copy code\r'); until(fd, 'no code block')
-    os.write(fd, b'\x04'); os.waitpid(pid, 0); os.close(fd)
+    finish_chat(pid, fd)
 
     # resuming a long conversation re-reads only its newest messages (the budget)
     with open(os.path.join(chats, '9999999999999-1.jsonl'), 'w') as f:
