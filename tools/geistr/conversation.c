@@ -105,6 +105,42 @@ void conv_refused(struct conversation *c) {
         drop(c, c->n - 1);
 }
 
+bool conv_retract(struct conversation *c, char *out, size_t cap) {
+    if (c->n < 2 || strcmp(c->role[c->n - 1], "assistant") || strcmp(c->role[c->n - 2], "user"))
+        return false;
+    snprintf(out, cap, "%s", c->content[c->n - 2]);
+    drop(c, c->n - 1), drop(c, c->n - 1);
+    return true;
+}
+
+const char *conv_last_answer(const struct conversation *c, bool code, size_t *len) {
+    const char *a = c->n && !strcmp(c->role[c->n - 1], "assistant") ? c->content[c->n - 1] : nullptr;
+    if (!a || !code) {
+        *len = a ? strlen(a) : 0;
+        return a;
+    }
+    const char *body = nullptr, *end = nullptr; /* the last ``` … ``` pair, at line starts */
+    for (const char *p = a; (p = strstr(p, "```"));) {
+        bool at_line = p == a || p[-1] == '\n';
+        const char *nl = strchr(p, '\n');
+        if (!at_line) {
+            p += 3;
+            continue;
+        }
+        if (!body || end) { /* an opening fence: the code starts after its line */
+            if (!nl)
+                break;
+            body = nl + 1, end = nullptr;
+        } else /* the closing one */
+            end = p;
+        p = nl ? nl + 1 : p + 3;
+    }
+    if (body && !end) /* unclosed: up to the end */
+        end = a + strlen(a);
+    *len = body ? (size_t) (end - body) : 0;
+    return body;
+}
+
 const char *conv_last_question(const struct conversation *c, int *bytes) {
     const char *last = "";
     for (size_t i = c->n; i-- > 0 && !last[0];)

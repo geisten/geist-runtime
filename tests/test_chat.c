@@ -107,12 +107,36 @@ int main(void) {
     CHECK(conv_budget(&plain, 1) == 2 && conv_budget(&plain, 3) == 0); /* no system prompt */
     conv_free(&big), conv_free(&plain);
 
+    /* /retry takes the last exchange back; /copy finds the answer and its code */
+    struct conversation r = {};
+    char                question[64];
+    CHECK(!conv_retract(&r, question, sizeof question));
+    conv_push(&r, "user", "Code?");
+    conv_push(&r, "assistant", "Here:\n```python\nprint(1)\n```\nand\n```\nx = 2\ny = 3\n```\nDone.");
+    size_t      len;
+    const char *a = conv_last_answer(&r, false, &len);
+    CHECK(a && len == strlen(a) && !strncmp(a, "Here:", 5));
+    a = conv_last_answer(&r, true, &len);
+    CHECK(a && len == 12 && !strncmp(a, "x = 2\ny = 3\n", len)); /* the last block, without fences */
+    conv_push(&r, "user", "More?");
+    conv_push(&r, "assistant", "No code, but `inline` and a ``` mid-line.");
+    CHECK(!conv_last_answer(&r, true, &len) && len == 0);
+    conv_push(&r, "user", "Unclosed?");
+    conv_push(&r, "assistant", "```c\nint x;");
+    a = conv_last_answer(&r, true, &len);
+    CHECK(a && len == 6 && !strncmp(a, "int x;", 6)); /* stopped mid-block: up to the end */
+    CHECK(conv_retract(&r, question, sizeof question) && !strcmp(question, "Unclosed?") && r.n == 4);
+    CHECK(conv_retract(&r, question, sizeof question) && !strcmp(question, "More?") && r.n == 2);
+    conv_refused(&r); /* ends in a question now: nothing to retract */
+    CHECK(!conv_retract(&r, question, sizeof question) && r.n == 1);
+    conv_free(&r);
+
     conv_free(&c), conv_free(&next), conv_free(&empty);
     char cmd[64];
     snprintf(cmd, sizeof cmd, "rm -rf %s", tmp);
     CHECK(system(cmd) == 0);
     if (failures)
         return 1;
-    puts("chat conversation: what each send carries, system prompt, /clear, store and resume, resume budget passed");
+    puts("chat conversation: what each send carries, system prompt, /clear, store and resume, resume budget, retry and copy passed");
     return 0;
 }

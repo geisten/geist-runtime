@@ -95,6 +95,8 @@ from 80 %, red from 95 %); `/info` always shows it. Type `/` for the commands:
 /temp 0.7            sampling temperature
 /system Be brief.    system prompt (/system off removes it)
 /info                what runs now, and how full the context is
+/retry               the last answer again (at temperature 0: once at 0.7)
+/copy  /copy code    the last answer, or its last code block, to the clipboard
 /save                keep model, processor, temperature and system prompt
 /clear  /exit
 ```

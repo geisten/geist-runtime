@@ -344,6 +344,8 @@ static const struct le_candidate commands[] = {
         {"/system ", "system prompt (off: none)"},
         {"/info", "what runs now"},
         {"/save", "keep these settings for the next chat"},
+        {"/retry", "the last answer again (at temperature 0: once at 0.7)"},
+        {"/copy", "the last answer to the clipboard (/copy code: its last code block)"},
         {"/clear", "a new conversation"},
         {"/help", "the commands"},
         {"/exit", "end (or Ctrl-D)"},
@@ -552,6 +554,43 @@ static bool reopen(struct session *x, struct conversation *said) {
 enum { GO_ON, LEAVE };
 
 /* A slash command (line is changed: the argument is cut off). */
+/* text to the system clipboard: OSC 52 in a terminal known to take it (it
+ * works over SSH too), else pbcopy, wl-copy or xclip. What did it, or nullptr. */
+static const char *clipboard(const char *text, size_t len) {
+    const char *program = getenv("TERM_PROGRAM"), *term = getenv("TERM");
+    bool        osc52   = (program && (strstr(program, "iTerm") || !strcmp(program, "WezTerm") ||
+                                     !strcmp(program, "ghostty"))) ||
+                   getenv("KITTY_WINDOW_ID") || getenv("WT_SESSION") || getenv("TMUX") ||
+                   (term && (strstr(term, "kitty") || strstr(term, "alacritty") || strstr(term, "foot")));
+    if (osc52 && isatty(STDOUT_FILENO)) {
+        static const char b64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        fputs("\033]52;c;", stdout);
+        for (size_t i = 0; i < len; i += 3) {
+            unsigned v = (unsigned char) text[i] << 16 | (i + 1 < len ? (unsigned char) text[i + 1] << 8 : 0) |
+                         (i + 2 < len ? (unsigned char) text[i + 2] : 0);
+            putchar(b64[v >> 18 & 63]), putchar(b64[v >> 12 & 63]);
+            putchar(i + 1 < len ? b64[v >> 6 & 63] : '='), putchar(i + 2 < len ? b64[v & 63] : '=');
+        }
+        fputs("\a", stdout);
+        fflush(stdout);
+        return "OSC 52";
+    }
+    static const struct {
+        const char *command, *needs; /* needs: an environment variable that must be set */
+    } tools[] = {{"pbcopy", nullptr}, {"wl-copy", "WAYLAND_DISPLAY"}, {"xclip -selection clipboard", "DISPLAY"}};
+    for (size_t i = 0; i < sizeof tools / sizeof *tools; i++) {
+        char command[96];
+        snprintf(command, sizeof command, "%s 2>/dev/null", tools[i].command);
+        FILE *p = tools[i].needs && !getenv(tools[i].needs) ? nullptr : popen(command, "w");
+        if (!p)
+            continue;
+        bool written = fwrite(text, 1, len, p) == len;
+        if (pclose(p) == 0 && written) /* a missing tool exits 127 */
+            return tools[i].command;
+    }
+    return nullptr;
+}
+
 static int command(struct session *x, struct conversation *said, char *line, const char *remote) {
     char *arg = strchr(line, ' ');
     if (arg)
@@ -627,6 +666,19 @@ static int command(struct session *x, struct conversation *said, char *line, con
         status_line(x, remote ? " · service" : "");
         printf("chat format %s · context %u of %u tokens (%u %%) · temperature %g%s%s\n", x->format, x->used,
                x->context, fill(x), x->temperature, said->system[0] ? " · system: " : "", said->system);
+    } else if (!strcmp(line, "/copy")) {
+        size_t      len;
+        bool        code = !strcmp(arg, "code");
+        const char *text = conv_last_answer(said, code, &len);
+        if (!text) {
+            usage(code ? "/copy code: the last answer has no code block" : "/copy: no answer yet");
+            return GO_ON;
+        }
+        const char *how = clipboard(text, len);
+        if (how)
+            printf("%s⧉ copied %.1f kB%s%s\n", dim(tty_out()), (double) len / 1000, code ? " of code" : "", normal(tty_out()));
+        else
+            puts("/copy: no clipboard here (a terminal with OSC 52, or pbcopy, wl-copy, xclip)");
     } else if (!strcmp(line, "/save")) {
         if (!remote) { /* a service's model is not this chat's choice */
             snprintf(cfg.model, sizeof cfg.model, "%s", x->name);
@@ -744,7 +796,24 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
             line[strcspn(line, "\n")] = 0;
         if (!line[0])
             continue;
-        if (line[0] == '/') {
+        bool warmer = false; /* /retry at temperature 0: this one answer at 0.7 */
+        if (!strcmp(line, "/retry")) {
+            if (!conv_retract(&said, line, sizeof line)) {
+                usage("/retry: no answer to retry yet");
+                continue;
+            }
+            warmer = x.temperature == 0;
+            if (warmer) { /* a new chat samples; it reads the conversation anew */
+                x.temperature = 0.7;
+                if (!remote && !reopen(&x, &said))
+                    break;
+            } else if (!remote) { /* the same chat, back to before the question */
+                size_t length = geistr_chat_length(x.chat);
+                if (length < 2 || geistr_chat_rewind(x.chat, length - 2) != GEISTR_OK)
+                    (void) geistr_chat_rewind(x.chat, 0), said.carry = said.n > 0;
+            }
+            printf("%s↻ retry%s%s\n", dim(tty_out()), warmer ? " at temperature 0.7" : "", normal(tty_out()));
+        } else if (line[0] == '/') {
             if (command(&x, &said, line, remote) == LEAVE)
                 break;
             continue;
@@ -801,6 +870,11 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
         } else {
             conv_refused(&said); /* not part of the conversation: the chat refused it */
             report(s, remote ? why : geistr_chat_error(x.chat));
+        }
+        if (warmer) { /* back to temperature 0: a new chat, it reads the conversation anew */
+            x.temperature = 0;
+            if (!remote && !reopen(&x, &said))
+                break;
         }
     }
     if (edit) {
