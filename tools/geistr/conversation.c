@@ -79,6 +79,21 @@ size_t conv_say(struct conversation *c, const char *text, bool whole) {
     return c->carry || whole ? 0 : before;
 }
 
+size_t conv_budget(const struct conversation *c, size_t bytes) {
+    size_t first = c->n && !strcmp(c->role[0], "system") ? 1 : 0, start = c->n, used = 0;
+    for (size_t i = c->n; i-- > first;) {
+        used += strlen(c->content[i]);
+        if (strcmp(c->role[i], "user"))
+            continue;
+        if (used > bytes && start < c->n) /* this question would not fit: start after it */
+            break;
+        start = i;
+        if (used > bytes) /* the newest question goes even when it alone is too long */
+            break;
+    }
+    return start <= first || start == c->n ? 0 : start;
+}
+
 void conv_answered(struct conversation *c, const char *answer) {
     c->carry = false;
     conv_push(c, "assistant", answer ? answer : "");

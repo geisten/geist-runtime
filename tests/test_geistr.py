@@ -295,11 +295,24 @@ def section_resume():
     pct = re.findall(rb'(\d+)%\x1b\[0m > ', out)
     assert pct and 50 <= int(pct[-1]) <= 100, out[-300:]
     os.write(fd, b'/info\r'); out = until(fd, 'of 512 tokens')
+    os.write(fd, b'And these: ' + b'word ' * 250 + b'Say OK again.\r')    # no longer fits: the oldest go
+    until(fd, 'oldest message', 180)                                     # and the chat says so
+    until(fd, '%\x1b[0m > ', 60)
     os.write(fd, b'/clear\r'); out = until(fd, 'a new conversation')
     os.write(fd, b'/info\r'); out = until(fd, 'of 512 tokens')
     assert b'context 0 of 512 tokens (0 %)' in out, out[-300:]
     finish_chat(pid, fd)
-    print('geistr chat: continues the last conversation in a terminal, --new, private files, input history, context meter, piped chats keep nothing passed')
+
+    # resuming a long conversation re-reads only its newest messages (the budget)
+    with open(os.path.join(chats, '9999999999999-1.jsonl'), 'w') as f:
+        for i in range(40):
+            f.write(json.dumps({'role': 'user', 'content': f'Question {i}: ' + 'tell me more ' * 15}) + '\n')
+            f.write(json.dumps({'role': 'assistant', 'content': f'Answer {i}: ' + 'here is more ' * 15}) + '\n')
+    started = time.time()
+    out = terminal_chat('Say OK.')
+    assert '↻ 80 · ' in out and 'resumes the last' in out, out[-400:]
+    assert time.time() - started < 60, time.time() - started
+    print('geistr chat: continues the last conversation in a terminal, --new, private files, input history, context meter, drop notice, resume budget, piped chats keep nothing passed')
 
 # ---- serve and chat --socket --------------------------------------------------
 def section_serve():

@@ -17,7 +17,7 @@ enum { OK = 0, ERROR = 1, USAGE = 2, CANCELLED = 130 }; /* exit codes */
 
 struct settings {
     char   model[256], processor[8], system[2048];
-    double temperature;
+    double temperature, resume_tokens; /* resume_tokens: what a resumed conversation re-reads at most */
     bool   markdown, stats, intro, resume, history;
 };
 extern struct settings cfg;
@@ -71,6 +71,10 @@ bool conv_system(struct conversation *c, const char *text);
 /* The user said text: where the next send starts (0 = all of it; whole for a
  * service, which finds what it holds). */
 size_t conv_say(struct conversation *c, const char *text, bool whole);
+/* Sending it all again (resumed, another model): where to start so the newest
+ * messages fit about `bytes` — at a user message, the newest question always;
+ * the system prompt goes besides. 0 when everything fits. */
+size_t conv_budget(const struct conversation *c, size_t bytes);
 void   conv_answered(struct conversation *c, const char *answer); /* also stores it */
 void   conv_refused(struct conversation *c);                      /* the chat refused the last message */
 /* The last question and its first 60 characters' bytes, for "↻ … „…“". */

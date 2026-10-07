@@ -125,6 +125,12 @@ again. It is also private by design: each conversation is a plain file on
 your computer (readable only by you, one JSON message per line), never sent
 anywhere.
 
+A long conversation stays fast to resume: the model re-reads only the
+newest part (about 2000 tokens, `geistr config resume_tokens`), and the
+`↻` line says how much. The whole conversation stays in the file. When a
+conversation outgrows the model's context, the oldest messages are left
+out, and the chat says so (`↥ 12 oldest messages left out …`).
+
 - `/clear` starts a new conversation and keeps the old file.
 - `geistr chat --new` starts fresh once; `geistr config resume off` always.
 - Piped chats (`echo … | geistr chat`) keep nothing, so scripts stay reproducible.
