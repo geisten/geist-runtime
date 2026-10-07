@@ -48,8 +48,12 @@ curl -fsSL …/install.sh | PREFIX=~/.local GEISTR_VERSION=v0.1.0 sh   # without
 
 It downloads `geistr-<os>-<arch>.tar.gz`, checks it against the release's
 `SHA256SUMS` and installs `geistr` to `$PREFIX/bin` (default `/usr/local`).
-The Linux binaries are fully static (musl, with libcurl, OpenSSL and
-libgomp): no libc dependency, they run on any distribution. Releases are
+The Linux binaries are fully static (musl, with a minimal libcurl, OpenSSL
+and libgomp): no libc dependency, they run on any distribution. They need
+x86-64-v3 (AVX2, FMA: Intel since 2013, AMD since 2015) or ARMv8.2 with
+dotprod (Raspberry Pi 5, AWS Graviton 2 and newer); on an older CPU geistr
+says so and exits. The archives carry `THIRD_PARTY_LICENSES`: every
+component in the binary and its license. Releases are
 built by `.github/workflows/release.yml` (a `vX.Y.Z` tag makes a draft
 release; publishing is a maintainer's step).
 
