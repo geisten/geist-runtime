@@ -39,7 +39,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: deps (linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update -q && sudo apt-get install -y -q gcc-14 g++-14 clang-18
+        timeout-minutes: 12
+        run: sh scripts/apt-need.sh gcc-14 g++-14 clang-18
       - name: build and test
         run: mkdir -p build/logs && make test 2>&1 | tee build/logs/test.log
       - name: sanitizers (ASan, UBSan; leaks on Linux)
@@ -74,7 +75,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: deps (linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update -q && sudo apt-get install -y -q gcc-14 libcurl4-openssl-dev
+        timeout-minutes: 12
+        run: sh scripts/apt-need.sh gcc-14 curl-config:libcurl4-openssl-dev
       - name: deps (macos)
         if: runner.os == 'macOS'
         run: brew install libomp
