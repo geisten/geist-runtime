@@ -194,6 +194,7 @@ static void watch_start(struct le *editor) {
         return;
     struct termios raw = keys_watch.cooked;
     raw.c_lflag &= (tcflag_t) ~(ECHO | ICANON); /* Ctrl-C is a key here too (keys_only) */
+    raw.c_iflag &= (tcflag_t) ~ICRNL;           /* Enter stays \r: \n is Ctrl-J, a new line */
     raw.c_cc[VMIN]  = 1;
     raw.c_cc[VTIME] = 0;
     tcsetattr(STDIN_FILENO, TCSANOW, &raw);
@@ -241,6 +242,7 @@ static void keys_only(bool on) {
     struct termios t = original_term;
     t.c_lflag &= (tcflag_t) ~(ISIG | ECHO | ICANON); /* keys typed while a command runs: not echoed in
                                                       * between, the editor shows them when it reads */
+    t.c_iflag &= (tcflag_t) ~ICRNL; /* typed ahead, Enter stays \r (sends): \n is Ctrl-J (a new line) */
     t.c_cc[VMIN]  = 1;
     t.c_cc[VTIME] = 0;
     term_changed = tcsetattr(STDIN_FILENO, TCSANOW, &t) == 0;
