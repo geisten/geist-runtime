@@ -369,8 +369,8 @@ def section_http():
                            'stop': [','], 'temperature': 0, 'max_tokens': 30})
     assert ',' not in json.loads(body)['choices'][0]['message']['content'], body
     # Ollama, one object and a stream that ends with done
-    status, _, body = call('POST', '/api/chat', {'model': 'ref', 'messages': [{'role': 'user', 'content': 'Say hi.'}],
-                           'stream': False, 'options': {'temperature': 0, 'num_predict': 4}})
+    status, _, body = call('POST', '/api/chat', {'model': 'ref', 'messages': [{'role': 'user', 'content': 'Count from 1 to 50 with commas.'}],
+                           'stream': False, 'options': {'temperature': 0, 'num_predict': 4}})  # longer than 4 tokens: length
     one = json.loads(body)
     assert status == 200 and one['done'] and one['message']['content'] and one['done_reason'] == 'length', body
     status, kind, body = call('POST', '/api/chat', {'messages': [{'role': 'user', 'content': 'Say hi.'}],
