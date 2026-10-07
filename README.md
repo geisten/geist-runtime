@@ -1,235 +1,152 @@
-# geist-runtime
+# geistr
 
-An embeddable model runner on top of [geistlib](https://github.com/geisten/geistlib):
-open a model, hold a chat, read the answer as text. Templates, streaming,
-thinking output, context limits, KV reuse and cancellation are handled here,
-behind one C API: [`include/geistr.h`](include/geistr.h).
+Run language models on your own computer: download, chat, serve. One small
+binary, no Python, no Docker, no account. The model runs locally, on the CPU
+or the GPU.
 
-Users:
-- the `geistr` CLI (#11),
-- the Python package `geistr` (#9),
-- [geist-serve](https://github.com/geisten/geist-serve) (geist-serve#148),
-- apps that embed models directly.
+![geistr chat: a list from qwen3-0.6b on the CPU, a switch to gemma4-e2b on the GPU, a table, the command menu](docs/hero.png)
 
-Status: in are the API (#1), templates (#2), streaming text (#3), the
-runtime on geistlib with context management (#4), the model catalog with
-SHA-256 verification (#5) and device fit with the model ranking (#6), both in
-[`include/geistr_catalog.h`](include/geistr_catalog.h), and the `geistr` CLI
-(#11) and the Python package `geistr` (#9). `src/stub.c` implements the API without an engine, for the fast
-conformance tests.
-
-```sh
-make core        # build/libgeistr-core.a: catalog, fit, templates, text — no engine
-make test        # conformance tests (C and C++) and the example chat, against the stub
-make sanitize    # the same under ASan + UBSan
-printf 'Hello\n' | build/chat stub:echo
-
-make runtime     # the real libgeistr.a on the pinned geistlib
-make fetch-model && make test-real   # the real runtime against SmolLM2
-make chat-real && build/chat-real model.gguf
-```
-
-- [docs/API.md](docs/API.md): usage, design decisions, thread and ABI rules,
-  and the mapping of every geist-serve use.
-- Plan: [geist-serve#149](https://github.com/geisten/geist-serve/issues/149).
-
-## geistr
-
-A minimal CLI on the runtime; the model runs in-process.
-
-### Install
-
-From a release (Linux x86_64 and arm64, macOS on Apple Silicon):
+## Install
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/geisten/geist-runtime/main/install.sh | sh
-curl -fsSL …/install.sh | PREFIX=~/.local GEISTR_VERSION=v0.1.0 sh   # without sudo, a given release
 ```
 
-It downloads `geistr-<os>-<arch>.tar.gz`, checks it against the release's
-`SHA256SUMS` and installs `geistr` to `$PREFIX/bin` (default `/usr/local`).
-The Linux binaries are fully static (musl, with a minimal libcurl, OpenSSL
-and libgomp): no libc dependency, they run on any distribution. They need
-x86-64-v3 (AVX2, FMA: Intel since 2013, AMD since 2015) or ARMv8.2 with
-dotprod (Raspberry Pi 5, AWS Graviton 2 and newer); on an older CPU geistr
-says so and exits. The archives carry `THIRD_PARTY_LICENSES`: every
-component in the binary and its license. Releases are
-built by `.github/workflows/release.yml` (a `vX.Y.Z` tag makes a draft
-release; publishing is a maintainer's step).
-
-From source:
+Or with [Homebrew](https://brew.sh):
 
 ```sh
-git clone https://github.com/geisten/geist-runtime && cd geist-runtime
-make geistr                        # fetches and builds the pinned geistlib, then build/geistr
-sudo make install                  # → /usr/local/bin/geistr
-make install PREFIX=~/.local       # or without sudo (~/.local/bin on the PATH)
-make install DESTDIR=/tmp/stage    # staged, for packaging
-make uninstall                     # the same PREFIX/DESTDIR
+brew install geisten/tap/geistr
 ```
 
-Needs a C23 compiler (clang 18+ or gcc 14+) and python3; on macOS also
-`brew install libomp`. With libcurl (`curl-config`) it gets the download
-module for `pull`, else it builds without network code (`PULL=0` forces
-that). The binary is self-contained: geistlib and, on macOS, libomp are
-linked statically; it needs only system libraries (macOS: Accelerate,
-libcurl; Linux: libc, libm, libgomp, libcurl). For a fully static Linux build (musl), as
-in the releases: `docker run --rm -v "$PWD:/src" -w /src alpine:3.21 sh
-scripts/build-static.sh` → `build/static/geistr`.
+Both work on Linux (x86_64, arm64) and macOS (Apple Silicon). The script
+downloads the latest release, checks it against `SHA256SUMS` and puts
+`geistr` in `/usr/local/bin`.
 
-### Commands
+Without sudo, or a specific release:
 
-| command | does |
-|---|---|
-| `geistr catalog [--installed \| --available] [--json]` | the models: ✓ installed (SHA-256 verified), ↓ available, ⟳ to update, ⚠/✗ fit on this computer, tokens/s on ⚙ CPU and ⚡ GPU |
-| `geistr pull <id>` | download, resume, verify |
-| `geistr pull` | update the installed models to this catalog (after a geistr update) |
-| `geistr run <model> [prompt…]` | one answer to stdout; the prompt from stdin if none |
-| `geistr chat [<model>]` | interactive (see below); without a model the last one; continues the last conversation |
-| `geistr chat --new` | a new conversation instead of the last one |
-| `geistr bench [model…]` | tokens/s on ⚙ and ⚡ with a fixed prompt (default: every installed model) |
-| `geistr bench --compare [A [B]]` | two geistlib commits' bench speeds and the change (▲/▼ %) |
-| `geistr serve <model> [--socket=PATH] [--chats N]` | the model as a service on a Unix socket |
-| `geistr chat --socket[=PATH]` | chat with that service |
-| `geistr config [key [value]]` | settings, remembered between runs |
-| `geistr --version` | geistr, catalog revision, engine commit |
+```sh
+curl -fsSL https://raw.githubusercontent.com/geisten/geist-runtime/main/install.sh | PREFIX=~/.local sh
+curl -fsSL https://raw.githubusercontent.com/geisten/geist-runtime/main/install.sh | GEISTR_VERSION=v0.1.1 sh
+```
 
-`<model>` is a catalog id or a path to a `.gguf` file. Options anywhere:
-`--cpu`/`--gpu` (the processor for this run), `--models DIR`, `--catalog FILE`.
+<details>
+<summary>Requirements</summary>
 
-In a terminal the chat shows Markdown (headings, **bold**, *italic*, `code`,
-lists, quotes, code blocks, tables: compact and aligned, wrapped to the
-terminal, one record per row when the columns cannot fit) and LaTeX math as Unicode (`$e^{i\pi}$`, `$$\frac{a}{b}$$`
-→ e^(iπ), a/b; α, ∑, ², ₁, √, ℝ …); piped output stays plain text. The prompt
-shows the processor (⚙ CPU, ⚡ GPU), and each answer ends with its speed
-(`79.4 tok/s · 4.1 s`).
+The Linux binaries are fully static and run on any distribution. The CPU
+needs x86-64-v3 (AVX2: Intel since 2013, AMD since 2015) or ARMv8.2 with
+dotprod (Raspberry Pi 5, AWS Graviton 2 and newer); on an older CPU geistr
+says so and exits. To build from source instead, see
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#build-geistr-from-source).
+</details>
 
-Every complete answer (chat, run, bench) records its speed and the geistlib
-commit in `speed.tsv` in the data folder. `geistr catalog` draws the median of
-the last ten per model and processor with this engine as bars on one scale (`⚙ 113 ██████▉  ⚡ 196 ████████████`);
-values from the catalog's reference computer are dim until measured here.
-The file is only ever appended to, so it keeps the history to compare
-geistlib versions (a line: model, cpu|gpu, tokens/s, seconds to the first
-answer, Unix time, geistlib commit, source: `bench` or `answer`). `geistr bench --compare` sets the bench rows of two engines side by side
-(default: the one measured last against the one before; or commit prefixes
-A and B), per model and processor the median of the last ten each:
+## Quick start
+
+```sh
+geistr catalog                 # which models fit this computer
+geistr pull qwen3-0.6b         # download and verify one (640 MB)
+geistr chat qwen3-0.6b         # talk to it
+```
+
+Or a single answer, for scripts:
+
+```sh
+geistr run qwen3-0.6b "Name three prime numbers."
+echo "Summarize: …" | geistr run qwen3-0.6b
+```
+
+## Models
+
+`geistr catalog` lists the models geistr knows, marks what is installed (✓),
+what is available (↓) and whether each fits your RAM (⚠/✗), with the speed
+measured here on ⚙ CPU and ⚡ GPU.
+
+| model | download | RAM |
+|---|---|---|
+| `smollm2-360m` | 0.4 GB | 2 GB |
+| `qwen3-0.6b` | 0.6 GB | 4 GB |
+| `qwen35-0.8b` | 0.8 GB | 4 GB |
+| `bitnet-2b` | 1.2 GB | 4 GB |
+| `gemma4-e2b` | 3.1 GB | 8 GB |
+| `gemma4-e4b` | 5.0 GB | 16 GB |
+| `bonsai2-27b-pq2` | 7.2 GB | 24 GB |
+| `qwen38-27b-q4` | 16 GB | 32 GB |
+| `qwen38-27b-q8` | 29 GB | 48 GB |
+
+Every download is checked against its SHA-256 and resumes where it stopped.
+Any other `.gguf` file works too: `geistr chat path/to/model.gguf`.
+
+## Chat
+
+In a terminal, `geistr chat` renders Markdown, tables and math, shows the
+speed after each answer and continues your last conversation (see below).
+Type `/` for the commands:
 
 ```
-                         5dd7e17   a1b2c3d
-⚙ smollm2-360m             112.8     130.1   ▲ 15.3 %
-⚡ smollm2-360m             195.9     191.0   ▼ 2.5 %
-```
-The measured speeds also feed the fit verdicts (`geistr_rank`).
-
-In a terminal the chat continues the last conversation: `↻ 6 · „the last
-question“ · /clear new` shows where it was, and only on its first message does
-the model read it again (with `geistr serve`, not even that). Each chat keeps
-its own file in `chats/` in the data folder (0600, one JSON message per line),
-written after every answer; `/clear` starts a new one and keeps the old.
-`geistr config resume off` keeps nothing. Piped chats neither continue nor
-keep anything, so scripts stay reproducible.
-
-In a terminal the chat starts with a two-line intro (what ⚙/⚡ mean, the
-keys; `geistr config intro off`), shows a spinner with size and time while a
-model loads, and uses Claude Code's keys:
-
-| key | does |
-|---|---|
-| `/` | a list of the commands under the line, filtered as you type; ↑↓ choose, Tab takes it to add an argument, Enter takes and runs it as it is, Esc closes; after `/model ` the installed models |
-| Esc | stops the answer (Ctrl-C too) |
-| Ctrl-C | clears the line; on an empty line twice: exit |
-| `?` | on an empty line: the shortcuts |
-| ↑↓ | earlier lines; → takes the dim hint |
-| Ctrl-A/E/U/K/W/L, Ctrl-D | as in a shell; Ctrl-D on an empty line exits |
-
-Keys typed while an answer runs are kept for the next prompt. UTF-8 aware, no
-readline or libedit dependency (`tools/geistr/lineedit.c`).
-
-Until the first word of an answer, a dim line says what the model does:
-`⠋ reading · 3 s` (the conversation) or `⠋ thinking · 9 s` (a model that
-thinks before it answers). Pasted text keeps its lines (shown as `↵`) and is
-one message.
-
-In the chat, switch while it runs; the conversation moves along (the new
-session reads it once with your next message), and a switch that fails keeps
-the current session:
-
-```
-/gpu /cpu /auto          processor (GPU: Metal on macOS, Vulkan on Linux)
-/model qwen3-0.6b        another model, same conversation (/model alone: what runs, what is installed)
-/temp 0.7                sampling temperature (/temp alone: the current one)
-/system Sei knapp.       system prompt (/system alone shows it, /system off removes it)
-/info                    what runs now: backend, model, chat format, context
-/save                    keep model, processor, temperature, system for next time
+/model gemma4-e2b    switch the model, keep the conversation
+/gpu /cpu /auto      switch the processor (Metal on macOS, Vulkan on Linux)
+/temp 0.7            sampling temperature
+/system Be brief.    system prompt (/system off removes it)
+/info                what runs now
+/save                keep model, processor, temperature and system prompt
 /clear  /exit
 ```
 
-Settings live in `geistr.conf`: on macOS in `~/Library/Application Support/geisten/`
-(next to the models), on Linux in `$XDG_CONFIG_HOME/geisten/` (`~/.config/geisten/`;
-an older one next to the models moves there once), with `GEISTEN_HOME` in that folder.
-`geistr config` shows the file:
+| key | does |
+|---|---|
+| Esc | stop the answer |
+| Ctrl-C | clear the line; twice on an empty line: exit |
+| ↑ ↓ | earlier lines; → takes the hint |
+| `?` | the shortcuts |
 
-```sh
-geistr config                              # all settings and the file
-geistr config processor gpu                # auto (default), cpu, gpu; --cpu/--gpu for one run
-geistr config temperature 0.7              # 0 to 2
-geistr config system Antworte auf Deutsch. # a system prompt for every new chat
-geistr config markdown off                 # plain text
-geistr config stats off                    # no speed line
-geistr config intro off                    # no intro at the start
-geistr config resume off                   # every chat starts new, nothing is kept
-geistr config model ""                     # forget the last model
+### Your conversation stays
+
+Close the terminal, reboot, come back tomorrow: `geistr chat` picks up where
+you left off, and the model still knows what you talked about.
+
+```
+↻ 6 · „Compare Mars and Venus in a small table…“ · /clear new
+⚡ >
 ```
 
-Options: `--models DIR` (default: the geisten app's model folder, so models
-are shared), `--catalog FILE` (default: the built-in copy, see Updates). Exit codes: 0 ok, 1 error, 2 usage, 130 cancelled.
-`make geistr PULL=0` builds without the download module and without any
-network code. `--json` is schema 1: `schema`, `models_dir`, and per model
-`id`, `name`, `quantization`, `file`, `url`, `sha256`, `bytes`,
-`recommended_ram_gib`, `state` (available, unverified, installed, mismatch),
-`resource` (fits, limited, unavailable), `resource_reason`, `tokens_per_s`
-(`cpu`, `gpu`: measured here, or null).
+That is what makes a local model useful for real work: you can think a
+problem through over several sessions, refer back to an earlier answer, or
+switch to a bigger model mid-conversation without explaining everything
+again. It is also private by design: each conversation is a plain file on
+your computer (readable only by you, one JSON message per line), never sent
+anywhere.
 
-### Updates
+- `/clear` starts a new conversation and keeps the old file.
+- `geistr chat --new` starts fresh once; `geistr config resume off` always.
+- Piped chats (`echo … | geistr chat`) keep nothing, so scripts stay reproducible.
 
-The catalog ships inside geistr and lists only models its engine runs, so a
-new model arrives with a new geistr (`brew upgrade`, `pip install -U
-geistr`); there is no separate catalog download. After an update `geistr
-catalog` marks installed models whose file the new catalog replaced with ⟳,
-and `geistr pull` downloads them again (the old file stays until the new one
-is complete and verified). `geistr --version` names all three:
-`geistr 0.1.2 · catalog revision 9 · engine b682ef8`.
+## Use it from other tools
 
-### As a service
-
-One process holds the model; chats connect to it over a Unix socket (owner
-only, 0600):
+Keep a model loaded and talk to it over the OpenAI or Ollama API, e.g. from
+Open WebUI, editor plugins or the OpenAI SDK:
 
 ```sh
-geistr serve gemma4-e2b [--chats 2]        # SIGTERM or Ctrl-C stops it
-geistr chat --socket                       # in another terminal
+geistr serve gemma4-e2b --http          # http://127.0.0.1:11434
 ```
-
-The socket defaults to `geistr.sock` next to the model folder
-(`--socket=PATH` for another). The client sends the whole conversation with
-every message; the service keeps up to `--chats` conversations and continues
-the one that matches, processing only what is new. `/model`, `/gpu`, `/cpu`
-and `/auto` belong to the service. The protocol is one JSON object per line,
-documented in `tools/geistr/service.h`:
 
 ```sh
-echo '{"op":"chat","messages":[{"role":"user","content":"Hi"}]}' | nc -U ~/…/geistr.sock
+curl http://127.0.0.1:11434/v1/chat/completions \
+  -d '{"messages":[{"role":"user","content":"Hi"}]}'
 ```
 
-### OpenAI and Ollama APIs
-
-`--http` adds an HTTP API for tools that speak OpenAI or Ollama (Open WebUI,
-editor plugins, the OpenAI SDK), on the same model and conversations:
-
-```sh
-geistr serve gemma4-e2b --http              # 127.0.0.1:11434, Ollama's port
-geistr serve gemma4-e2b --http=127.0.0.1:8080
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://127.0.0.1:11434/v1", api_key="unused")
+reply = client.chat.completions.create(model="gemma4-e2b",
+                                       messages=[{"role": "user", "content": "Hi"}])
+print(reply.choices[0].message.content)
 ```
+
+In Open WebUI, add `http://127.0.0.1:11434` as an Ollama connection (or
+`…/v1` as OpenAI). Clients that resend the whole conversation pay only for
+what is new.
+
+<details>
+<summary>Endpoints, the socket, and security</summary>
 
 | endpoint | |
 |---|---|
@@ -238,35 +155,81 @@ geistr serve gemma4-e2b --http=127.0.0.1:8080
 | `POST /api/chat` | Ollama: `messages`, `stream` (NDJSON, default), `options.temperature`, `num_predict`, `stop` |
 | `GET /api/tags`, `/api/version`, `/` | the model, the version, a health check |
 
+There is no authentication. By default geistr listens on loopback only and
+answers only requests addressed to this computer (`Host` check, against DNS
+rebinding). `--http=0.0.0.0:11434` makes it reachable for everyone who can
+reach the computer; geistr warns about that. Not supported: embeddings,
+tool calls, images, more than one model. One request is answered at a time;
+a client that disconnects stops its answer.
+
+Without `--http`, `geistr serve` listens on a Unix socket only (owner only,
+0600), and `geistr chat --socket` chats through it. `--chats N` sets how many
+conversations the service keeps (default 2). The socket protocol is one
+JSON object per line, documented in
+[`tools/geistr/service.h`](tools/geistr/service.h):
+
 ```sh
-curl http://127.0.0.1:11434/v1/chat/completions \
-  -d '{"messages":[{"role":"user","content":"Hi"}],"stream":true}'
+echo '{"op":"chat","messages":[{"role":"user","content":"Hi"}]}' | nc -U ~/…/geistr.sock
+```
+</details>
+
+## Settings
+
+Settings are remembered between runs; `geistr config` shows them and the
+file they live in.
+
+```sh
+geistr config processor gpu                # auto (default), cpu, gpu
+geistr config temperature 0.7              # 0 to 2
+geistr config system "Answer in German."   # system prompt for every new chat
+geistr config markdown off                 # plain text
+geistr config stats off                    # no speed line
+geistr config resume off                   # always start new, keep nothing
 ```
 
-```python
-from openai import OpenAI
-client = OpenAI(base_url="http://127.0.0.1:11434/v1", api_key="unused")
-print(client.chat.completions.create(model="gemma4-e2b",
-      messages=[{"role": "user", "content": "Hi"}]).choices[0].message.content)
-```
+`--cpu` / `--gpu` choose the processor for one run, `--models DIR` another
+model folder.
 
-In Open WebUI, add the connection `http://127.0.0.1:11434` (Ollama) or
-`http://127.0.0.1:11434/v1` (OpenAI). Clients that send the whole
-conversation every time pay only for what is new, as on the socket; one
-request is answered at a time, and a client that disconnects stops its
-answer. There is no authentication: by default it listens on loopback and
-answers only requests addressed to this computer (`Host`, against DNS
-rebinding). Another address (`--http=0.0.0.0:11434`) makes it reachable for
-everyone who can reach the computer; geistr warns about that. Not supported:
-embeddings, tool calls, images, more than one model.
+<details>
+<summary>All commands</summary>
 
-## Python
+| command | does |
+|---|---|
+| `geistr catalog [--installed \| --available] [--json]` | the models, their state, fit and speed |
+| `geistr pull <id>` | download, resume, verify |
+| `geistr pull` | update the installed models after a geistr update |
+| `geistr run <model> [prompt…]` | one answer to stdout; the prompt from stdin if none |
+| `geistr chat [<model>] [--new]` | interactive; without a model the last one |
+| `geistr serve <model> [--http[=ADDR:PORT]] [--socket=PATH] [--chats N]` | the model as a service |
+| `geistr chat --socket[=PATH]` | chat with that service |
+| `geistr config [key [value]]` | settings |
+| `geistr bench [model…]` | tokens/s on CPU and GPU (default: every installed model) |
+| `geistr bench --compare [A [B]]` | two engine versions' speeds side by side |
+| `geistr --version` | geistr, catalog revision, engine commit |
+
+`<model>` is a catalog id or a path to a `.gguf` file. Options:
+`--cpu` / `--gpu`, `--models DIR`, `--catalog FILE`. Exit codes: 0 ok,
+1 error, 2 usage, 130 cancelled.
+
+Every complete answer records its speed in `speed.tsv` in the data folder;
+`geistr catalog` shows the median of the last ten.
+</details>
+
+## Update
+
+`brew upgrade geistr`, or run the install command again. The model list
+ships inside geistr, so new models come with a new geistr. Afterwards `geistr catalog` marks installed
+models whose file changed with ⟳, and `geistr pull` fetches them (the old
+file stays until the new one is verified).
+
+## Python and C
+
+geistr is built on **geist-runtime**, an embeddable model runner on
+[geistlib](https://github.com/geisten/geistlib) with one C API
+([`include/geistr.h`](include/geistr.h)) and a Python package:
 
 ```python
 import geistr
-
-for m in geistr.catalog(installed=True):      # the same models as `geistr catalog`
-    print(m.id, m.name, m.state)
 
 with geistr.chat("gemma4-e2b", system="Answer briefly.") as chat:
     for piece in chat.send("What is the capital of France?"):   # streamed
@@ -274,30 +237,5 @@ with geistr.chat("gemma4-e2b", system="Answer briefly.") as chat:
     print(chat.ask("And of Italy?"))           # only the new message is processed
 ```
 
-`make wheel` builds `build/wheel/geistr-*.whl`: ctypes over `libgeistr`
-(only `geistr_*` exported), no compiled extension, no dependencies.
-`geistr.open(model)` gives a `Model` (`.info`, `.chat(...)`); a `Chat` has
-`send`, `ask`, `cancel` (any thread), `rewind`, `len()`, `stats`. Leaving a
-`for` over `send()` early, or Ctrl-C, stops the answer; the chat goes on.
-Failures raise `geistr.GeistrError` with `.status` ("io", "context", …).
-CI builds wheels for macOS arm64 and Linux x86_64/arm64 (manylinux via
-auditwheel) and runs `examples/chat.py` from a fresh `pip install`.
-
-## CI
-
-Every PR and push to `main` runs `.github/workflows/ci.yml`; the job
-`ci-ok` is the required check and passes only if every platform passed.
-
-| job | platforms | what |
-|---|---|---|
-| `test` | macOS arm64 (clang), Linux x86_64 (gcc-14, clang-18), Linux arm64 (gcc-14) | `make test` (stub conformance, templates, streams, catalog, fit), `make sanitize` |
-| `real` | macOS arm64, Linux x86_64, Linux arm64 | the runtime on the pinned geistlib against SmolLM2 360M (from the catalog, SHA-256 verified, cached): `make test-real` (also under ASan/UBSan), `make test-geistr`, `make test-python`; the wheels as artifacts |
-
-On failure each job uploads its logs (`build/logs/`) as `evidence-*`. A run
-takes about 3 minutes; jobs time out at 15 and 30 minutes.
-
-Flaky tests: there are no retries, in CI or in the tests. A test that fails
-without a code change is fixed, or quarantined in the same PR that opens
-an issue for it (`flaky` label), with the issue named next to the quarantine.
-Tests do not guess timing: e.g. cancellation is triggered once the answer
-streams, and measured from the cancel call.
+Building, the library, tests and CI: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+API reference and design: [docs/API.md](docs/API.md).
