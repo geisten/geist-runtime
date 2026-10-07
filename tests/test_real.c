@@ -320,6 +320,15 @@ int main(void) {
         CHECK(ask(dc, 1, &p2, again, sizeof again) == GEISTR_OK && stats(dc).dropped_messages > 0 &&
                   stats(dc).context_tokens <= 512,
               "DROP_OLDEST: old turns go, the answer comes");
+        /* a whole long conversation at once (a resumed chat, another model):
+         * its oldest messages go, the system and the last one stay */
+        geistr_chat   *wc     = chat(small, 16, GEISTR_OVERFLOW_DROP_OLDEST);
+        geistr_message long_[] = {SYSTEM, {"user", pad}, {"assistant", pad}, {"user", pad}, {"assistant", "Fine."},
+                                  {"user", "And one more thing?"}};
+        CHECK(ask(wc, 6, long_, again, sizeof again) == GEISTR_OK && stats(wc).dropped_messages >= 2 &&
+                  stats(wc).context_tokens <= 512 && geistr_chat_length(wc) <= 6,
+              "DROP_OLDEST: a whole conversation sent at once loses its oldest messages, not the answer");
+        geistr_chat_close(wc);
         geistr_chat_close(rc);
         geistr_chat_close(dc);
         geistr_model_close(small);

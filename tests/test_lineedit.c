@@ -89,7 +89,7 @@ int main(void) {
     line_is(&e, "/model gem\x1b[B\t\r", "/model gemma4-e4b", "↓ chooses in the list");
     line_is(&e, "/model gem\x1b[B\x1b[B\t\r", "/model gemma4-e2b", "the list wraps around");
     line_is(&e, "/he\r", "/help", "Enter takes and runs a complete command");
-    line_is(&e, "/mo\rq\r", "/model qwen3-0.6b", "Enter on a command with an argument waits for it");
+    line_is(&e, "/mo\r", "/model", "Enter runs a command as it is (without its argument: its state)");
     line_is(&e, "/c\x1b[B\r", "/clear", "↓ then Enter");
     line_is(&e, "/i\x1b[C\r", "/info", "→ takes the hint");
     char *screen = nullptr;

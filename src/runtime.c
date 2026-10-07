@@ -768,6 +768,32 @@ static bool turn_push(geistr_chat *c, const char *role, const char *content, siz
     return true;
 }
 
+/* Would the conversation fit with the oldest `go` turns gone: held ones
+ * first (a system turn stays), then the oldest new messages (a leading
+ * system message stays, the last one always)? kept is scratch of count. */
+static geistr_status drop_fits(geistr_chat *c, bool system, bool new_system, const geistr_message *messages,
+                               size_t count, size_t go, geistr_message *kept, bool *fits) {
+    const size_t held  = c->n_turns - (system ? 1 : 0);
+    const size_t first = (system ? 1 : 0) + (go < held ? go : held), skip = go > held ? go - held : 0;
+    size_t       k     = 0;
+    if (new_system)
+        kept[k++] = messages[0];
+    for (size_t i = (new_system ? 1 : 0) + skip; i < count; i++)
+        kept[k++] = messages[i];
+    struct tpl_state fresh = {};
+    char            *all   = render_all(c, &fresh, system, first, k, kept, true);
+    tpl_free(&fresh);
+    if (!all)
+        return GEISTR_NO_MEMORY;
+    struct ids t = {};
+    if (c->model->add_bos && c->model->bos >= 0)
+        ids_push(&t, 1, &c->model->bos);
+    geistr_status s = tokenize(c, all, &t);
+    *fits           = s == GEISTR_OK && t.n + 1 <= c->model->context;
+    free(all), free(t.v);
+    return s;
+}
+
 geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_message messages[]) {
     if (!c)
         return GEISTR_INVALID;
@@ -809,45 +835,58 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
         s = tokenize(c, gen, &prompt);
     const size_t adding = close.n + turns.n + prompt.n;
     size_t       input  = adding;
-    uint32_t     dropped = 0;
+    uint32_t     dropped = 0, dropped_new = 0; /* held turns, and new messages, that went */
     bool         rebuilt = false;
+    const geistr_message *msgs = messages; /* what is sent: fewer when the oldest new ones went */
+    size_t                n_msgs = count;
+    geistr_message       *kept   = nullptr;
 
     if (s == GEISTR_OK && len0 + adding + 1 > c->model->context) {
         if (c->opts.overflow != GEISTR_OVERFLOW_DROP_OLDEST) {
             s = fail(c, GEISTR_CONTEXT, "the conversation does not fit the context window");
         } else {
             /* Drop the oldest turns (a leading system turn stays) until the
-             * whole conversation, rendered again, fits; then prefill it. */
-            const bool system = c->n_turns > 0 && is_role(c->turns[0].role, "system");
-            size_t     first  = system ? 1 : 0;
-            s                 = GEISTR_CONTEXT;
-            for (; first <= c->n_turns; first++) {
-                struct tpl_state fresh = {};
-                char *all = render_all(c, &fresh, system, first, count, messages, true);
-                if (!all) {
-                    tpl_free(&fresh);
-                    s = GEISTR_NO_MEMORY;
-                    break;
+             * whole conversation, rendered again, fits; then prefill it.
+             * Held turns go first; when that is not enough (a whole
+             * conversation sent at once: a resumed chat, another model), the
+             * oldest new messages too (a leading system message among them
+             * stays, and the last one always). Fitting is monotonic in what
+             * goes, so a binary search finds the least: a few tokenizations,
+             * not one per message. */
+            const bool   system     = c->n_turns > 0 && is_role(c->turns[0].role, "system");
+            const bool   new_system = !system && is_role(messages[0].role, "system");
+            const size_t held       = c->n_turns - (system ? 1 : 0);  /* turns that may go */
+            const size_t fixed      = (new_system ? 1 : 0) + 1; /* a leading system message, the last one */
+            const size_t sendable   = count > fixed ? count - fixed : 0;  /* new messages that may go */
+            kept                    = calloc(count, sizeof *kept);
+            size_t lo = 0, hi = held + sendable;                     /* how many go */
+            bool   fit_hi = false;
+            s             = kept ? GEISTR_OK : GEISTR_NO_MEMORY;
+            if (s == GEISTR_OK)
+                s = drop_fits(c, system, new_system, messages, count, hi, kept, &fit_hi);
+            if (s == GEISTR_OK && !fit_hi)
+                s = fail(c, GEISTR_CONTEXT, "the conversation does not fit the context window");
+            while (s == GEISTR_OK && lo < hi) {
+                size_t mid = lo + (hi - lo) / 2;
+                bool   fit = false;
+                s          = drop_fits(c, system, new_system, messages, count, mid, kept, &fit);
+                if (fit)
+                    hi = mid;
+                else
+                    lo = mid + 1;
+            }
+            size_t first = (system ? 1 : 0) + (hi < held ? hi : held);
+            if (s == GEISTR_OK) {
+                dropped     = (uint32_t) (first - (system ? 1 : 0));
+                dropped_new = (uint32_t) (hi > held ? hi - held : 0);
+                if (dropped_new) {
+                    size_t k = 0;
+                    if (new_system)
+                        kept[k++] = messages[0];
+                    for (size_t i = (new_system ? 1 : 0) + dropped_new; i < count; i++)
+                        kept[k++] = messages[i];
+                    msgs = kept, n_msgs = k;
                 }
-                struct ids t = {};
-                if (c->model->add_bos && c->model->bos >= 0)
-                    ids_push(&t, 1, &c->model->bos);
-                const geistr_status ts = tokenize(c, all, &t);
-                free(all);
-                const bool fits = ts == GEISTR_OK && t.n + 1 <= c->model->context;
-                free(t.v);
-                if (ts != GEISTR_OK) {
-                    tpl_free(&fresh);
-                    s = ts;
-                    break;
-                }
-                if (fits) {
-                    tpl_free(&fresh);
-                    dropped = (uint32_t) (first - (system ? 1 : 0));
-                    s       = GEISTR_OK;
-                    break;
-                }
-                tpl_free(&fresh);
             }
             if (s == GEISTR_OK) {
                 /* Commit the drop, then refill the kept conversation with
@@ -864,7 +903,7 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
                 for (size_t i = 0; i < c->n_turns; i++)
                     c->turns[i].cut = NO_POSITION;
                 struct tpl_state fresh = {};
-                char *all = render_all(c, &fresh, false, 0, count, messages, true);
+                char *all = render_all(c, &fresh, false, 0, n_msgs, msgs, true);
                 if (!all) {
                     tpl_free(&fresh);
                     s = GEISTR_NO_MEMORY;
@@ -877,8 +916,6 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
                 rebuilt = true;
                 if (s != GEISTR_OK)
                     s = fail(c, s, "refill after dropping old turns failed");
-            } else if (s == GEISTR_CONTEXT) {
-                fail(c, s, "the conversation does not fit the context window");
             }
         }
     }
@@ -911,15 +948,19 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
     free(text);
     if (s != GEISTR_OK) {
         tpl_free(&st);
+        free(kept);
         return s;
     }
 
     /* Commit: the previous answer is closed, the new turns and the new
      * answer's turn are part of the conversation. */
     const size_t base = len0 + close.n;
-    for (size_t i = 0; i < count; i++)
-        if (!turn_push(c, messages[i].role, messages[i].content, !rebuilt && i == 0 ? base : NO_POSITION))
+    for (size_t i = 0; i < n_msgs; i++)
+        if (!turn_push(c, msgs[i].role, msgs[i].content, !rebuilt && i == 0 ? base : NO_POSITION)) {
+            free(kept);
             return fail(c, GEISTR_NO_MEMORY, "out of memory");
+        }
+    free(kept);
     c->answer_turn = c->n_turns;
     if (!turn_push(c, "assistant", "", rebuilt ? NO_POSITION : answer_at - prompt.n))
         return fail(c, GEISTR_NO_MEMORY, "out of memory");
@@ -942,7 +983,7 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
            .size             = sizeof c->stats,
            .input_tokens     = (uint32_t) input,
            .context_tokens   = (uint32_t) used,
-           .dropped_messages = dropped,
+           .dropped_messages = dropped + dropped_new,
            .prefill_ms       = now_ms() - start,
            .first_answer_ms  = -1,
     };

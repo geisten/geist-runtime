@@ -34,12 +34,30 @@ struct shown {
     bool      started; /* something visible is shown: leading blank lines are not */
 };
 
+/* "geistr: <status>: <detail>", the detail only when it says more. */
+static void report(geistr_status s, const char *detail) {
+    const char *status = geistr_status_text(s);
+    if (detail && *detail && strcmp(detail, status))
+        fprintf(stderr, "geistr: %s: %s\n", status, detail);
+    else
+        fprintf(stderr, "geistr: %s\n", status);
+}
+
+static void spinner_phase(const char *phase);
+static void spinner_stop(void);
+
 static int print_piece(void *context, const geistr_piece *piece) {
     struct shown *a    = context;
     const char   *show = piece->text;
+    if (piece->part == GEISTR_PART_THINKING) { /* not shown, not kept: it only tells the wait apart */
+        spinner_phase("thinking");
+        return 1;
+    }
     if (!a->started) { /* an answer that begins with blank lines (qwen3): from its text on */
         show += strspn(show, " \t\r\n");
         a->started = *show != 0;
+        if (a->started)
+            spinner_stop(); /* the first word: the wait is over */
     }
     md_feed(&a->view, show);
     if (piece->part != GEISTR_PART_ANSWER)
@@ -77,6 +95,7 @@ static struct {
     atomic_bool stop;
     bool        on;
     char        label[300];
+    _Atomic(const char *) phase; /* while an answer is awaited: "reading", "thinking" */
 } spin;
 
 static double seconds(void) {
@@ -91,7 +110,8 @@ static void *spinner(void *unused) {
     double                   start    = seconds();
     for (unsigned i = 0; !atomic_load(&spin.stop); i++) {
         if (seconds() - start > 0.3) /* quick loads stay quiet */
-            fprintf(stdout, "\r\033[2K\033[2m%s %s · %.0f s\033[0m", frames[i % 10], spin.label, seconds() - start);
+            fprintf(stdout, "\r\033[2K\033[2m%s %s · %.0f s\033[0m", frames[i % 10],
+                    atomic_load(&spin.phase) ? atomic_load(&spin.phase) : spin.label, seconds() - start);
         fflush(stdout);
         struct timespec pause = {.tv_nsec = 100000000};
         nanosleep(&pause, nullptr);
@@ -108,8 +128,24 @@ static void spinner_start(const char *name, const char *path) {
     if (!spin.on)
         return;
     snprintf(spin.label, sizeof spin.label, "loading %s%s", name, size);
+    atomic_store(&spin.phase, nullptr);
     atomic_store(&spin.stop, false);
     spin.on = pthread_create(&spin.thread, nullptr, spinner, nullptr) == 0;
+}
+
+/* Between sending and the first word: "⠋ reading · 3 s", then "thinking". */
+static void spinner_wait(void) {
+    spin.on = tty_out();
+    if (!spin.on)
+        return;
+    atomic_store(&spin.phase, "reading");
+    atomic_store(&spin.stop, false);
+    spin.on = pthread_create(&spin.thread, nullptr, spinner, nullptr) == 0;
+}
+
+static void spinner_phase(const char *phase) {
+    if (spin.on)
+        atomic_store(&spin.phase, phase);
 }
 
 static void spinner_stop(void) {
@@ -176,8 +212,8 @@ static void watch_stop(void) {
     keys_watch.on = false;
 }
 
-/* In the interactive chat Ctrl-C is a key, never a signal, also between two
- * reads of the editor: a SIGINT may be handled by any thread (the engine's
+/* In the interactive chat Ctrl-C is a key, never a signal, and nothing is
+ * echoed, also between two reads of the editor: a SIGINT may be handled by any thread (the engine's
  * workers too), after the editor looked for it, and the Ctrl-C was lost. As
  * a key it waits in the input until read. Restored on exit, and on SIGTERM
  * and SIGHUP. */
@@ -202,7 +238,10 @@ static void keys_only(bool on) {
     if (tcgetattr(STDIN_FILENO, &original_term) != 0)
         return;
     struct termios t = original_term;
-    t.c_lflag &= (tcflag_t) ~ISIG;
+    t.c_lflag &= (tcflag_t) ~(ISIG | ECHO | ICANON); /* keys typed while a command runs: not echoed in
+                                                      * between, the editor shows them when it reads */
+    t.c_cc[VMIN]  = 1;
+    t.c_cc[VTIME] = 0;
     term_changed = tcsetattr(STDIN_FILENO, TCSANOW, &t) == 0;
     struct sigaction sa = {.sa_handler = restore_term};
     sigaction(SIGTERM, &sa, nullptr);
@@ -238,6 +277,7 @@ static bool session_chat(struct session *x, geistr_reasoning reasoning, bool int
     opts.reasoning        = reasoning;
     opts.temperature      = (float) x->temperature;
     opts.overflow         = interactive ? GEISTR_OVERFLOW_DROP_OLDEST : GEISTR_OVERFLOW_REFUSE;
+    opts.thinking         = interactive; /* the chat shows "thinking" while it lasts (print_piece) */
     geistr_status s       = geistr_chat_open(x->model, &opts, &x->chat);
     if (s != GEISTR_OK) /* the model says why: e.g. its chat format */
         fprintf(stderr, "geistr: cannot chat: %s\n", geistr_model_error(x->model));
@@ -294,7 +334,7 @@ static const struct le_candidate commands[] = {
         {"/auto", "processor: the runtime's choice"},
         {"/model ", "another model, same conversation"},
         {"/temp ", "sampling temperature, 0 to 2"},
-        {"/system ", "system prompt (empty: none)"},
+        {"/system ", "system prompt (off: none)"},
         {"/info", "what runs now"},
         {"/save", "keep these settings for the next chat"},
         {"/clear", "a new conversation"},
@@ -344,6 +384,12 @@ static void chat_help(void) {
     shortcuts();
 }
 
+/* A dim line: how to use a command, what it shows. */
+static void usage(const char *text) {
+    bool dim = tty_out();
+    printf("%s%s%s\n", dim ? "\033[2m" : "", text, dim ? "\033[0m" : "");
+}
+
 static void status_line(const struct session *x, const char *what) {
     bool dim = tty_out();
     printf("%s%s %s · %s%s%s\n", dim ? "\033[2m" : "", on_gpu(x) ? "⚡" : "⚙", x->backend, x->name, what,
@@ -374,7 +420,7 @@ int answer_once(const char *name, const char *prompt, const char *processor) {
     if (geistr_chat_stats(x.chat, &done) == GEISTR_OK && done.finish == GEISTR_FINISH_REPETITION)
         fputs("geistr: the answer repeated itself; stopped there\n", stderr);
     if (s != GEISTR_OK && s != GEISTR_CANCELLED)
-        fprintf(stderr, "geistr: %s: %s\n", geistr_status_text(s), geistr_chat_error(x.chat));
+        report(s, geistr_chat_error(x.chat));
     running = nullptr;
     session_close(&x);
     free(out.text);
@@ -421,6 +467,21 @@ static int command(struct session *x, struct conversation *said, char *line, con
                                                          : nullptr;
     if (!strcmp(line, "/exit") || !strcmp(line, "/quit"))
         return LEAVE;
+    if (!strcmp(line, "/model") && !*arg) { /* what runs, and what else could */
+        status_line(x, remote ? " · service" : "");
+        char list[1024] = "";
+        for (size_t i = 0; i < n_installed; i++)
+            snprintf(list + strlen(list), sizeof list - strlen(list), "%s%s", i ? " · " : "", installed_ids[i]);
+        if (remote)
+            usage("the service has its model: geistr serve <model> [--cpu | --gpu]");
+        else if (n_installed) {
+            char text[1200];
+            snprintf(text, sizeof text, "installed: %s · /model <id> switches", list);
+            usage(text);
+        } else
+            usage("/model <id or .gguf path> switches (geistr catalog lists models)");
+        return GO_ON;
+    }
     if (remote && (processor_now || !strcmp(line, "/model"))) {
         puts("the service has its model: geistr serve <model> [--cpu | --gpu]");
         return GO_ON;
@@ -440,7 +501,12 @@ static int command(struct session *x, struct conversation *said, char *line, con
     } else if (!strcmp(line, "/temp")) {
         char  *end = nullptr;
         double t   = strtod(arg, &end);
-        if (!*arg || *end || !(t >= 0 && t <= 2)) {
+        if (!*arg) {
+            printf("temperature %g\n", x->temperature);
+            usage("/temp 0 … 2 sets it (0: always the most likely word)");
+            return GO_ON;
+        }
+        if (*end || !(t >= 0 && t <= 2)) {
             puts("/temp 0 … 2");
             return GO_ON;
         }
@@ -449,7 +515,12 @@ static int command(struct session *x, struct conversation *said, char *line, con
             return LEAVE;
         printf("temperature %g\n", t);
     } else if (!strcmp(line, "/system")) {
-        if (conv_system(said, arg) && !remote && !reopen(x, said))
+        if (!*arg) { /* show it; an empty /system no longer clears it by accident */
+            puts(said->system[0] ? said->system : "no system prompt");
+            usage("/system <text> sets it · /system off removes it");
+            return GO_ON;
+        }
+        if (conv_system(said, strcmp(arg, "off") ? arg : "") && !remote && !reopen(x, said))
             return LEAVE;
         puts(said->system[0] ? "system prompt set" : "no system prompt");
     } else if (!strcmp(line, "/info")) {
@@ -581,11 +652,13 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
         view_begin(&shown);
         if (edit)
             watch_start(&editor);
+        spinner_wait();
         struct svc_stats rs = {};
         char             why[512];
         geistr_status    s = remote ? service_chat(remote, count, turn, 0, x.temperature, remote_part, remote_cancel,
                                                    &shown, &rs, why, sizeof why)
                                     : geistr_chat_run(x.chat, count, turn, print_piece, &shown);
+        spinner_stop(); /* no word came (stopped, refused, empty) */
         if (edit)
             watch_stop();
         interrupted = 0; /* it stopped the answer, if it came */
@@ -606,7 +679,7 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
                 speed(x.chat, x.name, x.backend, true, "answer", stdout);
         } else {
             conv_refused(&said); /* not part of the conversation: the chat refused it */
-            fprintf(stderr, "geistr: %s: %s\n", geistr_status_text(s), remote ? why : geistr_chat_error(x.chat));
+            report(s, remote ? why : geistr_chat_error(x.chat));
         }
     }
     if (edit) {
