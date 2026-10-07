@@ -9,7 +9,7 @@
 #                    default: the engine's fetched SmolLM2; make fetch-model)
 #   make chat-real   build/chat-real: the example chat on the real runtime
 #   make geistr      build/geistr: the CLI (PULL=0: without the download module)
-#   make test-geistr the CLI against the reference model
+#   make test-geistr the CLI against the reference model (ONLY=serve,bench: some sections)
 #   make wheel       build/wheel/geistr-*.whl: the Python package (#9)
 #   make test-python pip install it into a venv; example and tests
 #
@@ -219,7 +219,7 @@ test-geistr:
 	@test -f "$(GEIST_TEST_MODEL)" || { echo "no reference model at $(GEIST_TEST_MODEL): make fetch-model"; exit 1; }
 	$(MAKE) BUILD=$(BUILD)/geistr-test GEISTR_CFLAGS=-DGEISTR_TESTING geistr
 	$(MAKE) BUILD=$(BUILD)/geistr-nonet PULL=0 geistr
-	python3 -u tests/test_geistr.py $(BUILD)/geistr-test/geistr $(BUILD)/geistr-nonet/geistr "$(GEIST_TEST_MODEL)" $(PULL)
+	GEISTR_TEST_ONLY=$(ONLY) python3 -u tests/test_geistr.py $(BUILD)/geistr-test/geistr $(BUILD)/geistr-nonet/geistr "$(GEIST_TEST_MODEL)" $(PULL)
 
 # An explicit target never skips: a missing model is an error, not a pass.
 test-real: $(BUILD)/test_real
