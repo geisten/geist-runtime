@@ -126,6 +126,12 @@ static void put_cut(FILE *out, const char *s, unsigned w) {
         fputs("…", out);
 }
 
+/* The line as typed; a pasted line break shows as ↵ (one column, as columns() counts it). */
+static void put_line(struct le *e) {
+    for (size_t i = 0; i < e->len; i++)
+        e->buf[i] == '\n' ? (void) fputs("↵", e->out) : (void) fputc(e->buf[i], e->out);
+}
+
 static void draw(struct le *e, bool with_menu) {
     char                h[256];
     struct le_candidate c[CANDIDATES_MAX];
@@ -135,7 +141,7 @@ static void draw(struct le *e, bool with_menu) {
         fprintf(e->out, "\033[%uA", e->cursor_row);
     fputs("\r\033[J", e->out);
     fputs(e->prompt, e->out);
-    fwrite(e->buf, 1, e->len, e->out);
+    put_line(e);
     if (*tail)
         fprintf(e->out, "\033[2m%s\033[0m", tail);
     unsigned w      = e->width ? e->width : 80;
@@ -242,7 +248,9 @@ static bool take(struct le *e) {
 static void escape(struct le *e) {
     const char *s = e->esc + 1; /* after ESC */
     char        final = e->esc[e->n_esc - 1];
-    if (*s == '[' || *s == 'O') {
+    if (e->n_esc == 6 && !memcmp(e->esc, "\033[20", 4) && final == '~') /* ESC[200~ … ESC[201~: a paste */
+        e->pasting = e->esc[4] == '0';
+    else if (*s == '[' || *s == 'O') {
         if (final == 'A')
             up_down(e, -1);
         else if (final == 'B')
@@ -334,6 +342,18 @@ enum le_event le_feed(struct le *e, unsigned char c) {
             e->n_esc = 0;
             draw(e, true);
         }
+        return LE_MORE;
+    }
+    bool after_cr = e->pasted_cr;
+    e->pasted_cr  = e->pasting && c == '\r';
+    if (e->pasting && (c == '\r' || c == '\n' || c == '\t')) { /* pasted: a line break or spaces, never send */
+        const char *add = c == '\t' ? "    " : c == '\n' && after_cr ? "" : "\n";
+        for (; *add && e->len + 1 < sizeof e->buf; add++) {
+            memmove(e->buf + e->pos + 1, e->buf + e->pos, e->len - e->pos);
+            e->buf[e->pos++] = *add;
+            e->buf[++e->len] = 0;
+        }
+        draw(e, true);
         return LE_MORE;
     }
     if (c != '\t' && c != 16 && c != 14 && c != '\r' && c != '\n' && c != 27) { /* the line changes: a new list */
@@ -430,7 +450,7 @@ enum le_event le_feed(struct le *e, unsigned char c) {
     default:
         if (c < 32 || e->len + 1 >= sizeof e->buf)
             return LE_MORE;
-        if (c == '?' && !e->len) { /* ? on an empty line: the shortcuts */
+        if (c == '?' && !e->len && !e->pasting) { /* ? on an empty line: the shortcuts */
             draw(e, false);
             fputs("\r\n", e->out);
             fflush(e->out);
@@ -464,6 +484,8 @@ enum le_event le_read(struct le *e, const char *prompt) {
         tcsetattr(STDIN_FILENO, TCSANOW, &cooked);
         return LE_INTERRUPT;
     }
+    fputs("\033[?2004h", e->out); /* bracketed paste: pasted text is marked */
+    e->pasting = false;
     le_begin(e, prompt);
     enum le_event ev = LE_MORE;
     unsigned char c;
@@ -483,6 +505,8 @@ enum le_event le_read(struct le *e, const char *prompt) {
         }
         ev = le_feed(e, c);
     }
+    fputs("\033[?2004l", e->out);
+    fflush(e->out);
     tcsetattr(STDIN_FILENO, TCSANOW, &cooked);
     return ev;
 }

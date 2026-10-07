@@ -139,10 +139,6 @@ int main(void) {
     math("E = mc^2", "E = mc²");
     math("\\text{if } x > 0", "if  x > 0");
     math("\\int_0^1 x\\,dx", "∫₀¹ x dx");
-    if (failures) {
-        fprintf(stderr, "render: %d failures\n", failures);
-        return 1;
-    }
     /* wrapping: at word boundaries, under a bullet's text, styles and Unicode
      * measured by what shows, no spaces at line ends, a line that fills the
      * width exactly stays, an over-long word on its own line */
@@ -152,6 +148,8 @@ int main(void) {
     test_width = 24;
     check("- a first point that is far too long for one line\n- short\n",
           "• a first point that is\n  far too long for one\n  line\n• short\n");
+    check("> a quote that is far too long for one line\n",
+          "«q»│ a quote that is far\n│ too long for one line«»\n");
     test_width = 22;
     check("Energy is **mass times** the speed of light squared: $E=mc^2$ as always.\n",
           "Energy is «b»mass times«»\nthe speed of light\nsquared: «m»E=mc²«» as\nalways.\n");
@@ -161,6 +159,10 @@ int main(void) {
     check("Short then Donaudampfschifffahrtsgesellschaftskapitän ends.\n",
           "Short then\nDonaudampfschifffahrtsgesellschaftskapitän\nends.\n");
     test_wrap = false, test_width = 0;
+    if (failures) {
+        fprintf(stderr, "render: %d failures\n", failures);
+        return 1;
+    }
     puts("render: Markdown, tables and math for the terminal, split-invariant, raw mode untouched, word wrap passed");
     return 0;
 }
