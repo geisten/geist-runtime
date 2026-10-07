@@ -86,14 +86,15 @@ Any other `.gguf` file works too: `geistr chat path/to/model.gguf`.
 
 In a terminal, `geistr chat` renders Markdown, tables and math, shows the
 speed after each answer and continues your last conversation (see below).
-Type `/` for the commands:
+Once the context is half full, the prompt says how full (`⚙ 62% >`, yellow
+from 80 %, red from 95 %); `/info` always shows it. Type `/` for the commands:
 
 ```
 /model gemma4-e2b    switch the model, keep the conversation (best fit first)
 /gpu /cpu /auto      switch the processor (Metal on macOS, Vulkan on Linux)
 /temp 0.7            sampling temperature
 /system Be brief.    system prompt (/system off removes it)
-/info                what runs now
+/info                what runs now, and how full the context is
 /save                keep model, processor, temperature and system prompt
 /clear  /exit
 ```

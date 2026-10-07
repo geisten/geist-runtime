@@ -90,6 +90,7 @@ struct session {
     double           temperature;
     uint32_t         context;
     geistr_reasoning reasoning; /* the catalog's, for each chat on the model */
+    uint32_t         used;      /* context tokens after the last answer (0: unknown, or cleared) */
 };
 
 extern geistr_chat *volatile running; /* the answer Ctrl-C stops */

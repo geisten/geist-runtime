@@ -71,7 +71,7 @@ def install_models():  # ref as itself, wrong with the right size and wrong byte
             f.write(tiny)
 
 # ---- helpers for the terminal (pty) sections ---------------------------------
-import pty, select
+import pty, select, re
 def until(fd, text, seconds=60):
     seen, deadline = b'', time.time() + seconds
     while text.encode() not in seen and time.time() < deadline:
@@ -80,6 +80,24 @@ def until(fd, text, seconds=60):
             except OSError: break
     assert text.encode() in seen, (text, seen[-400:])
     return seen
+def paste(fd, text):
+    # a long message as a terminal paste (drawn once), in pieces while the chat's output is read:
+    # pty buffers are small on macOS, and a chat that cannot write stops reading
+    data = b'\x1b[200~' + text + b'\x1b[201~\r'
+    for i in range(0, len(data), 256):
+        os.write(fd, data[i:i + 256])
+        while i + 256 < len(data) and select.select([fd], [], [], 0.05)[0]:
+            try: os.read(fd, 65536)
+            except OSError: break
+
+def finish_chat(pid, fd):
+    # Ctrl-D, then read until the chat exits: a full pty (small on macOS) would block it
+    os.write(fd, b'\x04')
+    while not os.waitpid(pid, os.WNOHANG)[0]:
+        try:
+            if select.select([fd], [], [], 0.2)[0]: os.read(fd, 4096)
+        except OSError: pass
+    os.close(fd)
 
 # ---- catalog: available → installed (verified) → mismatch ----------------------
 def section_catalog():
@@ -266,7 +284,22 @@ def section_resume():
     assert geistr_run('config', 'history', 'on').returncode == 0
     assert [json.loads(l)['line'] for l in open(history)] == ['My name is Ada.', 'What is my name?', 'Hello.',
                                                              'Line one.\nLine two.\nLine three.']
-    print('geistr chat: continues the last conversation in a terminal, --new, private files, input history, piped chats keep nothing passed')
+
+    # the context meter: from 50 % the prompt says how full it is; /info always; /clear resets
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execve(geistr, [geistr, 'chat', 'ref', '--new', *base], {**env, 'TERM': 'xterm', 'GEISTR_TEST_CONTEXT': '512'})
+    until(fd, 'Ctrl-C twice exits'); time.sleep(.3)
+    paste(fd, b'Ignore these words: ' + b'word ' * 250 + b'Now say OK.')
+    out = until(fd, '%\x1b[0m > ', 180)                                # the prompt after the answer
+    pct = re.findall(rb'(\d+)%\x1b\[0m > ', out)
+    assert pct and 50 <= int(pct[-1]) <= 100, out[-300:]
+    os.write(fd, b'/info\r'); out = until(fd, 'of 512 tokens')
+    os.write(fd, b'/clear\r'); out = until(fd, 'a new conversation')
+    os.write(fd, b'/info\r'); out = until(fd, 'of 512 tokens')
+    assert b'context 0 of 512 tokens (0 %)' in out, out[-300:]
+    finish_chat(pid, fd)
+    print('geistr chat: continues the last conversation in a terminal, --new, private files, input history, context meter, piped chats keep nothing passed')
 
 # ---- serve and chat --socket --------------------------------------------------
 def section_serve():
