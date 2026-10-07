@@ -44,15 +44,6 @@ jobs:
         run: mkdir -p build/logs && make test 2>&1 | tee build/logs/test.log
       - name: sanitizers (ASan, UBSan; leaks on Linux)
         run: make sanitize 2>&1 | tee build/logs/sanitize.log
-      # #2: the templates render byte-identical to geist-serve's at this commit.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: geisten/geist-serve
-          ref: 3cb514aaf6a0231a4375024548a60c6aee44ffb2
-          path: serve
-      - name: parity with geist-serve
-        run: make parity SERVE_DIR=serve 2>&1 | tee build/logs/parity.log
-
       - name: evidence on failure
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

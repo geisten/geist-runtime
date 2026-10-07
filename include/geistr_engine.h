@@ -20,7 +20,7 @@ struct geist_backend;
  * threads are the caller's choice already made. Chat calls serialize engine
  * use on GPU backends; engine calls the caller makes itself on the same
  * model must not run at the same time as a chat call. */
-geistr_status geistr_model_wrap(struct geist_model     *model,
+GEISTR_NODISCARD geistr_status geistr_model_wrap(struct geist_model     *model,
                                 struct geist_backend   *backend,
                                 const geistr_model_opts *opts,
                                 geistr_model           **out,
