@@ -4,7 +4,7 @@ Run language models on your own computer: download, chat, serve. One small
 binary, no Python, no Docker, no account. The model runs locally, on the CPU
 or the GPU.
 
-![geistr chat: a list from qwen3-0.6b on the CPU, a switch to gemma4-e2b on the GPU, a table, the command menu](docs/hero.png)
+![geistr chat in action: qwen3-0.6b answers on the CPU, /model switches to gemma4-e2b on the GPU for a table, and a new session continues the conversation](docs/demo.gif)
 
 ## Install
 
