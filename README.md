@@ -84,7 +84,8 @@ Any other `.gguf` file works too: `geistr chat path/to/model.gguf`.
 
 ## Chat
 
-In a terminal, `geistr chat` renders Markdown, tables and math, shows the
+In a terminal, `geistr chat` renders Markdown, tables, math and clickable
+links, shows the
 speed after each answer and continues your last conversation (see below).
 Once the context is half full, the prompt says how full (`⚙ 62% >`, yellow
 from 80 %, red from 95 %); `/info` always shows it. Type `/` for the commands:
