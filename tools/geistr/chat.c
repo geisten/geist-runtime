@@ -253,7 +253,7 @@ static void shortcuts(void) {
     bool faint = tty_out();
     printf("%sEnter send · Esc stop the answer · Ctrl-C clear the line, twice: exit · Ctrl-D exit\n"
            "/ commands (↑↓ choose · Tab take · Esc close) · ↑↓ earlier lines · → take the hint\n"
-           "Ctrl-A/E start/end · Ctrl-U/K delete to start/end · Ctrl-W a word · Ctrl-L clear screen%s\n",
+           "Ctrl-R search earlier lines · Ctrl-A/E start/end · Ctrl-U/K delete to start/end · Ctrl-W a word · Ctrl-L clear screen%s\n",
            dim(faint), normal(faint));
 }
 
@@ -376,13 +376,14 @@ static void find_installed(void) {
 }
 
 /* What was typed in the chat, kept between chats in the data folder (one
- * JSON object per line, private). Not kept with resume off, as nothing is. */
+ * JSON object per line, private). Not kept with history off, or resume off
+ * (then nothing is); a line starting with a space never (as in a shell). */
 enum { HISTORY_KEEP = 500 };
 static char history_file[4200];
 
 static void history_load(struct le *e) {
     history_file[0] = 0;
-    if (!cfg.resume || !data_dir[0] || !make_dirs(data_dir, 0700))
+    if (!cfg.resume || !cfg.history || !data_dir[0] || !make_dirs(data_dir, 0700))
         return;
     snprintf(history_file, sizeof history_file, "%s/history", data_dir);
     FILE *f = fopen(history_file, "r");
@@ -406,7 +407,7 @@ static void history_load(struct le *e) {
 }
 
 static void history_add(const char *text) {
-    if (!history_file[0] || !*text)
+    if (!history_file[0] || !*text || *text == ' ')
         return;
     int   fd = open(history_file, O_WRONLY | O_CREAT | O_APPEND, 0600);
     FILE *f  = fd >= 0 ? fdopen(fd, "a") : nullptr;

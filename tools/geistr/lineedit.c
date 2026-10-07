@@ -135,8 +135,8 @@ static void put_line(struct le *e) {
 static void draw(struct le *e, bool with_menu) {
     char                h[256];
     struct le_candidate c[CANDIDATES_MAX];
-    size_t              n    = with_menu ? menu(e, c) : 0;
-    const char         *tail = with_menu ? hint(e, h) : "";
+    size_t              n    = with_menu && !e->searching ? menu(e, c) : 0;
+    const char         *tail = with_menu && !e->searching ? hint(e, h) : "";
     if (e->cursor_row)
         fprintf(e->out, "\033[%uA", e->cursor_row);
     fputs("\r\033[J", e->out);
@@ -177,6 +177,12 @@ static void draw(struct le *e, bool with_menu) {
         }
         if (n > shown)
             fprintf(e->out, "\r\n  \033[2m… %zu more\033[0m", n - shown), shown++;
+    }
+    if (e->searching) { /* the query under the line, as the list would be */
+        fputs("\r\n  \033[2msearch:\033[0m ", e->out);
+        put_cut(e->out, e->query, w > 24 ? w - 24 : 1);
+        fputs(e->found < e->n_history || !e->n_query ? "" : "\033[2m  (no match)\033[0m", e->out);
+        shown++;
     }
     unsigned up = end_row - row + shown;
     if (up)
@@ -234,6 +240,60 @@ static void up_down(struct le *e, int step) {
         history_move(e, step);
 }
 
+/* ---- Ctrl-R: search back through the history ----------------------------- */
+
+/* The newest entry older than `before` that contains the query; n_history if none. */
+static size_t search_back(const struct le *e, size_t before) {
+    for (size_t i = before; i-- > 0;)
+        if (strstr(e->history[i], e->query))
+            return i;
+    return e->n_history;
+}
+
+static void search_start(struct le *e) {
+    memcpy(e->draft, e->buf, e->len + 1);
+    e->searching = true;
+    e->n_query = e->query[0] = 0;
+    e->found                 = e->n_history;
+}
+
+/* The query changed (or Ctrl-R again: older): show the match, if any. */
+static void search_find(struct le *e, size_t before) {
+    e->found = e->n_query ? search_back(e, before) : e->n_history;
+    if (e->found < e->n_history)
+        set_line(e, e->history[e->found]);
+}
+
+/* A key while searching; true when it was the search's, false when the
+ * search ended and the key goes on to the editor (taking the match). */
+static bool search_key(struct le *e, unsigned char c) {
+    if (c == 18) { /* Ctrl-R again: the next older match */
+        size_t before = e->found;
+        search_find(e, before);
+        if (e->found == e->n_history && before < e->n_history) /* none older: stay on this one */
+            e->found = before;
+    } else if (c == 7 || c == 3) { /* Ctrl-G, Ctrl-C: back to the line as it was */
+        set_line(e, e->draft);
+        e->searching = false;
+    } else if (c == '\r' || c == '\n') /* Enter takes the match into the line */
+        e->searching = false;
+    else if (c == 127 || c == 8) {
+        while (e->n_query && ((unsigned char) e->query[e->n_query - 1] & 0xc0) == 0x80)
+            e->n_query--; /* a whole character */
+        if (e->n_query)
+            e->n_query--;
+        e->query[e->n_query] = 0;
+        search_find(e, e->n_history);
+    } else if (c >= 32 && e->n_query + 1 < sizeof e->query) {
+        e->query[e->n_query++] = (char) c, e->query[e->n_query] = 0;
+        search_find(e, e->found < e->n_history ? e->found + 1 : e->n_history);
+    } else { /* any other key: take the match, then the key acts */
+        e->searching = false;
+        return false;
+    }
+    return true;
+}
+
 /* Take the chosen entry; true if it is complete (no argument to follow). */
 static bool take(struct le *e) {
     struct le_candidate c[CANDIDATES_MAX];
@@ -275,6 +335,8 @@ static void escape(struct le *e) {
 }
 
 void le_escape(struct le *e) {
+    if (e->searching) /* Esc: the search ends, the line is as it was */
+        set_line(e, e->draft), e->searching = false;
     e->n_esc  = 0;
     e->closed = true;
     draw(e, true);
@@ -300,7 +362,7 @@ void le_free(struct le *e) {
 }
 
 void le_remember(struct le *e, const char *line) {
-    if (!*line || (e->n_history && !strcmp(e->history[e->n_history - 1], line)))
+    if (!*line || *line == ' ' || (e->n_history && !strcmp(e->history[e->n_history - 1], line)))
         return;
     if (e->n_history == HISTORY_MAX) {
         free(e->history[0]);
@@ -328,6 +390,7 @@ void le_begin(struct le *e, const char *prompt) {
     e->browsing = e->n_history;
     e->sel      = 0;
     e->closed   = false;
+    e->searching = false;
     draw(e, true);
 }
 
@@ -342,6 +405,10 @@ enum le_event le_feed(struct le *e, unsigned char c) {
             e->n_esc = 0;
             draw(e, true);
         }
+        return LE_MORE;
+    }
+    if (e->searching && !e->pasting && search_key(e, c)) {
+        draw(e, true);
         return LE_MORE;
     }
     bool after_cr = e->pasted_cr;
@@ -442,6 +509,12 @@ enum le_event le_feed(struct le *e, unsigned char c) {
     case 12: /* Ctrl-L */
         fputs("\033[H\033[2J", e->out);
         e->rows = e->cursor_row = 0;
+        break;
+    case 18: /* Ctrl-R: search the history */
+        if (e->n_history)
+            search_start(e);
+        else
+            fputc('\a', e->out);
         break;
     case 16:
         up_down(e, -1);

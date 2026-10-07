@@ -103,6 +103,7 @@ Type `/` for the commands:
 | Esc | stop the answer |
 | Ctrl-C | clear the line; twice on an empty line: exit |
 | ↑ ↓ | earlier lines, also from earlier chats; → takes the hint |
+| Ctrl-R | search earlier lines (type to narrow, Ctrl-R for older, Enter takes it) |
 | `?` | the shortcuts |
 
 ### Your conversation stays
@@ -192,6 +193,7 @@ geistr config system "Answer in German."   # system prompt for every new chat
 geistr config markdown off                 # plain text
 geistr config stats off                    # no speed line
 geistr config resume off                   # always start new, keep nothing
+geistr config history off                  # don't keep typed lines between chats
 ```
 
 `--cpu` / `--gpu` choose the processor for one run, `--models DIR` another

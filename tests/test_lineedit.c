@@ -128,6 +128,32 @@ int main(void) {
     line_is(&e, "\x1b[A\r", "zweite Frage", "↑ the last line");
     line_is(&e, "\x1b[A\x1b[A\r", "erste Frage", "↑↑ the one before");
     line_is(&e, "neu\x1b[A\x1b[B\r", "neu", "↓ back to the line being typed");
+    le_remember(&e, " geheim"); /* a leading space: not kept (the shell's ignorespace) */
+    CHECK(e.n_history == 2, "a line starting with a space is not remembered");
+
+    /* Ctrl-R: an incremental search back through the history */
+    le_remember(&e, "Leuchtturm-Geschichte");
+    le_remember(&e, "dritte Frage");
+    line_is(&e, "\x12" "Frage\r\r", "dritte Frage", "Ctrl-R finds the newest match; Enter takes it, Enter sends");
+    line_is(&e, "\x12" "Frage\x12\r\r", "zweite Frage", "Ctrl-R again: the next older match");
+    line_is(&e, "\x12" "Frage\x12\x12\x12\r\r", "erste Frage", "no older match: it stays on the oldest");
+    line_is(&e, "\x12turm\r\r", "Leuchtturm-Geschichte", "a substring anywhere");
+    line_is(&e, "\x12Leuchtt\x7f\x7f\x7fhtt\r\r", "Leuchtturm-Geschichte", "Backspace shortens the query");
+    line_is(&e, "angefangen\x12" "Frage\x07\r", "angefangen", "Ctrl-G cancels: the line as it was");
+    line_is(&e, "\x12" "dritte\x1b[D\x1b[DX\r", "dritte FraXge", "another key takes the match and acts");
+    le_remember(&e, "Grüße an alle");
+    line_is(&e, "\x12üß\r\r", "Grüße an alle", "UTF-8 in the query");
+    line_is(&e, "\x12ü\x7f\x7fGr\r\r", "Grüße an alle", "Backspace removes a whole UTF-8 character");
+    keys(&e, "\x12xyzzy", &screen);
+    CHECK(strstr(screen, "search:") && strstr(screen, "(no match)") && !strcmp(e.buf, ""), "no match: said, the line unchanged");
+    free(screen);
+    struct le cap;
+    le_init(&cap, stdout, 80, nullptr, nullptr);
+    char entry[32];
+    for (int i = 0; i < 501; i++)
+        snprintf(entry, sizeof entry, "line %d", i), le_remember(&cap, entry);
+    CHECK(cap.n_history == 500 && !strcmp(cap.history[0], "line 1"), "the history keeps the last 500");
+    le_free(&cap);
 
     /* events */
     CHECK(keys(&e, "\x04", &screen) == LE_EOF, "Ctrl-D on an empty line ends");
@@ -163,6 +189,6 @@ int main(void) {
         fprintf(stderr, "lineedit: %d failures\n", failures);
         return 1;
     }
-    puts("lineedit: UTF-8 editing, keys, selection list, hint, Esc, Ctrl-C, ?, history, wrapping, paste passed");
+    puts("lineedit: UTF-8 editing, keys, selection list, hint, Esc, Ctrl-C, ?, history, Ctrl-R search, wrapping, paste passed");
     return 0;
 }
