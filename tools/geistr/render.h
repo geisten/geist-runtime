@@ -49,6 +49,8 @@ struct md {
     size_t       n_link_text, n_link_url, n_bare;
     char         before;  /* the input character before this one: a bare URL starts a word */
     bool         literal; /* replaying held text, or a link's own: no new link starts */
+    char         lang[32]; /* a code fence's language, shown on its line */
+    size_t       n_lang;
     unsigned     width;   /* terminal columns for tables (0: 80) */
     char        *table;   /* the table's lines so far, raw */
     size_t       n_table, cap_table, table_rows;
@@ -62,6 +64,7 @@ struct md {
     unsigned spaces;          /* held until the next word: dropped at a line's end */
     bool     head;            /* no word on this line yet */
     bool     bar;             /* a quote: its continuation lines repeat the │ */
+    bool     nowrap;          /* inside a code block: lines as they are */
     char     word[512];       /* the word being written (escapes included) */
     size_t   n_word;
 };

@@ -959,6 +959,27 @@ static void inline_char(struct md *m, char c) {
     text(m, c);
 }
 
+/* ---- code blocks: a frame that shows where they start and end ---------------- */
+
+static bool wrapping(const struct md *m);
+
+/* A code line's dim "│ " (part of the block style: the terminal's own wrap of
+ * a long line does not repeat it). */
+static void gutter(struct md *m) {
+    fputs(m->mode == MD_ANSI ? "\033[2m│\033[22m " : "│ ", m->out);
+}
+
+static void fence_rule(struct md *m) {
+    bool faint = m->mode == MD_ANSI;
+    fputs(faint ? "\033[2m" : "", m->out);
+    if (m->block && m->n_lang) /* opening, with a language */
+        fprintf(m->out, "── %.*s ──", (int) m->n_lang, m->lang);
+    else
+        fputs("──", m->out);
+    fputs(faint ? "\033[22m" : "", m->out);
+    text(m, '\n');
+}
+
 enum prefix { P_MORE, P_TEXT, P_HEADING, P_BULLET, P_QUOTE, P_FENCE };
 
 static enum prefix classify(const struct md *m, bool final, size_t *indent, size_t *marker) {
@@ -1015,9 +1036,12 @@ static void prefix_release(struct md *m, bool final) {
     if (p != P_TEXT) {
         fwrite(held, 1, indent, m->out);
         from = indent + marker;
-        if (p == P_FENCE) {
+        if (p == P_FENCE) { /* the fence line becomes a rule with the language (at its end) */
             m->block     = !m->block;
-            m->skip_line = true; /* the fence line itself (and its language) is not shown */
+            m->skip_line = true;
+            m->n_lang    = 0;
+            if (wrapping(m)) /* code is not word-wrapped: a mark for the wrap filter */
+                fputc(m->block ? '\001' : '\002', m->out);
             style(m);
             return;
         }
@@ -1028,6 +1052,8 @@ static void prefix_release(struct md *m, bool final) {
         style(m);
         fputs(p == P_BULLET ? "• " : p == P_QUOTE ? "│ " : "", m->out);
     }
+    if (m->block)
+        gutter(m);
     for (size_t i = from; i < n; i++)
         if (m->block)
             text(m, held[i]);
@@ -1057,6 +1083,10 @@ static void newline(struct md *m) {
         math_cancel(m);
     bool skip  = m->skip_line;
     m->skip_line = false;
+    if (skip) /* a fence: "── python ──" opening a block, "──" closing it */
+        fence_rule(m);
+    else if (m->block && m->line_start) /* an empty code line keeps the gutter */
+        gutter(m);
     m->bold = m->italic = m->code = m->heading = m->quote = false;
     style(m);
     if (!skip)
@@ -1093,8 +1123,11 @@ static void feed_char(struct md *m, char c) {
         newline(m);
         return;
     }
-    if (m->skip_line)
+    if (m->skip_line) { /* the fence line: its language */
+        if (m->block && c != '`' && c != ' ' && m->n_lang + 1 < sizeof m->lang)
+            m->lang[m->n_lang++] = c;
         return;
+    }
     if (m->line_start) {
         m->prefix[m->n_prefix++] = c;
         prefix_release(m, m->n_prefix == sizeof m->prefix);
@@ -1137,6 +1170,17 @@ static void word_flush(struct md *m) {
 static void wrap_put(struct md *m, const char *s, size_t n) {
     for (size_t i = 0; i < n; i++) {
         char c = s[i];
+        if (c == '\001' || c == '\002') { /* a code block begins or ends: no word wrap inside */
+            word_flush(m);
+            m->nowrap = c == '\001';
+            continue;
+        }
+        if (m->nowrap) {
+            fputc(c, m->sink);
+            if (c == '\n')
+                m->col = m->lead = m->hang = 0, m->bar = false, m->head = true;
+            continue;
+        }
         if (c == '\n' || c == '\r') {
             word_flush(m);
             m->spaces = 0; /* none at a line's end */

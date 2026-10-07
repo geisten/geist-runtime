@@ -98,7 +98,8 @@ int main(void) {
     check("  * eingerückt", "  • eingerückt");
     check("> zitiert", "«q»│ zitiert«»");
     check("---", "---");
-    check("```c\nint x = 1; // **nicht fett**\n```\nnach", "«c»int x = 1; // **nicht fett**\n«»nach");
+    check("```c\nint x = 1; // **nicht fett**\n```\nnach", "«c»── c ──\n│ int x = 1; // **nicht fett**\n«»──\nnach");
+    check("```\na\n\nb\n```\n", "«c»──\n│ a\n│ \n│ b\n«»──\n"); /* no language; an empty line keeps the gutter */
     check("1. erstens", "1. erstens");
     /* math */
     check("Euler: $e^{i\\pi} + 1 = 0$.", "Euler: «m»e^(iπ) + 1 = 0«»."); /* no superscript π */
@@ -158,6 +159,10 @@ int main(void) {
     test_width = 16;
     check("Short then Donaudampfschifffahrtsgesellschaftskapitän ends.\n",
           "Short then\nDonaudampfschifffahrtsgesellschaftskapitän\nends.\n");
+    test_width = 20; /* code is not word-wrapped: its lines stay as they are */
+    check("Some prose that is long enough to wrap here.\n```py\nprint('a long line of code that goes on')\n```\n",
+          "Some prose that is\nlong enough to wrap\nhere.\n«c»── py ──\n│ print('a long line of code that goes on')\n«»──\n");
+    check("```\nunclosed", "«c»──\n│ unclosed«»");               /* stopped mid-block */
     test_wrap = false, test_width = 0;
     /* links: [text](url) as a hyperlink (OSC 8; «link» here), the URL after the
      * text when it differs; bare http(s) URLs linked; no link: as written */
@@ -202,6 +207,6 @@ int main(void) {
         fprintf(stderr, "render: %d failures\n", failures);
         return 1;
     }
-    puts("render: Markdown, tables and math for the terminal, split-invariant, raw mode untouched, word wrap, links passed");
+    puts("render: Markdown, tables and math for the terminal, split-invariant, raw mode untouched, word wrap, links, code frames passed");
     return 0;
 }
