@@ -249,11 +249,11 @@ static void keys_only(bool on) {
 }
 
 static void shortcuts(void) {
-    bool dim = tty_out();
+    bool faint = tty_out();
     printf("%sEnter send · Esc stop the answer · Ctrl-C clear the line, twice: exit · Ctrl-D exit\n"
            "/ commands (↑↓ choose · Tab take · Esc close) · ↑↓ earlier lines · → take the hint\n"
            "Ctrl-A/E start/end · Ctrl-U/K delete to start/end · Ctrl-W a word · Ctrl-L clear screen%s\n",
-           dim ? "\033[2m" : "", dim ? "\033[0m" : "");
+           dim(faint), normal(faint));
 }
 
 static void intro(const char *name, const char *backend, bool gpu) {
@@ -272,9 +272,9 @@ void session_close(struct session *x) {
 }
 
 /* Open the chat on x->model with x's options (model already open). */
-static bool session_chat(struct session *x, geistr_reasoning reasoning, bool interactive) {
+static bool session_chat(struct session *x, bool interactive) {
     geistr_chat_opts opts = GEISTR_CHAT_OPTS_INIT;
-    opts.reasoning        = reasoning;
+    opts.reasoning        = x->reasoning;
     opts.temperature      = (float) x->temperature;
     opts.overflow         = interactive ? GEISTR_OVERFLOW_DROP_OLDEST : GEISTR_OVERFLOW_REFUSE;
     opts.thinking         = interactive; /* the chat shows "thinking" while it lasts (print_piece) */
@@ -296,7 +296,7 @@ int session_open(struct session *x, const char *name, const char *processor, dou
                            : !strcmp(processor, "gpu") ? GEISTR_PROCESSOR_GPU
                                                        : GEISTR_PROCESSOR_AUTO;
     char error[256];
-    *x = (struct session) {.temperature = temperature};
+    *x = (struct session) {.temperature = temperature, .reasoning = reasoning};
     spinner_start(name, path);
     geistr_status opened = geistr_model_open(path, &mo, &x->model, error, sizeof error);
     spinner_stop();
@@ -315,7 +315,7 @@ int session_open(struct session *x, const char *name, const char *processor, dou
     }
     snprintf(x->name, sizeof x->name, "%s", name);
     snprintf(x->processor, sizeof x->processor, "%s", processor);
-    if (!session_chat(x, reasoning, interactive)) {
+    if (!session_chat(x, interactive)) {
         session_close(x);
         return ERROR;
     }
@@ -386,14 +386,14 @@ static void chat_help(void) {
 
 /* A dim line: how to use a command, what it shows. */
 static void usage(const char *text) {
-    bool dim = tty_out();
-    printf("%s%s%s\n", dim ? "\033[2m" : "", text, dim ? "\033[0m" : "");
+    bool faint = tty_out();
+    printf("%s%s%s\n", dim(faint), text, normal(faint));
 }
 
 static void status_line(const struct session *x, const char *what) {
-    bool dim = tty_out();
-    printf("%s%s %s · %s%s%s\n", dim ? "\033[2m" : "", on_gpu(x) ? "⚡" : "⚙", x->backend, x->name, what,
-           dim ? "\033[0m" : "");
+    bool faint = tty_out();
+    printf("%s%s %s · %s%s%s\n", dim(faint), on_gpu(x) ? "⚡" : "⚙", x->backend, x->name, what,
+           normal(faint));
 }
 
 /* One answer to `prompt` (geistr run). */
@@ -443,9 +443,7 @@ static bool remote_cancel(void *ctx) {
 static bool reopen(struct session *x, struct conversation *said) {
     geistr_chat_close(x->chat);
     x->chat = nullptr;
-    geistr_reasoning reasoning;
-    char             path[4200];
-    if (resolve(x->name, path, sizeof path, &reasoning) != OK || !session_chat(x, reasoning, true))
+    if (!session_chat(x, true))
         return false;
     running     = x->chat;
     said->carry = said->n > 0;
@@ -542,9 +540,9 @@ static int command(struct session *x, struct conversation *said, char *line, con
         if (x->chat)
             (void) geistr_chat_rewind(x->chat, 0);
         conv_clear(said);
-        bool dim = tty_out(); /* what goes on: the system prompt stays */
-        printf("%s○ a new conversation%s%s%s\n", dim ? "\033[2m" : "", said->system[0] ? " · system: " : "",
-               said->system, dim ? "\033[0m" : "");
+        bool faint = tty_out(); /* what goes on: the system prompt stays */
+        printf("%s○ a new conversation%s%s%s\n", dim(faint), said->system[0] ? " · system: " : "",
+               said->system, normal(faint));
     } else
         chat_help();
     return GO_ON;
@@ -672,7 +670,7 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
         if (remote ? !strcmp(rs.finish, "repetition")
                    : geistr_chat_stats(x.chat, &done) == GEISTR_OK && done.finish == GEISTR_FINISH_REPETITION)
             printf("%s  ⟲ it repeated itself: stopped there · /clear for a fresh conversation%s\n",
-                   tty_out() ? "\033[2m" : "", tty_out() ? "\033[0m" : "");
+                   dim(tty_out()), normal(tty_out()));
         if (s == GEISTR_OK || s == GEISTR_CANCELLED) {
             conv_answered(&said, shown.text);
             if (s == GEISTR_OK && remote) {

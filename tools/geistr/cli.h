@@ -34,6 +34,8 @@ bool make_dirs(const char *path, unsigned mode); /* mkdir -p */
 static inline bool tty_out(void) {
     return isatty(STDOUT_FILENO) && !getenv("NO_COLOR");
 }
+static inline const char *dim(bool on) { return on ? "\033[2m" : ""; }
+static inline const char *normal(bool on) { return on ? "\033[0m" : ""; }
 
 /* ---- speed.c: tokens/s measured here ---------------------------------------- */
 
@@ -85,8 +87,9 @@ struct session {
     geistr_model *model;
     geistr_chat  *chat;
     char          name[256], processor[8], backend[16], format[16];
-    double        temperature;
-    uint32_t      context;
+    double           temperature;
+    uint32_t         context;
+    geistr_reasoning reasoning; /* the catalog's, for each chat on the model */
 };
 
 extern geistr_chat *volatile running; /* the answer Ctrl-C stops */

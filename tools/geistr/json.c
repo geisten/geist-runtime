@@ -40,11 +40,14 @@ int json_count(const struct json *j, int t) {
     return t >= 0 && T(j)[t].type == JSMN_ARRAY ? T(j)[t].size : -1;
 }
 
-int json_item(const struct json *j, int array, int k) {
-    for (int i = array + 1; array >= 0 && i < j->n; i++)
-        if (T(j)[i].parent == array && k-- == 0)
-            return i;
-    return -1;
+int json_next(const struct json *j, int array, int item) {
+    const jsmntok_t *t = T(j);
+    if (array < 0)
+        return -1;
+    int i = (item < 0 ? array : item) + 1;
+    while (item >= 0 && i < j->n && t[i].start < t[item].end) /* past item's own tokens */
+        i++;
+    return i < j->n && t[i].parent == array ? i : -1;
 }
 
 /* UTF-8 of code point cp into out; returns the bytes written. */
@@ -123,12 +126,18 @@ void json_get(const char *object, const char *key, char *out, size_t cap) {
 
 void json_write(FILE *f, const char *s) {
     fputc('"', f);
-    for (; s && *s; s++)
+    while (s && *s) {
+        size_t run = 0; /* what needs no escape goes out in one write */
+        while (s[run] && s[run] != '"' && s[run] != '\\' && (unsigned char) s[run] >= 0x20)
+            run++;
+        fwrite(s, 1, run, f);
+        if (!*(s += run))
+            break;
         if (*s == '"' || *s == '\\')
-            fprintf(f, "\\%c", *s);
-        else if ((unsigned char) *s < 0x20)
-            fprintf(f, "\\u%04x", (unsigned char) *s);
+            fputc('\\', f), fputc(*s, f);
         else
-            fputc(*s, f);
+            fprintf(f, "\\u%04x", (unsigned char) *s);
+        s++;
+    }
     fputc('"', f);
 }

@@ -153,6 +153,11 @@ static bool simple(const char *t) {
     return strlen(t) && !strpbrk(t, " +-*/=<>,");
 }
 
+/* t, in parentheses unless bare. */
+static void operand(struct mo *o, const char *t, bool bare) {
+    put(o, bare ? "" : "("), put(o, t), put(o, bare ? "" : ")");
+}
+
 static bool script(const char *t, const char *const table[][2], size_t n, struct mo *o) {
     char out[256] = "";
     for (const char *c = t; *c;) {
@@ -200,9 +205,7 @@ static void expr(const char *s, const char *e, struct mo *o) {
             if (IS("frac") || IS("dfrac") || IS("tfrac")) {
                 g = group(&s, e, &ge), render(g, ge, a, sizeof a);
                 g = group(&s, e, &ge), render(g, ge, b, sizeof b);
-                put(o, simple(a) ? a : "("), put(o, simple(a) ? "" : a), put(o, simple(a) ? "" : ")");
-                put(o, "/");
-                put(o, simple(b) ? b : "("), put(o, simple(b) ? "" : b), put(o, simple(b) ? "" : ")");
+                operand(o, a, simple(a)), put(o, "/"), operand(o, b, simple(b));
             } else if (IS("sqrt")) {
                 if (s < e && *s == '[') { /* \sqrt[n]{x}: the index as superscript */
                     const char *close = memchr(s, ']', (size_t) (e - s));
@@ -214,7 +217,7 @@ static void expr(const char *s, const char *e, struct mo *o) {
                     }
                 }
                 g = group(&s, e, &ge), render(g, ge, a, sizeof a);
-                put(o, "√"), put(o, simple(a) ? a : "("), put(o, simple(a) ? "" : a), put(o, simple(a) ? "" : ")");
+                put(o, "√"), operand(o, a, simple(a));
             } else if (IS("mathbb")) {
                 g = group(&s, e, &ge);
                 bool hit = false;
@@ -239,9 +242,7 @@ static void expr(const char *s, const char *e, struct mo *o) {
             g = group(&s, e, &ge);
             render(g, ge, a, sizeof a);
             if (!(up ? script(a, sup, sizeof sup / sizeof *sup, o) : script(a, sub, sizeof sub / sizeof *sub, o))) {
-                put(o, up ? "^" : "_");
-                bool one = strlen(a) <= 1;
-                put(o, one ? a : "("), put(o, one ? "" : a), put(o, one ? "" : ")");
+                put(o, up ? "^" : "_"), operand(o, a, strlen(a) <= 1);
             }
         } else if (*s == '{') {
             const char *g, *ge;
@@ -257,11 +258,8 @@ static void expr(const char *s, const char *e, struct mo *o) {
 }
 
 void md_math(const char *tex, char *out, size_t cap) {
-    if (!cap)
-        return;
-    out[0]       = 0;
-    struct mo o = {out, cap, 0};
-    expr(tex, tex + strlen(tex), &o);
+    if (cap)
+        render(tex, tex + strlen(tex), out, cap);
 }
 
 /* ---- tables ------------------------------------------------------------- */
@@ -641,7 +639,7 @@ static void table_line_end(struct md *m) {
         return;
     }
     if (m->table_state == 1) { /* the second line decides */
-        const char *second = m->table + (strchr(m->table, '\n') - m->table) + 1;
+        const char *second = strchr(m->table, '\n') + 1;
         char       *cells[MAX_COLS];
         size_t      n  = split_row(second, strlen(second) - 1, cells);
         bool        ok = delimiter_row(cells, n);
@@ -888,7 +886,8 @@ static void prefix_release(struct md *m, bool final) {
             inline_char(m, held[i]);
 }
 
-static void newline(struct md *m) {
+/* A line or the answer ends: what waits for more resolves as it is. */
+static void flush_pending(struct md *m) {
     if (m->line_start && m->n_prefix)
         prefix_release(m, true);
     if (m->pending)
@@ -897,6 +896,10 @@ static void newline(struct md *m) {
         m->closing = false;
         math_finish(m);
     }
+}
+
+static void newline(struct md *m) {
+    flush_pending(m);
     if (m->math == '$' || m->math == '(')
         math_cancel(m);
     bool skip  = m->skip_line;
@@ -941,10 +944,7 @@ static void feed_char(struct md *m, char c) {
         return;
     if (m->line_start) {
         m->prefix[m->n_prefix++] = c;
-        if (m->n_prefix == sizeof m->prefix)
-            prefix_release(m, true);
-        else
-            prefix_release(m, false);
+        prefix_release(m, m->n_prefix == sizeof m->prefix);
         return;
     }
     if (m->block)
@@ -1059,14 +1059,7 @@ static void finish_all(struct md *m, const char *unused) {
     free(m->table);
     m->table   = nullptr;
     m->n_table = m->cap_table = 0;
-    if (m->line_start && m->n_prefix)
-        prefix_release(m, true);
-    if (m->pending)
-        pending_resolve(m, 0);
-    if (m->closing) {
-        m->closing = false;
-        math_finish(m);
-    }
+    flush_pending(m);
     if (m->math)
         math_cancel(m);
     m->bold = m->italic = m->code = m->block = m->heading = m->quote = false;

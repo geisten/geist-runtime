@@ -90,9 +90,9 @@ void speed_bar(const char *symbol, double measured, double reference, double max
     static const char *const eighths[] = {"", "▏", "▎", "▍", "▌", "▋", "▊", "▉"};
     if (!tty) /* piped: measured values only, nothing to tell them apart */
         reference = 0;
-    double v = measured > 0 ? measured : reference;
-    bool                     dim       = tty && measured <= 0 && reference > 0;
-    printf("  %s%s ", dim ? "\033[2m" : "", symbol);
+    double v     = measured > 0 ? measured : reference;
+    bool   faint = tty && measured <= 0 && reference > 0;
+    printf("  %s%s ", dim(faint), symbol);
     if (v <= 0) {
         printf("%4s%*s", "·", width ? width + 1 : 0, "");
         return;
@@ -103,16 +103,16 @@ void speed_bar(const char *symbol, double measured, double reference, double max
         fputs("█", stdout);
     if (units)
         fputs(eighths[units], stdout), cells++;
-    printf("%*s%s", width - cells, "", dim ? "\033[0m" : "");
+    printf("%*s%s", width - cells, "", normal(faint));
 }
 
 
 void speed_line(unsigned tokens, double generation_ms, double total_ms, FILE *out) {
     if (!cfg.stats || !tokens)
         return;
-    bool   dim  = out == stdout ? tty_out() : isatty(STDERR_FILENO);
-    double rate = generation_ms > 0 ? tokens / (generation_ms / 1000) : 0;
-    fprintf(out, "%s  %.1f tok/s · %.1f s%s\n", dim ? "\033[2m" : "", rate, total_ms / 1000, dim ? "\033[0m" : "");
+    bool   faint = out == stdout ? tty_out() : isatty(STDERR_FILENO);
+    double rate  = generation_ms > 0 ? tokens / (generation_ms / 1000) : 0;
+    fprintf(out, "%s  %.1f tok/s · %.1f s%s\n", dim(faint), rate, total_ms / 1000, normal(faint));
 }
 
 void speed_record(const char *model, const char *backend, unsigned tokens, double generation_ms,
@@ -246,13 +246,13 @@ int speed_compare(int n, const char **refs) {
             double change = (v[1] / v[0] - 1) * 100;
             bool   up     = change >= 0;
             printf("   %s%s %.1f %%%s", tty ? (up ? "\033[32m" : "\033[31m") : "", up ? "▲" : "▼", up ? change : -change,
-                   tty ? "\033[0m" : "");
+                   normal(tty));
         }
         putchar('\n');
     }
     if (noisy)
         printf("%s⚠ its runs differ by more than 25 %%: measured on a busy machine? geistr bench again%s\n",
-               tty ? "\033[2m" : "", tty ? "\033[0m" : "");
+               dim(tty), normal(tty));
     free(rows);
     return OK;
 }

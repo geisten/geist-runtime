@@ -14,6 +14,7 @@
  * costs (bytes + 3) / 4 tokens per message plus 4 for its markers.
  */
 #include "geistr.h"
+#include "common.h"
 #include "stream.h"
 #include "template.h"
 
@@ -27,48 +28,7 @@
 #define TOKEN_BYTES 3u
 
 const char *geistr_version(void) {
-    return "0.1.1-stub";
-}
-
-const char *geistr_status_text(geistr_status s) {
-    switch (s) {
-    case GEISTR_OK:
-        return "ok";
-    case GEISTR_INVALID:
-        return "invalid argument or call order";
-    case GEISTR_NO_MEMORY:
-        return "out of memory";
-    case GEISTR_IO:
-        return "model file missing or unreadable";
-    case GEISTR_FORMAT:
-        return "not a supported model or chat format";
-    case GEISTR_CONTEXT:
-        return "the conversation does not fit the context window";
-    case GEISTR_BACKEND:
-        return "the engine failed; reopen the model";
-    case GEISTR_CANCELLED:
-        return "cancelled";
-    }
-    return "unknown status";
-}
-
-/* Copy caller options of any known size over the defaults (ABI rule). */
-static bool opts_copy(void *dst, const void *src, size_t known) {
-    if (src == nullptr)
-        return true;
-    size_t size;
-    memcpy(&size, src, sizeof size);
-    if (size < sizeof size || size > known)
-        return false;
-    memcpy(dst, src, size);
-    memcpy(dst, &known, sizeof known); /* the copy is a full struct now */
-    return true;
-}
-
-static double now_ms(void) {
-    struct timespec t;
-    clock_gettime(CLOCK_MONOTONIC, &t);
-    return (double) t.tv_sec * 1e3 + (double) t.tv_nsec / 1e6;
+    return "0.1.2-stub";
 }
 
 static void put_error(char *error, size_t cap, const char *text) {
@@ -220,12 +180,7 @@ struct geistr_chat {
     struct str_utf8   utf8;
     struct str_output output;
     struct str_stops  stop;
-    struct queued {
-        geistr_part part;
-        char       *text;
-    }      *queue;
-    size_t  n_queue, head, cap_queue;
-    char   *piece; /* storage behind the last returned piece */
+    struct str_pieces pieces;
     geistr_stats  stats;
     double        started;
     char          error[256];
@@ -233,12 +188,6 @@ struct geistr_chat {
 
 static uint32_t message_tokens(const char *content) {
     return (uint32_t) ((strlen(content) + 3) / 4) + 4;
-}
-
-static void stops_free(char **stops, size_t n) {
-    for (size_t i = 0; stops && i < n; i++)
-        free(stops[i]);
-    free(stops);
 }
 
 geistr_status geistr_chat_open(geistr_model *m, const geistr_chat_opts *opts, geistr_chat **out) {
@@ -255,14 +204,10 @@ geistr_status geistr_chat_open(geistr_model *m, const geistr_chat_opts *opts, ge
         snprintf(m->error, sizeof m->error, "this model's chat format is not supported");
         return GEISTR_FORMAT;
     }
-    geistr_chat *c = calloc(1, sizeof *c);
-    char       **stops = o.n_stop ? calloc(o.n_stop, sizeof *stops) : nullptr;
-    bool         ok    = c && (!o.n_stop || stops);
-    for (size_t i = 0; ok && i < o.n_stop; i++)
-        ok = o.stop[i] && *o.stop[i] && (stops[i] = strdup(o.stop[i]));
-    if (!ok) {
-        geistr_status s = c && (!o.n_stop || stops) ? GEISTR_INVALID : GEISTR_NO_MEMORY;
-        stops_free(stops, o.n_stop);
+    geistr_chat  *c     = calloc(1, sizeof *c);
+    char        **stops = nullptr;
+    geistr_status s     = c ? stops_copy(&o, &stops) : GEISTR_NO_MEMORY;
+    if (s != GEISTR_OK) {
         free(c);
         snprintf(m->error, sizeof m->error, "chat: out of memory or an empty stop string");
         return s;
@@ -278,35 +223,13 @@ geistr_status geistr_chat_open(geistr_model *m, const geistr_chat_opts *opts, ge
     return GEISTR_OK;
 }
 
-static void queue_clear(geistr_chat *c) {
-    for (size_t i = c->head; i < c->n_queue; i++)
-        free(c->queue[i].text);
-    c->n_queue = c->head = 0;
-}
 
 /* Stage outputs land here as pieces, in order. */
-static bool enqueue(geistr_chat *c, geistr_part part, const char *text) {
-    if (!*text)
-        return true;
-    if (c->n_queue == c->cap_queue) {
-        size_t         cap  = c->cap_queue ? c->cap_queue * 2 : 8;
-        struct queued *grow = realloc(c->queue, cap * sizeof *grow);
-        if (!grow)
-            return false;
-        c->queue     = grow;
-        c->cap_queue = cap;
-    }
-    char *copy = strdup(text);
-    if (!copy)
-        return false;
-    c->queue[c->n_queue++] = (struct queued) {part, copy};
-    return true;
-}
 static bool queue_answer(void *c, const char *text) {
-    return enqueue(c, GEISTR_PART_ANSWER, text);
+    return str_pieces_push(&((geistr_chat *) c)->pieces, GEISTR_PART_ANSWER, text);
 }
 static bool queue_thinking(void *c, const char *text) {
-    return enqueue(c, GEISTR_PART_THINKING, text);
+    return str_pieces_push(&((geistr_chat *) c)->pieces, GEISTR_PART_THINKING, text);
 }
 static bool to_stops(void *c, const char *text) {
     return str_stops_feed(&((geistr_chat *) c)->stop, text, queue_answer, c);
@@ -318,10 +241,8 @@ void geistr_chat_close(geistr_chat *c) {
     stops_free(c->stops, c->opts.n_stop);
     free(c->turns);
     free(c->raw);
-    queue_clear(c);
-    free(c->queue);
+    str_pieces_free(&c->pieces);
     str_stops_free(&c->stop);
-    free(c->piece);
     model_release(c->model);
     free(c);
 }
@@ -423,7 +344,7 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
 
     uint32_t room      = context - c->used - 1;
     c->limit           = c->opts.max_tokens && c->opts.max_tokens < room ? c->opts.max_tokens : room;
-    queue_clear(c);
+    str_pieces_clear(&c->pieces);
     c->utf8 = (struct str_utf8) {};
     str_output_init(&c->output, c->opts.reasoning == GEISTR_REASONING_THINK_TAGS);
     str_output_thinking(&c->output, c->opts.thinking ? queue_thinking : nullptr);
@@ -482,20 +403,18 @@ geistr_status geistr_chat_next(geistr_chat *c, geistr_piece *piece) {
             return GEISTR_CANCELLED;
         }
         if (!c->ended && atomic_load(&c->cancel)) {
-            queue_clear(c);
+            str_pieces_clear(&c->pieces);
             end(c, piece, GEISTR_FINISH_CANCELLED);
             snprintf(c->error, sizeof c->error, "cancelled");
             continue;
         }
-        if (c->head < c->n_queue) {
-            struct queued q = c->queue[c->head++];
-            free(c->piece);
-            c->piece = q.text;
+        struct str_piece q;
+        if (str_pieces_take(&c->pieces, &q)) {
             if (q.part == GEISTR_PART_ANSWER && c->stats.first_answer_ms < 0)
                 c->stats.first_answer_ms = now_ms() - c->started;
-            piece->part = q.part;
+            piece->part = (geistr_part) q.part;
             piece->text = q.text;
-            piece->len  = strlen(q.text);
+            piece->len  = q.len;
             return GEISTR_OK;
         }
         if (c->ended)
@@ -532,24 +451,6 @@ geistr_status geistr_chat_cancel(geistr_chat *c) {
         return GEISTR_INVALID;
     atomic_store(&c->cancel, true);
     return GEISTR_OK;
-}
-
-geistr_status geistr_chat_run(geistr_chat         *c,
-                              size_t               count,
-                              const geistr_message messages[],
-                              geistr_emit_fn       emit,
-                              void                *context) {
-    if (!emit)
-        return GEISTR_INVALID;
-    geistr_status s     = geistr_chat_send(c, count, messages);
-    geistr_piece  piece = {.size = sizeof piece};
-    while (s == GEISTR_OK && (s = geistr_chat_next(c, &piece)) == GEISTR_OK) {
-        if (piece.part == GEISTR_PART_END)
-            return GEISTR_OK;
-        if (!emit(context, &piece))
-            geistr_chat_cancel(c);
-    }
-    return s;
 }
 
 geistr_status geistr_chat_stats(const geistr_chat *c, geistr_stats *stats) {

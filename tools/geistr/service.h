@@ -59,13 +59,14 @@ struct svc_request {
 void svc_free_request(struct svc_request *r);
 
 /* Where the answer goes. part returns false when the client is gone (the
- * answer stops); then neither done nor error follows. error's status is
- * "invalid", "context" or "error". */
+ * answer stops); then neither done nor error follows. done gets the whole
+ * answer; error's status is GEISTR_INVALID, GEISTR_CONTEXT or another
+ * (the service failed). */
 struct svc_sink {
     void *ctx;
     bool (*part)(void *ctx, const char *text, size_t len);
-    void (*done)(void *ctx, const geistr_stats *stats);
-    void (*error)(void *ctx, const char *status, const char *text);
+    void (*done)(void *ctx, const geistr_stats *stats, const char *answer);
+    void (*error)(void *ctx, geistr_status status, const char *text);
 };
 
 struct held; /* the conversations the service keeps */

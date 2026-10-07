@@ -41,7 +41,7 @@ struct str_output {
     char        held[8]; /* a possible partial closing marker, until it resolves */
     size_t      used, closing, opening, held_len;
     unsigned    depth;
-    bool        enabled, reasoning, visible;
+    bool        enabled, reasoning;
     str_emit_fn think;
 };
 void str_output_init(struct str_output *out, bool think_tags);
@@ -68,6 +68,25 @@ void str_stops_free(struct str_stops *s);
 bool str_stops_feed(struct str_stops *s, const char *text, str_emit_fn emit, void *context);
 /* The answer is over: emit what was held back (it matched no stop string). */
 bool str_stops_finish(struct str_stops *s, str_emit_fn emit, void *context);
+
+/* ---- pieces: what the stages emit, in order, until the caller takes it ---- */
+struct str_piece {
+    int    part; /* the caller's kind of text */
+    char  *text; /* owned */
+    size_t len;
+};
+struct str_pieces {
+    struct str_piece *items;
+    size_t            n, head, cap;
+    char             *taken; /* the text of the last piece taken */
+};
+/* A copy of text ("" is skipped); false when out of memory. */
+bool str_pieces_push(struct str_pieces *q, int part, const char *text);
+/* The next piece into out, or false if none; its text stays valid until the
+ * next take or free. */
+bool str_pieces_take(struct str_pieces *q, struct str_piece *out);
+void str_pieces_clear(struct str_pieces *q); /* drops what was not taken */
+void str_pieces_free(struct str_pieces *q);
 
 /* ---- repetition: an answer that loops ---------------------------------------
  * True when the tokens end in one cycle repeated back to back: a period of 4

@@ -52,11 +52,7 @@ void str_output_init(struct str_output *o, bool think_tags) {
 static bool whitespace(char c) {
     return c == ' ' || c == '\n' || c == '\r' || c == '\t';
 }
-static bool
-answer(struct str_output *o, const char *s, str_emit_fn emit, void *ctx) {
-    for (const char *p = s; *p; ++p)
-        if (!whitespace(*p))
-            o->visible = true;
+static bool answer(const char *s, str_emit_fn emit, void *ctx) {
     return !*s || emit(ctx, s);
 }
 bool str_output_feed(struct str_output *o,
@@ -70,7 +66,7 @@ bool str_output_feed(struct str_output *o,
         if (o->state == STR_DISCARD)
             return true;
         if (o->state == STR_ANSWER)
-            return answer(o, s, emit, ctx);
+            return answer(s, emit, ctx);
         if (o->state == STR_REASONING) {
             /* The text goes to the optional thinking callback; the last o->closing
              * bytes may start "</think>" and are held back until resolved (#93).
@@ -148,10 +144,10 @@ bool str_output_feed(struct str_output *o,
             }
         } else {
             o->state = STR_ANSWER;
-            if (!answer(o, o->prefix, emit, ctx))
+            if (!answer(o->prefix, emit, ctx))
                 return false;
             o->used = 0;
-            return answer(o, s, emit, ctx);
+            return answer(s, emit, ctx);
         }
     }
     return true;
@@ -269,4 +265,48 @@ bool str_repeats(const int32_t *t, size_t n) {
         return !short_unit;
     }
     return false;
+}
+
+bool str_pieces_push(struct str_pieces *q, int part, const char *text) {
+    if (!*text)
+        return true;
+    if (q->n == q->cap) {
+        size_t            cap  = q->cap ? q->cap * 2 : 8;
+        struct str_piece *grow = realloc(q->items, cap * sizeof *grow);
+        if (!grow)
+            return false;
+        q->items = grow;
+        q->cap   = cap;
+    }
+    size_t len  = strlen(text);
+    char  *copy = malloc(len + 1);
+    if (!copy)
+        return false;
+    memcpy(copy, text, len + 1);
+    q->items[q->n++] = (struct str_piece) {part, copy, len};
+    return true;
+}
+
+bool str_pieces_take(struct str_pieces *q, struct str_piece *out) {
+    if (q->head == q->n)
+        return false;
+    *out = q->items[q->head++];
+    free(q->taken);
+    q->taken = out->text;
+    if (q->head == q->n) /* all taken: start over, the array stays small */
+        q->n = q->head = 0;
+    return true;
+}
+
+void str_pieces_clear(struct str_pieces *q) {
+    for (size_t i = q->head; i < q->n; i++)
+        free(q->items[i].text);
+    q->n = q->head = 0;
+}
+
+void str_pieces_free(struct str_pieces *q) {
+    str_pieces_clear(q);
+    free(q->items);
+    free(q->taken);
+    *q = (struct str_pieces) {};
 }
