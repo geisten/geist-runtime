@@ -362,16 +362,19 @@ enum le_event le_feed(struct le *e, unsigned char c) {
     }
     switch (c) {
     case '\r':
-    case '\n':
-        if (!take(e)) { /* a command that needs its argument: keep editing */
-            draw(e, true);
-            return LE_MORE;
+    case '\n': {
+        struct le_candidate list[CANDIDATES_MAX];
+        if (menu(e, list)) { /* Enter runs the chosen command; one that takes an argument shows its state */
+            (void) take(e);
+            while (e->len && e->buf[e->len - 1] == ' ')
+                e->buf[--e->len] = 0;
         }
         e->pos = e->len;
         draw(e, false);
         fputs("\r\n", e->out);
         fflush(e->out);
         return LE_SUBMIT;
+    }
     case 3: /* Ctrl-C: clears the line; on an empty one the caller decides */
         if (e->len) {
             e->len = e->pos = 0;

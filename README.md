@@ -135,7 +135,7 @@ model loads, and uses Claude Code's keys:
 
 | key | does |
 |---|---|
-| `/` | a list of the commands under the line, filtered as you type; ↑↓ choose, Tab takes, Enter takes and runs (or waits for the argument, e.g. `/model `), Esc closes; after `/model ` the installed models |
+| `/` | a list of the commands under the line, filtered as you type; ↑↓ choose, Tab takes it to add an argument, Enter takes and runs it as it is, Esc closes; after `/model ` the installed models |
 | Esc | stops the answer (Ctrl-C too) |
 | Ctrl-C | clears the line; on an empty line twice: exit |
 | `?` | on an empty line: the shortcuts |
@@ -145,15 +145,20 @@ model loads, and uses Claude Code's keys:
 Keys typed while an answer runs are kept for the next prompt. UTF-8 aware, no
 readline or libedit dependency (`tools/geistr/lineedit.c`).
 
+Until the first word of an answer, a dim line says what the model does:
+`⠋ reading · 3 s` (the conversation) or `⠋ thinking · 9 s` (a model that
+thinks before it answers). Pasted text keeps its lines (shown as `↵`) and is
+one message.
+
 In the chat, switch while it runs; the conversation moves along (the new
 session reads it once with your next message), and a switch that fails keeps
 the current session:
 
 ```
 /gpu /cpu /auto          processor (GPU: Metal on macOS, Vulkan on Linux)
-/model qwen3-0.6b        another model, same conversation
-/temp 0.7                sampling temperature
-/system Sei knapp.       system prompt (empty: none)
+/model qwen3-0.6b        another model, same conversation (/model alone: what runs, what is installed)
+/temp 0.7                sampling temperature (/temp alone: the current one)
+/system Sei knapp.       system prompt (/system alone shows it, /system off removes it)
 /info                    what runs now: backend, model, chat format, context
 /save                    keep model, processor, temperature, system for next time
 /clear  /exit

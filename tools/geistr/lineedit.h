@@ -1,7 +1,7 @@
 /* lineedit.h — a small line editor for geistr chat: UTF-8 aware editing,
  * history, and a selection list under the line while a / command is typed
- * (filtered as you type; ↑/↓ choose, Tab takes, Enter takes and submits
- * unless the choice needs an argument, Esc closes), with the chosen entry's
+ * (filtered as you type; ↑/↓ choose, Tab takes it to add an argument,
+ * Enter takes and submits it, as it is, Esc closes), with the chosen entry's
  * rest shown dim in the line (→ takes it). Keys as in Claude Code: Ctrl-C
  * clears the line (on an empty line: LE_INTERRUPT, the caller asks for a
  * second one), ? on an empty line is LE_HELP. Pasted text (the terminal's
