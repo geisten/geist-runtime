@@ -329,6 +329,11 @@ r = geistr_run('bench', '--compare', 'aaaa', 'bbbb')
 assert r.returncode == 0 and '▲ 50.0 %' in r.stdout and '999' not in r.stdout, r.stdout
 r = geistr_run('bench', '--compare', 'bbbb', 'aaaa')
 assert '▼ 33.3 %' in r.stdout, r.stdout
+assert '×1 ' in r.stdout and '⚠' not in r.stdout, r.stdout  # one run each: no spread
+with open(speeds, 'a') as f:  # runs far apart: marked
+    f.write('cmp\tcpu\t300.0\t0.1\t11\taaaa111\tbench\n')
+r = geistr_run('bench', '--compare', 'aaaa', 'bbbb')
+assert '×2  ⚠' in r.stdout and 'busy machine' in r.stdout, r.stdout
 assert geistr_run('bench', '--compare', 'zzzz').returncode == 1
 print('geistr bench / catalog speeds: recorded per answer with the engine, median of the last ten, by id or path, --compare passed')
 
