@@ -64,7 +64,8 @@ Not scheduled yet, but likely next candidates:
 
 - **First run without a manual.** `geistr chat` with no model installed
   suggests the best model for this computer and offers to download it.
-- **Windows, Homebrew and winget.** Releases exist for Linux and macOS only.
+- **Windows and winget.** Releases exist for Linux and macOS only (Homebrew
+  covers both).
 - **Chat with your files.** An embeddings endpoint and local search over
   documents and notes.
 - **Tool calling and images in the API.** Tool calling is also the
