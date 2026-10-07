@@ -34,6 +34,8 @@
 #include "lineedit.h"
 #include "render.h"
 #include "service.h"
+#include "json.h"
+#include "cli.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -55,7 +57,6 @@
 
 #include "catalog_json.h" /* embedded_catalog[], generated from models/catalog.json */
 
-enum { OK = 0, ERROR = 1, USAGE = 2, CANCELLED = 130 };
 
 #ifndef GEISTR_ENGINE
 #define GEISTR_ENGINE "unknown" /* the geistlib commit, set by the Makefile */
@@ -63,190 +64,6 @@ enum { OK = 0, ERROR = 1, USAGE = 2, CANCELLED = 130 };
 
 static const char *models_dir, *catalog_file;
 static char        default_models[4096];
-
-/* ---- settings: geistr.conf next to the model folder ---------------------- */
-
-static struct {
-    char   model[256], processor[8], system[2048];
-    double temperature;
-    bool   markdown, stats, intro, resume;
-} cfg = {.processor = "auto", .markdown = true, .stats = true, .intro = true, .resume = true};
-static char config_path[4200], config_dir[4096], data_dir[4096];
-static const char *const config_keys[] = {"model", "processor", "temperature", "system", "markdown", "stats", "intro", "resume"};
-
-bool make_dirs(const char *path, unsigned mode) {
-    char dir[4096];
-    snprintf(dir, sizeof dir, "%s", path);
-    for (char *p = dir + 1; *p; p++)
-        if (*p == '/') {
-            *p = 0;
-            (void) mkdir(dir, (mode_t) mode);
-            *p = '/';
-        }
-    return mkdir(dir, (mode_t) mode) == 0 || errno == EEXIST;
-}
-
-/* The geisten data folder: where the default model folder lives. */
-static bool data_folder(void) {
-    char models[4096];
-    if (geistr_models_dir(models, sizeof models) != GEISTR_OK)
-        return false;
-    char *slash = strrchr(models, '/');
-    if (!slash)
-        return false;
-    *slash = 0;
-    snprintf(data_dir, sizeof data_dir, "%s", models);
-    /* Settings: in the data folder on macOS (Application Support) and with
-     * GEISTEN_HOME; on Linux where XDG puts configuration. */
-    const char *xdg = getenv("XDG_CONFIG_HOME"), *home = getenv("HOME");
-#ifdef __APPLE__
-    bool own = true;
-#else
-    bool own = (getenv("GEISTEN_HOME") && *getenv("GEISTEN_HOME")) || (getenv("GEIST_HOME") && *getenv("GEIST_HOME"));
-#endif
-    if (own)
-        snprintf(config_dir, sizeof config_dir, "%s", data_dir);
-    else if (xdg && *xdg)
-        snprintf(config_dir, sizeof config_dir, "%s/geisten", xdg);
-    else
-        snprintf(config_dir, sizeof config_dir, "%s/.config/geisten", home ? home : "");
-    snprintf(config_path, sizeof config_path, "%s/geistr.conf", config_dir);
-    char old[4200]; /* where geistr kept it before: moved once */
-    snprintf(old, sizeof old, "%s/geistr.conf", data_dir);
-    if (!own && access(config_path, F_OK) != 0 && access(old, F_OK) == 0 && make_dirs(config_dir, 0700))
-        (void) rename(old, config_path);
-    return true;
-}
-
-/* nullptr when the value is valid for key and stored, else why not. */
-static const char *config_set(const char *key, const char *value) {
-    if (!strcmp(key, "model"))
-        snprintf(cfg.model, sizeof cfg.model, "%s", value);
-    else if (!strcmp(key, "processor")) {
-        if (*value && strcmp(value, "auto") && strcmp(value, "cpu") && strcmp(value, "gpu"))
-            return "processor is auto, cpu or gpu";
-        snprintf(cfg.processor, sizeof cfg.processor, "%s", *value ? value : "auto");
-    } else if (!strcmp(key, "temperature")) {
-        char  *end = nullptr;
-        double t   = *value ? strtod(value, &end) : 0;
-        if (*value && (*end || !(t >= 0 && t <= 2)))
-            return "temperature is a number from 0 to 2";
-        cfg.temperature = t;
-    } else if (!strcmp(key, "system"))
-        snprintf(cfg.system, sizeof cfg.system, "%s", value);
-    else if (!strcmp(key, "markdown") || !strcmp(key, "stats") || !strcmp(key, "intro") || !strcmp(key, "resume")) {
-        if (*value && strcmp(value, "on") && strcmp(value, "off"))
-            return "the value is on or off";
-        *(!strcmp(key, "markdown") ? &cfg.markdown
-          : !strcmp(key, "stats")  ? &cfg.stats
-          : !strcmp(key, "intro")  ? &cfg.intro
-                                   : &cfg.resume) = strcmp(value, "off") != 0;
-    } else
-        return "unknown key";
-    return nullptr;
-}
-
-static void config_value(const char *key, char *out, size_t cap) {
-    if (!strcmp(key, "model"))
-        snprintf(out, cap, "%s", cfg.model);
-    else if (!strcmp(key, "processor"))
-        snprintf(out, cap, "%s", cfg.processor);
-    else if (!strcmp(key, "temperature"))
-        snprintf(out, cap, "%g", cfg.temperature);
-    else if (!strcmp(key, "system"))
-        snprintf(out, cap, "%s", cfg.system);
-    else
-        snprintf(out, cap, "%s",
-                 (!strcmp(key, "markdown") ? cfg.markdown
-                  : !strcmp(key, "stats")  ? cfg.stats
-                  : !strcmp(key, "intro")  ? cfg.intro
-                                           : cfg.resume)
-                         ? "on"
-                         : "off");
-}
-
-static void config_load(void) {
-    FILE *f = config_path[0] ? fopen(config_path, "r") : nullptr;
-    char  line[2400];
-    while (f && fgets(line, sizeof line, f)) {
-        line[strcspn(line, "\n")] = 0;
-        char *eq                  = strchr(line, '=');
-        if (line[0] == '#' || !eq)
-            continue;
-        char *key = line, *value = eq + 1, *end = eq;
-        while (end > key && end[-1] == ' ')
-            end--;
-        *end = 0;
-        while (*value == ' ')
-            value++;
-        if (config_set(key, value))
-            fprintf(stderr, "geistr: %s: ignored %s\n", config_path, key);
-    }
-    if (f)
-        fclose(f);
-}
-
-static bool config_save(void) {
-    if (!make_dirs(config_dir, 0700)) /* the folder may not exist yet without the app */
-        return false;
-    char tmp[4300];
-    snprintf(tmp, sizeof tmp, "%s.%ld", config_path, (long) getpid());
-    FILE *f = fopen(tmp, "w");
-    if (!f)
-        return false;
-    fputs("# geistr settings (geistr config KEY VALUE)\n", f);
-    for (size_t i = 0; i < sizeof config_keys / sizeof *config_keys; i++) {
-        char value[2048];
-        config_value(config_keys[i], value, sizeof value);
-        fprintf(f, "%s = %s\n", config_keys[i], value);
-    }
-    bool ok = fclose(f) == 0 && rename(tmp, config_path) == 0;
-    if (!ok)
-        unlink(tmp);
-    return ok;
-}
-
-static int config(int n, const char **args) {
-    if (!config_path[0]) {
-        fputs("geistr: no settings folder: set HOME or GEISTEN_HOME\n", stderr);
-        return ERROR;
-    }
-    if (n == 1) {
-        printf("# %s\n", config_path);
-        for (size_t i = 0; i < sizeof config_keys / sizeof *config_keys; i++) {
-            char value[2048];
-            config_value(config_keys[i], value, sizeof value);
-            printf("%-12s %s\n", config_keys[i], value);
-        }
-        return OK;
-    }
-    bool known = false;
-    for (size_t i = 0; i < sizeof config_keys / sizeof *config_keys; i++)
-        known |= !strcmp(args[1], config_keys[i]);
-    if (!known) {
-        fprintf(stderr, "geistr: unknown key %s (model processor temperature system markdown stats intro resume)\n", args[1]);
-        return USAGE;
-    }
-    if (n == 2) {
-        char value[2048];
-        config_value(args[1], value, sizeof value);
-        puts(value);
-        return OK;
-    }
-    char value[2048] = "";
-    for (int i = 2; i < n; i++) /* the rest of the line: a system prompt may have spaces */
-        snprintf(value + strlen(value), sizeof value - strlen(value), "%s%s", i > 2 ? " " : "", args[i]);
-    const char *why = config_set(args[1], value);
-    if (why) {
-        fprintf(stderr, "geistr: %s\n", why);
-        return USAGE;
-    }
-    if (!config_save()) {
-        fprintf(stderr, "geistr: cannot write %s: %s\n", config_path, strerror(errno));
-        return ERROR;
-    }
-    return OK;
-}
 
 static int usage(void) {
     fputs("usage: geistr run <model> [prompt…]\n"
@@ -338,19 +155,6 @@ static const char *limit_text(const char *reason) {
     return reason;
 }
 
-static void json_to(FILE *f, const char *s) {
-    fputc('"', f);
-    for (; s && *s; s++)
-        if (*s == '"' || *s == '\\')
-            fprintf(f, "\\%c", *s);
-        else if ((unsigned char) *s < 32)
-            fprintf(f, "\\u%04x", *s);
-        else
-            fputc(*s, f);
-    fputc('"', f);
-}
-
-
 static bool tty_out(void);
 
 static int compare_doubles(const void *a, const void *b) {
@@ -417,8 +221,8 @@ static double reference_rate(const geistr_catalog_entry *m, const char *proc) {
         if (!end || (size_t) (end - o) >= sizeof object)
             break;
         snprintf(object, sizeof object, "%.*s", (int) (end - o + 1), o);
-        service_field(object, "backend", backend, sizeof backend);
-        service_field(object, "tokens_per_s", rate, sizeof rate);
+        json_get(object, "backend", backend, sizeof backend);
+        json_get(object, "tokens_per_s", rate, sizeof rate);
         if (!strcmp(backend, proc) && strtod(rate, nullptr) > best)
             best = strtod(rate, nullptr);
     }
@@ -483,7 +287,7 @@ static int catalog(bool installed_only, bool available_only, bool json) {
             max = v[k] > max ? v[k] : max;
     }
     if (json)
-        printf("{\"schema\":1,\"models_dir\":"), json_to(stdout, models_dir), printf(",\"models\":[");
+        printf("{\"schema\":1,\"models_dir\":"), json_write(stdout, models_dir), printf(",\"models\":[");
     bool first = true;
     /* Installed first, then available; catalog order within each. */
     for (int pass = 0; pass < 2; pass++)
@@ -500,17 +304,17 @@ static int catalog(bool installed_only, bool available_only, bool json) {
                 static const char *const states[]    = {"available", "unverified", "installed", "mismatch"};
                 static const char *const resources[] = {"fits", "limited", "unavailable"};
                 printf("%s{\"id\":", first ? "" : ",");
-                json_to(stdout, m->id);
-                printf(",\"name\":"), json_to(stdout, m->name);
-                printf(",\"quantization\":"), m->quantization ? json_to(stdout, m->quantization) : (void) printf("null");
-                printf(",\"file\":"), json_to(stdout, m->file);
-                printf(",\"url\":"), json_to(stdout, m->url);
-                printf(",\"sha256\":"), json_to(stdout, m->sha256);
+                json_write(stdout, m->id);
+                printf(",\"name\":"), json_write(stdout, m->name);
+                printf(",\"quantization\":"), m->quantization ? json_write(stdout, m->quantization) : (void) printf("null");
+                printf(",\"file\":"), json_write(stdout, m->file);
+                printf(",\"url\":"), json_write(stdout, m->url);
+                printf(",\"sha256\":"), json_write(stdout, m->sha256);
                 printf(",\"bytes\":%llu,\"recommended_ram_gib\":%u,\"state\":\"%s\",\"resource\":\"%s\","
                        "\"resource_reason\":",
                        (unsigned long long) m->bytes, m->recommended_ram_gib, states[state[i]],
                        resources[f->resource]);
-                json_to(stdout, f->resource_reason);
+                json_write(stdout, f->resource_reason);
                 printf(",\"tokens_per_s\":{\"cpu\":");
                 local[i].cpu.rate > 0 ? (void) printf("%.1f", local[i].cpu.rate) : (void) printf("null");
                 printf(",\"gpu\":");
@@ -948,8 +752,8 @@ static void chat_store(const struct transcript *t) {
         return;
     }
     for (size_t i = 0; i < t->n; i++) {
-        fputs("{\"role\":", f), json_to(f, t->role[i]);
-        fputs(",\"content\":", f), json_to(f, t->content[i]), fputs("}\n", f);
+        fputs("{\"role\":", f), json_write(f, t->role[i]);
+        fputs(",\"content\":", f), json_write(f, t->content[i]), fputs("}\n", f);
     }
     if (fclose(f) == 0 && rename(tmp, chat_file) == 0) {
         if (resumed_from[0]) /* it lives on in this chat's file */
@@ -984,8 +788,8 @@ static void chat_resume(struct transcript *t) {
     for (ssize_t len; f && (len = getline(&line, &cap, f)) > 0;) {
         char *role = malloc((size_t) len + 1), *content = malloc((size_t) len + 1);
         if (role && content) {
-            service_field(line, "role", role, (size_t) len + 1);
-            service_field(line, "content", content, (size_t) len + 1);
+            json_get(line, "role", role, (size_t) len + 1);
+            json_get(line, "content", content, (size_t) len + 1);
             if (role[0])
                 transcript_push(t, role, content);
         }
@@ -1107,10 +911,10 @@ static int chat(const char *name, const char *processor) {
             fprintf(stderr, "geistr: no service on %s (geistr serve <model>)\n", remote);
             return ERROR;
         }
-        service_field(info, "model", x.name, sizeof x.name);
-        service_field(info, "backend", x.backend, sizeof x.backend);
-        service_field(info, "chat_format", x.format, sizeof x.format);
-        service_field(info, "context", context, sizeof context);
+        json_get(info, "model", x.name, sizeof x.name);
+        json_get(info, "backend", x.backend, sizeof x.backend);
+        json_get(info, "chat_format", x.format, sizeof x.format);
+        json_get(info, "context", context, sizeof context);
         x.context     = (uint32_t) strtoul(context, nullptr, 10);
         x.temperature = cfg.temperature;
     } else {

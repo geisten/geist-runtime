@@ -48,9 +48,6 @@ int service_run(const struct svc_options *o);
 /* The service's info line into out (JSON). GEISTR_IO if none answers. */
 geistr_status service_info(const char *socket, char *out, size_t cap);
 
-/* The value of a top-level string or number field of a JSON line ("" if absent). */
-void service_field(const char *json, const char *key, char *out, size_t cap);
-
 typedef bool (*svc_part_fn)(void *ctx, const char *text);
 typedef bool (*svc_cancel_fn)(void *ctx);
 

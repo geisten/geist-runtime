@@ -2,10 +2,7 @@
  * service needs (socket, one request at a time, cancel on disconnect, a
  * clean stop) and geist-app's conversation matching (#148), nothing else. */
 #include "service.h"
-#define JSMN_STATIC
-#define JSMN_STRICT
-#define JSMN_PARENT_LINKS
-#include "jsmn.h"
+#include "json.h"
 #include <errno.h>
 #include <poll.h>
 #include <stdio.h>
@@ -19,142 +16,6 @@
 #include <unistd.h>
 
 #define REQUEST_MAX (16u << 20)
-
-/* ---- JSON --------------------------------------------------------------- */
-
-struct buf {
-    char  *p;
-    size_t n, cap;
-    bool   failed;
-};
-
-static void put_n(struct buf *b, const char *s, size_t n) {
-    if (b->failed)
-        return;
-    if (b->n + n + 1 > b->cap) {
-        size_t cap = b->cap ? b->cap * 2 : 256;
-        while (cap < b->n + n + 1)
-            cap *= 2;
-        char *p = realloc(b->p, cap);
-        if (!p) {
-            b->failed = true;
-            return;
-        }
-        b->p = p, b->cap = cap;
-    }
-    memcpy(b->p + b->n, s, n);
-    b->n += n;
-    b->p[b->n] = 0;
-}
-
-static void put(struct buf *b, const char *s) {
-    put_n(b, s, strlen(s));
-}
-
-static void put_json(struct buf *b, const char *s) {
-    put(b, "\"");
-    for (; *s; s++) {
-        unsigned char c = (unsigned char) *s;
-        char          esc[8];
-        if (c == '"' || c == '\\')
-            esc[0] = '\\', esc[1] = (char) c, put_n(b, esc, 2);
-        else if (c < 0x20)
-            snprintf(esc, sizeof esc, "\\u%04x", c), put_n(b, esc, 6);
-        else
-            put_n(b, s, 1);
-    }
-    put(b, "\"");
-}
-
-struct json {
-    const char *s;
-    jsmntok_t  *t;
-    int         n;
-};
-
-static bool parse(struct json *j, const char *s, size_t len) {
-    jsmn_parser p;
-    jsmn_init(&p);
-    int n = jsmn_parse(&p, s, len, nullptr, 0);
-    if (n < 1)
-        return false;
-    j->s = s;
-    j->t = malloc((size_t) n * sizeof *j->t);
-    jsmn_init(&p);
-    j->n = j->t ? jsmn_parse(&p, s, len, j->t, (unsigned) n) : -1;
-    return j->n >= 1 && j->t[0].type == JSMN_OBJECT;
-}
-
-/* The value token of key in object obj, or -1. */
-static int field(const struct json *j, int obj, const char *key) {
-    size_t kl = strlen(key);
-    for (int i = obj + 1; i + 1 < j->n && j->t[i].start < j->t[obj].end; i++)
-        if (j->t[i].parent == obj && j->t[i].type == JSMN_STRING && (size_t) (j->t[i].end - j->t[i].start) == kl &&
-            !memcmp(j->s + j->t[i].start, key, kl))
-            return i + 1;
-    return -1;
-}
-
-/* A JSON string token, unescaped (UTF-8; \uXXXX incl. surrogate pairs). */
-static char *string(const struct json *j, int t) {
-    if (t < 0 || j->t[t].type != JSMN_STRING)
-        return nullptr;
-    const char *s   = j->s + j->t[t].start;
-    size_t      n   = (size_t) (j->t[t].end - j->t[t].start), o = 0;
-    char       *out = malloc(n + 1);
-    for (size_t i = 0; out && i < n; i++) {
-        if (s[i] != '\\' || i + 1 >= n) {
-            out[o++] = s[i];
-            continue;
-        }
-        char e = s[++i];
-        if (e == 'u' && i + 4 < n) {
-            char hex[5] = {s[i + 1], s[i + 2], s[i + 3], s[i + 4], 0};
-            unsigned cp = (unsigned) strtoul(hex, nullptr, 16);
-            i += 4;
-            if (cp >= 0xD800 && cp <= 0xDBFF && i + 6 < n && s[i + 1] == '\\' && s[i + 2] == 'u') {
-                char     lo_hex[5] = {s[i + 3], s[i + 4], s[i + 5], s[i + 6], 0};
-                unsigned lo        = (unsigned) strtoul(lo_hex, nullptr, 16);
-                if (lo >= 0xDC00 && lo <= 0xDFFF)
-                    cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00), i += 6;
-            }
-            if (cp < 0x80)
-                out[o++] = (char) cp;
-            else if (cp < 0x800)
-                out[o++] = (char) (0xC0 | (cp >> 6)), out[o++] = (char) (0x80 | (cp & 0x3F));
-            else if (cp < 0x10000)
-                out[o++] = (char) (0xE0 | (cp >> 12)), out[o++] = (char) (0x80 | ((cp >> 6) & 0x3F)),
-                out[o++] = (char) (0x80 | (cp & 0x3F));
-            else
-                out[o++] = (char) (0xF0 | (cp >> 18)), out[o++] = (char) (0x80 | ((cp >> 12) & 0x3F)),
-                out[o++] = (char) (0x80 | ((cp >> 6) & 0x3F)), out[o++] = (char) (0x80 | (cp & 0x3F));
-            continue;
-        }
-        out[o++] = e == 'n' ? '\n' : e == 't' ? '\t' : e == 'r' ? '\r' : e == 'b' ? '\b' : e == 'f' ? '\f' : e;
-    }
-    if (out)
-        out[o] = 0;
-    return out;
-}
-
-static double number(const struct json *j, int t, double dflt) {
-    return t >= 0 && j->t[t].type == JSMN_PRIMITIVE ? strtod(j->s + j->t[t].start, nullptr) : dflt;
-}
-
-void service_field(const char *line, const char *key, char *out, size_t cap) {
-    struct json j = {};
-    out[0]        = 0;
-    if (parse(&j, line, strlen(line))) {
-        int   t = field(&j, 0, key);
-        char *s = string(&j, t);
-        if (s)
-            snprintf(out, cap, "%s", s);
-        else if (t >= 0)
-            snprintf(out, cap, "%.*s", j.t[t].end - j.t[t].start, line + j.t[t].start);
-        free(s);
-    }
-    free(j.t);
-}
 
 /* ---- socket I/O ---------------------------------------------------------- */
 
@@ -174,34 +35,24 @@ static bool write_all(int fd, const char *s, size_t n) {
     return true;
 }
 
-static bool send_line(int fd, struct buf *b) {
-    put(b, "\n");
-    bool ok = !b->failed && write_all(fd, b->p, b->n);
-    b->n    = 0;
-    return ok;
-}
-
-/* One line (without '\n') into a malloc'd buffer; nullptr at EOF or too long. */
+/* One line (without '\n') into a malloc'd string; nullptr at EOF or longer than max. */
 static char *read_line(int fd, size_t max) {
-    struct buf b = {};
-    char       c;
-    for (;;) {
-        ssize_t r = read(fd, &c, 1);
-        if (r < 0 && errno == EINTR)
-            continue;
-        if (r <= 0 || b.n >= max) {
-            if (r <= 0 && b.n)
-                break;
-            free(b.p);
-            return nullptr;
-        }
-        if (c == '\n')
+    char   *line = nullptr, c;
+    size_t  len = 0, got = 0;
+    FILE   *m = open_memstream(&line, &len);
+    ssize_t r = 0;
+    while (m && got <= max && ((r = read(fd, &c, 1)) == 1 || (r < 0 && errno == EINTR)))
+        if (r == 1 && c == '\n')
             break;
-        put_n(&b, &c, 1);
+        else if (r == 1)
+            fputc(c, m), got++;
+    if (m)
+        fclose(m);
+    if (got > max || (r != 1 && !got)) { /* too long, or nothing before the end */
+        free(line);
+        return nullptr;
     }
-    if (!b.p)
-        put(&b, "");
-    return b.p;
+    return line;
 }
 
 static bool address(const char *path, struct sockaddr_un *a) {
@@ -286,35 +137,31 @@ static size_t common(const struct conversation *c, const geistr_message *m, size
     return k;
 }
 
-static void reply_error(int fd, const char *status, const char *text) {
-    struct buf b = {};
-    put(&b, "{\"error\":"), put_json(&b, text), put(&b, ",\"status\":"), put_json(&b, status), put(&b, "}");
-    (void) send_line(fd, &b);
-    free(b.p);
+static void reply_error(FILE *out, const char *status, const char *text) {
+    fputs("{\"error\":", out), json_write(out, text), fputs(",\"status\":", out), json_write(out, status);
+    fputs("}\n", out);
 }
 
-static void chat_request(const struct svc_options *o, struct conversation *pool, int fd, const struct json *j) {
+static void chat_request(const struct svc_options *o, struct conversation *pool, FILE *out, const struct json *j) {
     static uint64_t clock;
-    int             list = field(j, 0, "messages");
-    if (list < 0 || j->t[list].type != JSMN_ARRAY || j->t[list].size < 1) {
-        reply_error(fd, "invalid", "messages: a list with at least one message");
+    int             list = json_field(j, 0, "messages");
+    if (json_count(j, list) < 1) {
+        reply_error(out, "invalid", "messages: a list with at least one message");
         return;
     }
-    size_t              n = (size_t) j->t[list].size, k = 0;
-    geistr_message     *m = calloc(n, sizeof *m);
-    for (int i = list + 1; m && i < j->n && k < n; i++)
-        if (j->t[i].parent == list) {
-            m[k].role    = string(j, field(j, i, "role"));
-            m[k].content = string(j, field(j, i, "content"));
-            k++;
-        }
-    bool ok = m && k == n;
-    for (size_t i = 0; ok && i < n; i++)
-        ok = m[i].role && m[i].content;
-    double   temperature = number(j, field(j, 0, "temperature"), 0);
-    unsigned max         = (unsigned) number(j, field(j, 0, "max"), 0);
+    size_t          n = (size_t) json_count(j, list);
+    geistr_message *m = calloc(n, sizeof *m);
+    bool            ok = m;
+    for (size_t k = 0; ok && k < n; k++) {
+        int item     = json_item(j, list, (int) k);
+        m[k].role    = json_string(j, json_field(j, item, "role"));
+        m[k].content = json_string(j, json_field(j, item, "content"));
+        ok           = m[k].role && m[k].content;
+    }
+    double   temperature = json_number(j, json_field(j, 0, "temperature"), 0);
+    unsigned max         = (unsigned) json_number(j, json_field(j, 0, "max"), 0);
     if (!ok || !(temperature >= 0 && temperature <= 2)) {
-        reply_error(fd, "invalid", "each message needs role and content; temperature 0 to 2");
+        reply_error(out, "invalid", "each message needs role and content; temperature 0 to 2");
         goto done;
     }
     /* The conversation that holds the most of this one (same temperature);
@@ -347,7 +194,7 @@ static void chat_request(const struct svc_options *o, struct conversation *pool,
         opts.temperature      = (float) temperature;
         opts.overflow         = GEISTR_OVERFLOW_DROP_OLDEST;
         if (geistr_chat_open(o->model, &opts, &c->chat) != GEISTR_OK) {
-            reply_error(fd, "error", "cannot open a chat");
+            reply_error(out, "error", "cannot open a chat");
             goto done;
         }
         c->temperature = temperature;
@@ -366,23 +213,25 @@ static void chat_request(const struct svc_options *o, struct conversation *pool,
         s = geistr_chat_send(c->chat, n - keep, turn);
     free(turn);
     if (s != GEISTR_OK) {
-        reply_error(fd, s == GEISTR_CONTEXT ? "context" : s == GEISTR_INVALID ? "invalid" : "error",
+        reply_error(out, s == GEISTR_CONTEXT ? "context" : s == GEISTR_INVALID ? "invalid" : "error",
                     geistr_chat_error(c->chat));
         goto done;
     }
     for (size_t i = keep; i < n; i++)
         (void) conversation_push(c, m[i].role, m[i].content);
     /* Stream the answer; a client that goes away stops it. */
-    struct buf   line = {}, answer = {};
-    geistr_piece p    = {.size = sizeof p};
-    bool         gone = false;
-    put(&answer, "");
+    char        *text = nullptr;
+    size_t       text_len = 0;
+    FILE        *answer   = open_memstream(&text, &text_len);
+    geistr_piece p        = {.size = sizeof p};
+    bool         gone     = false;
     while ((s = geistr_chat_next(c->chat, &p)) == GEISTR_OK && p.part != GEISTR_PART_END) {
         if (p.part != GEISTR_PART_ANSWER)
             continue;
-        put_n(&answer, p.text, p.len);
-        put(&line, "{\"part\":\"answer\",\"text\":"), put_json(&line, p.text), put(&line, "}");
-        if (!send_line(fd, &line)) {
+        if (answer)
+            fwrite(p.text, 1, p.len, answer);
+        fputs("{\"part\":\"answer\",\"text\":", out), json_write(out, p.text), fputs("}\n", out);
+        if (fflush(out) == EOF) {
             gone = true;
             geistr_chat_cancel(c->chat);
             while (geistr_chat_next(c->chat, &p) == GEISTR_OK && p.part != GEISTR_PART_END) {
@@ -390,44 +239,38 @@ static void chat_request(const struct svc_options *o, struct conversation *pool,
             break;
         }
     }
-    (void) conversation_push(c, "assistant", answer.p ? answer.p : "");
+    if (answer)
+        fclose(answer);
+    (void) conversation_push(c, "assistant", text ? text : "");
+    free(text);
     geistr_stats st = {.size = sizeof st};
     (void) geistr_chat_stats(c->chat, &st);
     if (st.dropped_messages) /* the runtime's conversation is shorter now: match anew next time */
         conversation_keep(c, 0), (void) geistr_chat_rewind(c->chat, 0);
     if (!gone && (s == GEISTR_OK || s == GEISTR_CANCELLED)) {
         static const char *const finish[] = {"none", "stop", "length", "context", "cancelled", "error"};
-        char                     tail[512];
-        snprintf(tail, sizeof tail,
+        fprintf(out,
                  "{\"done\":true,\"finish\":\"%s\",\"input_tokens\":%u,\"context_tokens\":%u,\"output_tokens\":%u,"
-                 "\"prefill_ms\":%.1f,\"generation_ms\":%.1f,\"total_ms\":%.1f}",
+                 "\"prefill_ms\":%.1f,\"generation_ms\":%.1f,\"total_ms\":%.1f}\n",
                  finish[st.finish], st.input_tokens, st.context_tokens, st.output_tokens, st.prefill_ms,
                  st.generation_ms, st.total_ms);
-        put(&line, tail);
-        (void) send_line(fd, &line);
     } else if (!gone) {
-        reply_error(fd, "error", geistr_chat_error(c->chat));
+        reply_error(out, "error", geistr_chat_error(c->chat));
         conversation_close(c);
     }
-    free(line.p), free(answer.p);
 done:
     for (size_t i = 0; m && i < n; i++)
         free((char *) m[i].role), free((char *) m[i].content);
     free(m);
 }
 
-static void info_request(const struct svc_options *o, int fd) {
+static void info_request(const struct svc_options *o, FILE *out) {
     geistr_model_info i = {.size = sizeof i};
     (void) geistr_model_info_get(o->model, &i);
-    struct buf b = {};
-    char       tail[128];
-    put(&b, "{\"model\":"), put_json(&b, o->name);
-    put(&b, ",\"backend\":"), put_json(&b, i.backend ? i.backend : "cpu");
-    put(&b, ",\"chat_format\":"), put_json(&b, i.chat_format ? i.chat_format : "");
-    snprintf(tail, sizeof tail, ",\"context\":%u,\"chats\":%zu}", i.context, o->chats);
-    put(&b, tail);
-    (void) send_line(fd, &b);
-    free(b.p);
+    fputs("{\"model\":", out), json_write(out, o->name);
+    fputs(",\"backend\":", out), json_write(out, i.backend ? i.backend : "cpu");
+    fputs(",\"chat_format\":", out), json_write(out, i.chat_format ? i.chat_format : "");
+    fprintf(out, ",\"context\":%u,\"chats\":%zu}\n", i.context, o->chats);
 }
 
 int service_run(const struct svc_options *o) {
@@ -471,22 +314,26 @@ int service_run(const struct svc_options *o) {
         setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &wait, sizeof wait);
         setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &wait, sizeof wait);
         char       *request = read_line(client, REQUEST_MAX);
+        FILE       *out     = fdopen(client, "w"); /* closes client */
         struct json j       = {};
-        if (!request || !parse(&j, request, strlen(request)))
-            reply_error(client, "invalid", "one JSON object per line");
+        if (!out)
+            close(client);
+        else if (!request || !json_parse(&j, request, strlen(request)))
+            reply_error(out, "invalid", "one JSON object per line");
         else {
-            char *op = string(&j, field(&j, 0, "op"));
+            char *op = json_string(&j, json_field(&j, 0, "op"));
             if (op && !strcmp(op, "info"))
-                info_request(o, client);
+                info_request(o, out);
             else if (!op || !strcmp(op, "chat"))
-                chat_request(o, pool, client, &j);
+                chat_request(o, pool, out, &j);
             else
-                reply_error(client, "invalid", "op is chat or info");
+                reply_error(out, "invalid", "op is chat or info");
             free(op);
         }
-        free(j.t);
+        json_free(&j);
         free(request);
-        close(client);
+        if (out)
+            fclose(out);
     }
     for (size_t i = 0; pool && i < o->chats; i++)
         if (pool[i].chat)
@@ -524,19 +371,22 @@ geistr_status service_chat(const char *path, size_t n, const geistr_message *m, 
         snprintf(error, cap, "no service on %s", path);
         return GEISTR_IO;
     }
-    struct buf b = {};
-    char       head[96];
-    snprintf(head, sizeof head, "{\"op\":\"chat\",\"max\":%u,\"temperature\":%g,\"messages\":[", max, temperature);
-    put(&b, head);
-    for (size_t i = 0; i < n; i++) {
-        put(&b, i ? ",{\"role\":" : "{\"role\":"), put_json(&b, m[i].role);
-        put(&b, ",\"content\":"), put_json(&b, m[i].content), put(&b, "}");
+    char  *request = nullptr;
+    size_t len     = 0;
+    FILE  *req     = open_memstream(&request, &len);
+    if (req) {
+        fprintf(req, "{\"op\":\"chat\",\"max\":%u,\"temperature\":%g,\"messages\":[", max, temperature);
+        for (size_t i = 0; i < n; i++) {
+            fputs(i ? ",{\"role\":" : "{\"role\":", req), json_write(req, m[i].role);
+            fputs(",\"content\":", req), json_write(req, m[i].content), fputs("}", req);
+        }
+        fputs("]}\n", req);
     }
-    put(&b, "]}\n");
-    bool sent = !b.failed && write_all(fd, b.p, b.n);
-    free(b.p);
-    geistr_status s = sent ? GEISTR_BACKEND : GEISTR_IO;
-    struct buf    in = {};
+    bool sent = req && fclose(req) == 0 && write_all(fd, request, len);
+    free(request);
+    geistr_status s  = sent ? GEISTR_BACKEND : GEISTR_IO;
+    char         *in = nullptr; /* what came, up to the next line */
+    size_t        n_in = 0;
     while (sent) {
         struct pollfd ready = {.fd = fd, .events = POLLIN};
         if (cancel && cancel(ctx)) { /* closing the connection stops the answer */
@@ -554,33 +404,38 @@ geistr_status service_chat(const char *path, size_t n, const geistr_message *m, 
             snprintf(error, cap, "the service closed the connection");
             break;
         }
-        put_n(&in, chunk, (size_t) r);
+        char *grown = realloc(in, n_in + (size_t) r + 1);
+        if (!grown)
+            break;
+        in = grown;
+        memcpy(in + n_in, chunk, (size_t) r);
+        n_in += (size_t) r;
+        in[n_in] = 0;
         char *nl;
         bool  done = false;
-        while (!done && in.p && (nl = memchr(in.p, '\n', in.n))) {
-            *nl         = 0;
+        while (!done && (nl = memchr(in, '\n', n_in))) {
+            *nl           = 0;
             struct json j = {};
-            if (parse(&j, in.p, (size_t) (nl - in.p))) {
-                int   t    = field(&j, 0, "text");
-                char *text = string(&j, t);
+            if (json_parse(&j, in, (size_t) (nl - in))) {
+                char *text = json_string(&j, json_field(&j, 0, "text"));
                 if (text) {
                     if (part && !part(ctx, text))
                         cancel = nullptr, done = true, s = GEISTR_CANCELLED;
-                } else if (field(&j, 0, "done") >= 0) {
-                    char *finish = string(&j, field(&j, 0, "finish"));
+                } else if (json_field(&j, 0, "done") >= 0) {
+                    char *finish = json_string(&j, json_field(&j, 0, "finish"));
                     snprintf(stats->finish, sizeof stats->finish, "%s", finish ? finish : "");
                     free(finish);
-                    stats->input_tokens   = (unsigned) number(&j, field(&j, 0, "input_tokens"), 0);
-                    stats->context_tokens = (unsigned) number(&j, field(&j, 0, "context_tokens"), 0);
-                    stats->output_tokens  = (unsigned) number(&j, field(&j, 0, "output_tokens"), 0);
-                    stats->prefill_ms     = number(&j, field(&j, 0, "prefill_ms"), -1);
-                    stats->generation_ms  = number(&j, field(&j, 0, "generation_ms"), -1);
-                    stats->total_ms       = number(&j, field(&j, 0, "total_ms"), -1);
+                    stats->input_tokens   = (unsigned) json_number(&j, json_field(&j, 0, "input_tokens"), 0);
+                    stats->context_tokens = (unsigned) json_number(&j, json_field(&j, 0, "context_tokens"), 0);
+                    stats->output_tokens  = (unsigned) json_number(&j, json_field(&j, 0, "output_tokens"), 0);
+                    stats->prefill_ms     = json_number(&j, json_field(&j, 0, "prefill_ms"), -1);
+                    stats->generation_ms  = json_number(&j, json_field(&j, 0, "generation_ms"), -1);
+                    stats->total_ms       = json_number(&j, json_field(&j, 0, "total_ms"), -1);
                     s                     = GEISTR_OK;
                     done                  = true;
                 } else {
-                    char *status = string(&j, field(&j, 0, "status"));
-                    char *why    = string(&j, field(&j, 0, "error"));
+                    char *status = json_string(&j, json_field(&j, 0, "status"));
+                    char *why    = json_string(&j, json_field(&j, 0, "error"));
                     snprintf(error, cap, "%s", why ? why : "error");
                     s = status && !strcmp(status, "context") ? GEISTR_CONTEXT : GEISTR_BACKEND;
                     free(status), free(why);
@@ -588,15 +443,15 @@ geistr_status service_chat(const char *path, size_t n, const geistr_message *m, 
                 }
                 free(text);
             }
-            free(j.t);
-            size_t used = (size_t) (nl - in.p) + 1;
-            memmove(in.p, in.p + used, in.n - used + 1);
-            in.n -= used;
+            json_free(&j);
+            size_t used = (size_t) (nl - in) + 1;
+            memmove(in, in + used, n_in - used + 1);
+            n_in -= used;
         }
         if (done)
             break;
     }
-    free(in.p);
+    free(in);
     close(fd);
     return s;
 }
