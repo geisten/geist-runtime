@@ -339,7 +339,8 @@ def section_http():
             pass
         assert service.poll() is None and time.time() < deadline, service.stderr.read()
         time.sleep(0.2)
-    assert call('GET', '/api/version')[2] == '{"version":"0.1.0"}'
+    version = geistr_run('--version').stdout.split()[1]  # "geistr 0.1.1 · …"
+    assert call('GET', '/api/version')[2] == '{"version":"%s"}' % version
     models = json.loads(call('GET', '/v1/models')[2])
     assert models['data'][0]['id'] == 'ref', models
     assert json.loads(call('GET', '/api/tags')[2])['models'][0]['name'] == 'ref'

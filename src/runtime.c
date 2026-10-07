@@ -45,7 +45,7 @@
 #define NO_POSITION SIZE_MAX
 
 const char *geistr_version(void) {
-    return "0.1.0";
+    return "0.1.1";
 }
 
 const char *geistr_status_text(geistr_status s) {

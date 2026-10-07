@@ -48,7 +48,7 @@ static void style(struct md *m) {
 }
 
 void md_init(struct md *m, enum md_mode mode, FILE *out) {
-    *m = (struct md) {.mode = mode, .out = out, .line_start = true};
+    *m = (struct md) {.mode = mode, .out = out, .sink = out, .line_start = true, .head = true};
 }
 
 /* ---- math --------------------------------------------------------------- */
@@ -94,7 +94,7 @@ static const char *const symbols[][2] = {
         {"max", "max"},   {"min", "min"},
 };
 static const char *const skipped[] = {"left", "right", "big", "Big", "bigl", "bigr", "Bigl", "Bigr",
-                                      "displaystyle", "textstyle", "limits", "nolimits"};
+                                      "displaystyle", "textstyle", "limits", "nolimits", "boxed"};
 static const char *const sup[][2] = {{"0", "⁰"}, {"1", "¹"}, {"2", "²"}, {"3", "³"}, {"4", "⁴"}, {"5", "⁵"},
                                      {"6", "⁶"}, {"7", "⁷"}, {"8", "⁸"}, {"9", "⁹"}, {"+", "⁺"}, {"-", "⁻"},
                                      {"=", "⁼"}, {"(", "⁽"}, {")", "⁾"}, {"n", "ⁿ"}, {"i", "ⁱ"}, {"x", "ˣ"},
@@ -953,15 +953,105 @@ static void feed_char(struct md *m, char c) {
         inline_char(m, c);
 }
 
-void md_feed(struct md *m, const char *s) {
+/* ---- wrapping: words onto lines -------------------------------------------- */
+
+static void word_flush(struct md *m) {
+    if (!m->n_word)
+        return;
+    unsigned w = cols(m->word, m->n_word);
+    if (!m->head && m->col > m->hang && m->col + m->spaces + w > m->width) { /* on the next line, under the text */
+        fputc('\n', m->sink);
+        pad(m->sink, m->hang);
+        m->col = m->hang;
+    } else {
+        pad(m->sink, m->spaces);
+        m->col += m->spaces;
+    }
+    m->spaces = 0;
+    fwrite(m->word, 1, m->n_word, m->sink);
+    m->col += w;
+    if (m->head) { /* the line's first word: a bullet or a quote bar sets the indent */
+        m->word[m->n_word] = 0;
+        bool bar           = strstr(m->word, "•") || strstr(m->word, "│");
+        m->hang            = bar && w == 1 ? m->col + 1 : m->lead;
+        m->head            = false;
+    }
+    m->n_word = 0;
+}
+
+static void wrap_put(struct md *m, const char *s, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        char c = s[i];
+        if (c == '\n' || c == '\r') {
+            word_flush(m);
+            m->spaces = 0; /* none at a line's end */
+            fputc(c, m->sink);
+            m->col = m->lead = 0;
+            m->hang          = 0;
+            m->head          = true;
+        } else if (c == ' ' && m->head && !m->n_word) {
+            fputc(' ', m->sink);
+            m->col++, m->lead++;
+        } else if (c == ' ') {
+            word_flush(m);
+            m->spaces++;
+        } else {
+            if (m->n_word == sizeof m->word - 1) /* a word longer than that: as it comes */
+                word_flush(m);
+            m->word[m->n_word++] = c;
+        }
+    }
+}
+
+static bool wrapping(const struct md *m) {
+    return m->wrap && m->width && m->mode != MD_RAW;
+}
+
+/* Run fn with out pointing at a buffer, then wrap what it wrote. */
+static void through_wrap(struct md *m, const char *s, void (*fn)(struct md *, const char *)) {
+    char  *buf = nullptr;
+    size_t len = 0;
+    FILE  *b   = open_memstream(&buf, &len);
+    if (!b) {
+        fn(m, s);
+        return;
+    }
+    m->out = b;
+    fn(m, s);
+    fclose(b);
+    m->out = m->sink;
+    wrap_put(m, buf, len);
+    free(buf);
+}
+
+static void feed_all(struct md *m, const char *s) {
     for (; *s; s++)
         feed_char(m, *s);
-    fflush(m->out);
+}
+
+static void finish_all(struct md *m, const char *unused);
+
+void md_feed(struct md *m, const char *s) {
+    if (wrapping(m))
+        through_wrap(m, s, feed_all);
+    else
+        feed_all(m, s);
+    fflush(m->sink);
 }
 
 void md_finish(struct md *m) {
     if (m->mode == MD_RAW)
         return;
+    if (wrapping(m)) {
+        through_wrap(m, nullptr, finish_all);
+        word_flush(m);
+    } else
+        finish_all(m, nullptr);
+    fflush(m->sink);
+}
+
+static void finish_all(struct md *m, const char *unused) {
+    (void) unused;
     table_end(m);
     free(m->table);
     m->table   = nullptr;
@@ -978,5 +1068,4 @@ void md_finish(struct md *m) {
         math_cancel(m);
     m->bold = m->italic = m->code = m->block = m->heading = m->quote = false;
     style(m);
-    fflush(m->out);
 }

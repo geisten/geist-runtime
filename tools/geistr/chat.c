@@ -31,11 +31,17 @@ struct shown {
     struct md view;
     char     *text;
     size_t    len, cap;
+    bool      started; /* something visible is shown: leading blank lines are not */
 };
 
 static int print_piece(void *context, const geistr_piece *piece) {
-    struct shown *a = context;
-    md_feed(&a->view, piece->text);
+    struct shown *a    = context;
+    const char   *show = piece->text;
+    if (!a->started) { /* an answer that begins with blank lines (qwen3): from its text on */
+        show += strspn(show, " \t\r\n");
+        a->started = *show != 0;
+    }
+    md_feed(&a->view, show);
     if (piece->part != GEISTR_PART_ANSWER)
         return 1;
     if (a->len + piece->len + 1 > a->cap) {
@@ -57,8 +63,9 @@ static void view_begin(struct shown *a) {
     md_init(&a->view, cfg.markdown && tty_out() ? MD_ANSI : MD_RAW, stdout);
     struct winsize ws;
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col)
-        a->view.width = ws.ws_col;
-    a->len = 0;
+        a->view.width = ws.ws_col, a->view.wrap = true; /* prose at word boundaries */
+    a->len     = 0;
+    a->started = false;
     if (a->text)
         a->text[0] = 0;
 }
@@ -458,6 +465,9 @@ static int command(struct session *x, struct conversation *said, char *line, con
         if (x->chat)
             (void) geistr_chat_rewind(x->chat, 0);
         conv_clear(said);
+        bool dim = tty_out(); /* what goes on: the system prompt stays */
+        printf("%s○ a new conversation%s%s%s\n", dim ? "\033[2m" : "", said->system[0] ? " · system: " : "",
+               said->system, dim ? "\033[0m" : "");
     } else
         chat_help();
     return GO_ON;
