@@ -13,7 +13,7 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t stop;
-static void on_interrupt(int signal) {
+static void on_pull_interrupt(int signal) {
     (void) signal;
     stop = 1;
 }
@@ -65,7 +65,7 @@ int geistr_pull(const geistr_catalog_entry *m, const char *dir) {
         return 1;
     }
     struct sink s = {.file = file, .offset = (uint64_t) st.st_size, .bytes = (uint64_t) st.st_size, .limit = m->bytes};
-    struct sigaction sa = {.sa_handler = on_interrupt};
+    struct sigaction sa = {.sa_handler = on_pull_interrupt};
     sigaction(SIGINT, &sa, nullptr);
     bool ok = s.bytes == m->bytes;
     if (!ok) {
