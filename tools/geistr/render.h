@@ -54,6 +54,7 @@ struct md {
     unsigned col, hang, lead; /* the line's columns, its continuation indent, its leading spaces */
     unsigned spaces;          /* held until the next word: dropped at a line's end */
     bool     head;            /* no word on this line yet */
+    bool     bar;             /* a quote: its continuation lines repeat the │ */
     char     word[512];       /* the word being written (escapes included) */
     size_t   n_word;
 };

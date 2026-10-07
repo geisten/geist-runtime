@@ -961,7 +961,8 @@ static void word_flush(struct md *m) {
     unsigned w = cols(m->word, m->n_word);
     if (!m->head && m->col > m->hang && m->col + m->spaces + w > m->width) { /* on the next line, under the text */
         fputc('\n', m->sink);
-        pad(m->sink, m->hang);
+        pad(m->sink, m->bar ? m->hang - 2 : m->hang);
+        fputs(m->bar ? "│ " : "", m->sink);
         m->col = m->hang;
     } else {
         pad(m->sink, m->spaces);
@@ -974,6 +975,7 @@ static void word_flush(struct md *m) {
         m->word[m->n_word] = 0;
         bool bar           = strstr(m->word, "•") || strstr(m->word, "│");
         m->hang            = bar && w == 1 ? m->col + 1 : m->lead;
+        m->bar             = bar && w == 1 && strstr(m->word, "│");
         m->head            = false;
     }
     m->n_word = 0;
@@ -988,6 +990,7 @@ static void wrap_put(struct md *m, const char *s, size_t n) {
             fputc(c, m->sink);
             m->col = m->lead = 0;
             m->hang          = 0;
+            m->bar           = false;
             m->head          = true;
         } else if (c == ' ' && m->head && !m->n_word) {
             fputc(' ', m->sink);

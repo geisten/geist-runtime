@@ -147,10 +147,22 @@ int main(void) {
     CHECK(e.rows == 3 && e.cursor_row == 0, "40 characters after a 5-column prompt: 3 rows, cursor on the first");
     free(screen);
     le_free(&e);
+    /* a bracketed paste keeps its line breaks (Tab: spaces, ? a character); Enter after it sends */
+    line_is(&e, "Look:\033[200~line one\r\nline two?\tend\033[201~\r", "Look:line one\nline two?    end",
+            "paste");
+    {
+        char *shown = nullptr;
+        keys(&e, "\033[200~a\nb\033[201~", &shown);
+        if (!strstr(shown, "a↵b") || strchr(shown, '\n')) {
+            fprintf(stderr, "paste: a line break shows as ↵, got %s\n", shown);
+            failures++;
+        }
+        free(shown);
+    }
     if (failures) {
         fprintf(stderr, "lineedit: %d failures\n", failures);
         return 1;
     }
-    puts("lineedit: UTF-8 editing, keys, selection list, hint, Esc, Ctrl-C, ?, history, wrapping passed");
+    puts("lineedit: UTF-8 editing, keys, selection list, hint, Esc, Ctrl-C, ?, history, wrapping, paste passed");
     return 0;
 }

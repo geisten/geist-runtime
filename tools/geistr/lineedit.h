@@ -4,7 +4,9 @@
  * unless the choice needs an argument, Esc closes), with the chosen entry's
  * rest shown dim in the line (→ takes it). Keys as in Claude Code: Ctrl-C
  * clears the line (on an empty line: LE_INTERRUPT, the caller asks for a
- * second one), ? on an empty line is LE_HELP. No dependency (readline, libedit).
+ * second one), ? on an empty line is LE_HELP. Pasted text (the terminal's
+ * bracketed paste) keeps its line breaks, shown as ↵, and is sent with Enter.
+ * No dependency (readline, libedit).
  *
  * The core (le_feed) is a state machine over input bytes that writes its
  * screen updates to a FILE, so it is tested without a terminal; le_read
@@ -42,6 +44,8 @@ struct le {
     size_t         sel;         /* the chosen entry of the list */
     bool           closed;      /* Esc closed the list until the line changes */
     unsigned       menu_rows;   /* list rows of the last drawing */
+    bool           pasting;     /* inside a bracketed paste: Enter is a line break, not send */
+    bool           pasted_cr;   /* the last pasted byte was \r (\r\n is one break) */
     unsigned char  ahead[256];  /* keys typed while the answer ran: read first */
     size_t         n_ahead;
     /* Set by the caller's SIGINT handler: a Ctrl-C that came while the

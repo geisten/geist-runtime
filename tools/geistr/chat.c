@@ -261,7 +261,10 @@ int session_open(struct session *x, const char *name, const char *processor, dou
     geistr_status opened = geistr_model_open(path, &mo, &x->model, error, sizeof error);
     spinner_stop();
     if (opened != GEISTR_OK) {
-        fprintf(stderr, "geistr: cannot open %s: %s\n", path, error);
+        if (strstr(error, path)) /* the engine named the file already */
+            fprintf(stderr, "geistr: %s\n", error);
+        else
+            fprintf(stderr, "geistr: cannot open %s: %s\n", path, error);
         return ERROR;
     }
     geistr_model_info info = {.size = sizeof info};
@@ -558,7 +561,8 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
                 break;
             }
         }
-        line[strcspn(line, "\n")] = 0;
+        if (!edit) /* fgets keeps the line's end; a pasted line keeps its breaks */
+            line[strcspn(line, "\n")] = 0;
         if (!line[0])
             continue;
         if (line[0] == '/') {
