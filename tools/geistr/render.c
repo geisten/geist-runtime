@@ -1162,6 +1162,13 @@ static void word_flush(struct md *m) {
         bool bar           = strstr(m->word, "•") || strstr(m->word, "│");
         m->hang            = bar && w == 1 ? m->col + 1 : m->lead;
         m->bar             = bar && w == 1 && strstr(m->word, "│");
+        if (m->saying) { /* the chat's own lines: a set indent, or after a symbol like ↻ ⟲ ○ */
+            const char *v = m->word;
+            while (*v == '\033') /* past the style */
+                v = strchr(v, 'm') ? strchr(v, 'm') + 1 : v + 1;
+            bool symbol = (unsigned char) *v >= 0x80 || !isalnum((unsigned char) *v); /* bytes, not the locale's */
+            m->hang     = m->say_hang ? m->say_hang : w <= 2 && symbol ? m->col + 1 : m->lead;
+        }
         m->head            = false;
     }
     m->n_word = 0;
@@ -1222,6 +1229,15 @@ static void through_wrap(struct md *m, const char *s, void (*fn)(struct md *, co
     m->out = m->sink;
     wrap_put(m, buf, len);
     free(buf);
+}
+
+void md_say(FILE *out, const char *text, unsigned width, unsigned hang) {
+    struct md m;
+    md_init(&m, MD_ANSI, out);
+    m.width = width, m.wrap = true, m.saying = true, m.say_hang = hang;
+    wrap_put(&m, text, strlen(text));
+    word_flush(&m);
+    fflush(out);
 }
 
 static void feed_all(struct md *m, const char *s) {
