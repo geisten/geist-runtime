@@ -751,9 +751,13 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
         int         bytes;
         const char *last = conv_last_question(&said, &bytes);
         size_t      skip = remote ? 0 : conv_budget(&said, resume_bytes(&x));
-        char        part[48] = "";
+        char        part[96] = "";
         if (skip) /* the rest stays in the file, but is not read again */
             snprintf(part, sizeof part, " · resumes the last %zu", said.n - skip);
+        unsigned char mark = said.mark[said.n - 1];
+        if (mark != MARK_NONE) /* how the last answer ended */
+            snprintf(part + strlen(part), sizeof part - strlen(part), " · %s",
+                     mark == MARK_STOPPED ? "its last answer was stopped" : "its last answer looped (cut)");
         printf("\033[2m↻ %zu · „%.*s%s“%s · /clear new\033[0m\n", said.n, bytes, last, last[bytes] ? "…" : "",
                part);
     }
@@ -853,15 +857,27 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
         bool         known = !remote && geistr_chat_stats(x.chat, &done) == GEISTR_OK;
         if (s == GEISTR_OK || s == GEISTR_CANCELLED)
             x.used = remote ? rs.context_tokens : known ? done.context_tokens : x.used;
-        if (remote ? !strcmp(rs.finish, "repetition") : known && done.finish == GEISTR_FINISH_REPETITION)
-            printf("%s  ⟲ it repeated itself: stopped there · /clear for a fresh conversation%s\n",
-                   dim(tty_out()), normal(tty_out()));
+        bool looped = remote ? !strcmp(rs.finish, "repetition") : known && done.finish == GEISTR_FINISH_REPETITION;
+        if (looped)
+            printf("%s  ⟲ it repeated itself: kept up to the repeat · /retry or /clear%s\n", dim(tty_out()),
+                   normal(tty_out()));
         if (known && done.dropped_messages) /* the model forgets the start: say so */
             printf("%s  ↥ %u oldest message%s left out to fit the context (%u tokens) · /clear starts fresh%s\n",
                    dim(tty_out()), done.dropped_messages, done.dropped_messages == 1 ? "" : "s", x.context,
                    normal(tty_out()));
         if (s == GEISTR_OK || s == GEISTR_CANCELLED) {
-            conv_answered(&said, shown.text);
+            /* A loop does not go back to the model as it was: it copies its own
+             * repeats. Kept up to the repeat, and the chat gets that version. */
+            if (looped && shown.text)
+                shown.text[conv_loop_cut(shown.text)] = 0;
+            conv_answered(&said, shown.text, s == GEISTR_CANCELLED ? MARK_STOPPED : looped ? MARK_CUT : MARK_NONE);
+            if (looped && !remote) { /* the chat drops its looping answer; the cut one goes with the next send */
+                size_t length = geistr_chat_length(x.chat);
+                if (length && geistr_chat_rewind(x.chat, length - 1) == GEISTR_OK)
+                    said.unsent = said.n - 1;
+                else
+                    (void) geistr_chat_rewind(x.chat, 0), said.carry = said.n > 0;
+            }
             if (s == GEISTR_OK && remote) {
                 speed_line(rs.output_tokens, rs.generation_ms, rs.total_ms, stdout);
                 speed_record(x.name, x.backend, rs.output_tokens, rs.generation_ms, rs.prefill_ms, "answer");
