@@ -99,6 +99,13 @@ double json_number(const struct json *j, int t, double dflt) {
     return t >= 0 && T(j)[t].type == JSMN_PRIMITIVE ? strtod(j->s + T(j)[t].start, nullptr) : dflt;
 }
 
+bool json_bool(const struct json *j, int t, bool dflt) {
+    if (t < 0 || T(j)[t].type != JSMN_PRIMITIVE)
+        return dflt;
+    const char *v = j->s + T(j)[t].start;
+    return *v == 't' ? true : *v == 'f' ? false : dflt;
+}
+
 void json_get(const char *object, const char *key, char *out, size_t cap) {
     struct json j = {};
     out[0]        = 0;

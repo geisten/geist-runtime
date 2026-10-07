@@ -10,7 +10,7 @@
  *   geistr config [key [value]]      settings, remembered between runs (geistr.conf)
  *   geistr bench [model…]            measure tokens/s on CPU and GPU (shown by catalog)
  *   geistr bench --compare [A [B]]   two engines' bench speeds side by side, the change in %
- *   geistr serve <model> [--socket=PATH] [--chats N]
+ *   geistr serve <model> [--socket=PATH] [--chats N] [--http[=ADDR:PORT]]
  *                                    the model as a service on a Unix socket (service.h)
  *   geistr chat --socket[=PATH]      chat with that service
  *
@@ -89,7 +89,8 @@ static int usage(void) {
           "       geistr config [key [value]]   (keys: model processor temperature system markdown stats intro resume)\n"
           "       geistr bench [model…]          tokens/s on ⚙ CPU and ⚡ GPU, shown in geistr catalog\n"
           "       geistr bench --compare [A [B]] two geistlib commits' bench speeds and the change in %\n"
-          "       geistr serve <model> [--socket=PATH] [--chats N]\n"
+          "       geistr serve <model> [--socket=PATH] [--chats N] [--http[=ADDR:PORT]]\n"
+          "                                       (--http: OpenAI and Ollama APIs, default 127.0.0.1:11434)\n"
           "       geistr chat --socket[=PATH]\n"
           "options: --models DIR  --catalog FILE  --cpu  --gpu  --new (chat)\n"
           "<model> is a catalog id or a path to a .gguf file\n",
@@ -361,7 +362,7 @@ static void on_stop(int signal) {
     stopping = 1;
 }
 
-static int serve(const char *name, const char *processor, const char *socket, size_t chats) {
+static int serve(const char *name, const char *processor, const char *socket, const char *http, size_t chats) {
     struct session x;
     geistr_reasoning reasoning;
     char             path[4200];
@@ -375,7 +376,7 @@ static int serve(const char *name, const char *processor, const char *socket, si
     sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
     struct svc_options o = {.model = x.model, .reasoning = reasoning, .name = x.name, .socket = socket,
-                            .chats = chats, .stop = &stopping};
+                            .http = http, .chats = chats, .stop = &stopping};
     rc = service_run(&o) ? ERROR : OK;
     geistr_model_close(x.model);
     return rc;
@@ -424,7 +425,7 @@ int main(int argc, char **argv) {
     const char *args[64];
     int         n = 0;
     bool        installed = false, available = false, json = false;
-    const char *processor = nullptr, *socket = nullptr;
+    const char *processor = nullptr, *socket = nullptr, *http = nullptr;
     bool        fresh     = false; /* chat --new */
     long        chats = 2;
     for (int i = 1; i < argc; i++) {
@@ -438,6 +439,8 @@ int main(int argc, char **argv) {
             available = true;
         else if (!strcmp(argv[i], "--json"))
             json = true;
+        else if (!strcmp(argv[i], "--http") || !strncmp(argv[i], "--http=", 7))
+            http = argv[i][6] ? argv[i] + 7 : "127.0.0.1:11434";
         else if (!strcmp(argv[i], "--socket") || !strncmp(argv[i], "--socket=", 9))
             socket = argv[i][8] ? argv[i] + 9 : "";
         else if (!strcmp(argv[i], "--chats") && i + 1 < argc) {
@@ -499,7 +502,7 @@ int main(int argc, char **argv) {
         socket = socket_path;
     }
     if (!strcmp(command, "serve") && n == 2)
-        return serve(args[1], processor, socket, (size_t) chats);
+        return serve(args[1], processor, socket, http, (size_t) chats);
     if (!strcmp(command, "chat") && socket)
         return n == 1 ? chat("", processor, socket, fresh) : usage();
     if (!strcmp(command, "chat") && n == 1) { /* the last model, else the geisten app's */

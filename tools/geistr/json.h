@@ -19,6 +19,7 @@ int    json_count(const struct json *j, int t);                       /* an arra
 int    json_item(const struct json *j, int array, int k);             /* the k-th element's token, or -1 */
 char  *json_string(const struct json *j, int t);        /* unescaped, malloc'd; nullptr if no string */
 double json_number(const struct json *j, int t, double dflt);
+bool   json_bool(const struct json *j, int t, bool dflt); /* true or false, else dflt */
 
 /* A top-level string or number of one object as text into out ("" if absent). */
 void json_get(const char *object, const char *key, char *out, size_t cap);

@@ -312,6 +312,94 @@ def section_serve():
     assert r.returncode == 1 and 'no service' in r.stderr, r.stderr
     print('geistr serve / chat --socket: protocol, 0600 socket, cache hit, rewind, two clients, disconnect, context, SIGTERM passed')
 
+# ---- serve --http: the OpenAI and Ollama APIs --------------------------------
+def section_http():
+    import http.client, socket as unix
+    probe = unix.socket(); probe.bind(('127.0.0.1', 0)); port = probe.getsockname()[1]; probe.close()
+    sock = f'/tmp/geistr-http-{os.getpid()}.sock'
+    service = subprocess.Popen([geistr, 'serve', 'ref', f'--socket={sock}', f'--http=127.0.0.1:{port}', '--cpu', *base],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, env=env)
+    def call(method, path, body=None, headers={}):
+        c = http.client.HTTPConnection('127.0.0.1', port, timeout=120)
+        c.request(method, path, body=json.dumps(body) if isinstance(body, dict) else body, headers=headers)
+        r = c.getresponse()
+        data = r.read().decode()
+        c.close()
+        return r.status, r.getheader('Content-Type'), data
+    deadline = time.time() + 120
+    while True:
+        try:
+            if call('GET', '/')[0] == 200: break
+        except OSError:
+            pass
+        assert service.poll() is None and time.time() < deadline, service.stderr.read()
+        time.sleep(0.2)
+    assert call('GET', '/api/version')[2] == '{"version":"0.1.0"}'
+    models = json.loads(call('GET', '/v1/models')[2])
+    assert models['data'][0]['id'] == 'ref', models
+    assert json.loads(call('GET', '/api/tags')[2])['models'][0]['name'] == 'ref'
+    # OpenAI, one answer: content, finish, usage; developer role and text parts accepted
+    ask = [{'role': 'developer', 'content': 'Answer briefly.'},
+           {'role': 'user', 'content': [{'type': 'text', 'text': 'Name a color.'}]}]
+    status, kind, body = call('POST', '/v1/chat/completions', {'model': 'ref', 'messages': ask, 'temperature': 0})
+    one = json.loads(body)
+    answer = one['choices'][0]['message']['content']
+    assert status == 200 and kind == 'application/json' and answer and one['object'] == 'chat.completion', body
+    assert one['choices'][0]['finish_reason'] in ('stop', 'length') and one['usage']['completion_tokens'] > 0, body
+    # the next turn over the socket continues the same conversation: only the new part is processed
+    s = unix.socket(unix.AF_UNIX); s.connect(sock)
+    turn = [{'role': 'system', 'content': 'Answer briefly.'}, {'role': 'user', 'content': 'Name a color.'},
+            {'role': 'assistant', 'content': answer}, {'role': 'user', 'content': 'Another?'}]
+    s.sendall((json.dumps({'op': 'chat', 'messages': turn, 'max': 8, 'temperature': 0}) + '\n').encode())
+    done = [json.loads(l) for l in s.makefile(encoding='utf-8')][-1]
+    s.close()
+    assert done.get('done') and done['input_tokens'] < done['context_tokens'] - done['output_tokens'], done
+    # OpenAI stream: role first, content, the finish, usage, [DONE]; max_tokens → length
+    status, kind, body = call('POST', '/v1/chat/completions', {'messages': [{'role': 'user', 'content': 'Count to ten.'}],
+                              'stream': True, 'max_tokens': 3, 'temperature': 0, 'stream_options': {'include_usage': True}})
+    events = [l[len('data: '):] for l in body.split('\n') if l.startswith('data: ')]
+    assert status == 200 and kind == 'text/event-stream' and events[-1] == '[DONE]', body
+    chunks = [json.loads(e) for e in events[:-1]]
+    assert chunks[0]['choices'][0]['delta']['role'] == 'assistant'
+    assert ''.join(c['choices'][0]['delta'].get('content', '') for c in chunks if c['choices'])
+    assert [c['choices'][0]['finish_reason'] for c in chunks if c['choices']][-1] == 'length', chunks[-3:]
+    assert chunks[-1]['usage']['completion_tokens'] == 3, chunks[-1]
+    # stop strings end the answer before them
+    status, _, body = call('POST', '/v1/chat/completions', {'messages': [{'role': 'user', 'content': 'Count from 1 to 5 with commas.'}],
+                           'stop': [','], 'temperature': 0, 'max_tokens': 30})
+    assert ',' not in json.loads(body)['choices'][0]['message']['content'], body
+    # Ollama, one object and a stream that ends with done
+    status, _, body = call('POST', '/api/chat', {'model': 'ref', 'messages': [{'role': 'user', 'content': 'Say hi.'}],
+                           'stream': False, 'options': {'temperature': 0, 'num_predict': 4}})
+    one = json.loads(body)
+    assert status == 200 and one['done'] and one['message']['content'] and one['done_reason'] == 'length', body
+    status, kind, body = call('POST', '/api/chat', {'messages': [{'role': 'user', 'content': 'Say hi.'}],
+                              'options': {'num_predict': 3}})
+    lines = [json.loads(l) for l in body.splitlines()]
+    assert kind == 'application/x-ndjson' and not lines[0]['done'] and lines[-1]['done'] and lines[-1]['eval_count'] == 3, body
+    # refused: another Host (DNS rebinding), unknown path, wrong method, too long, chunked, the context
+    assert call('GET', '/v1/models', headers={'Host': 'evil.example'})[0] == 403
+    assert call('GET', '/nope')[0] == 404 and call('GET', '/v1/chat/completions')[0] == 405
+    c = unix.create_connection(('127.0.0.1', port))
+    c.sendall(b'POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: 99999999\r\n\r\n')
+    assert c.recv(100).startswith(b'HTTP/1.1 413'); c.close()
+    c = unix.create_connection(('127.0.0.1', port))
+    c.sendall(b'POST /api/chat HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n')
+    assert c.recv(100).startswith(b'HTTP/1.1 411'); c.close()
+    status, _, body = call('POST', '/v1/chat/completions', {'messages': [{'role': 'user', 'content': 'word ' * 20000}]})
+    assert status == 400 and json.loads(body)['error']['code'] == 'context_length_exceeded', body
+    # a client that leaves mid-stream stops its answer; the next request is served
+    c = unix.create_connection(('127.0.0.1', port))
+    long = json.dumps({'messages': [{'role': 'user', 'content': 'Write a long story.'}], 'stream': True, 'max_tokens': 400})
+    c.sendall(f'POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: {len(long)}\r\n\r\n{long}'.encode())
+    assert b'data:' in c.recv(4096); c.close()
+    t0 = time.time()
+    assert call('POST', '/api/chat', {'messages': [{'role': 'user', 'content': 'Hi'}], 'stream': False,
+                'options': {'num_predict': 2}})[0] == 200 and time.time() - t0 < 60
+    service.send_signal(signal.SIGTERM)
+    assert service.wait(30) == 0
+    print('geistr serve --http: OpenAI (one answer, stream, usage, stop, length) and Ollama APIs, shared cache, Host check, 403/404/405/411/413, context, disconnect passed')
+
 # ---- bench and the speed chart --------------------------------------------------
 def section_bench():
     speeds = os.path.join(env['GEISTEN_HOME'], 'speed.tsv')
