@@ -13,7 +13,11 @@
  * collected, a one-line placeholder counts the rows, and the table replaces
  * it when it ends, compact (no outer frame), aligned, cells with inline
  * Markdown, wrapped to the terminal width or as one record per row when the
- * columns cannot fit. A first line not followed by a delimiter is text. */
+ * columns cannot fit. A first line not followed by a delimiter is text.
+ *
+ * With wrap set (and a width), prose wraps at word boundaries: a word is
+ * shown once it is complete, on the next line when it does not fit, under
+ * the text of its bullet or quote. */
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
@@ -44,6 +48,14 @@ struct md {
     int          table_state; /* 0, 1 (a first line), 2 (confirmed) */
     bool         table_line;  /* collecting a table line */
     bool         replaying;   /* not a table after all: its text again */
+    /* wrapping (wrap and width set): what the parser wrote goes through it */
+    bool     wrap;
+    FILE    *sink;            /* the real output; out is a buffer meanwhile */
+    unsigned col, hang, lead; /* the line's columns, its continuation indent, its leading spaces */
+    unsigned spaces;          /* held until the next word: dropped at a line's end */
+    bool     head;            /* no word on this line yet */
+    char     word[512];       /* the word being written (escapes included) */
+    size_t   n_word;
 };
 
 void md_init(struct md *m, enum md_mode mode, FILE *out);

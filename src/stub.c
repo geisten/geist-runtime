@@ -27,7 +27,7 @@
 #define TOKEN_BYTES 3u
 
 const char *geistr_version(void) {
-    return "0.1.0-stub";
+    return "0.1.1-stub";
 }
 
 const char *geistr_status_text(geistr_status s) {

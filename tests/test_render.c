@@ -9,6 +9,7 @@
 
 static int      failures;
 static unsigned test_width; /* terminal columns for tables; 0: the default */
+static bool     test_wrap;  /* prose wrapped at words, to test_width */
 
 static char *run(const char *const *pieces, size_t n, enum md_mode mode) {
     char  *buf = nullptr;
@@ -17,6 +18,7 @@ static char *run(const char *const *pieces, size_t n, enum md_mode mode) {
     struct md m;
     md_init(&m, mode, f);
     m.width = test_width;
+    m.wrap  = test_wrap;
     for (size_t i = 0; i < n; i++)
         md_feed(&m, pieces[i]);
     md_finish(&m);
@@ -129,6 +131,7 @@ int main(void) {
     math("\\alpha + \\beta \\leq \\gamma", "α + β ≤ γ");
     math("\\sqrt{x^2 + y^2}", "√(x² + y²)");
     math("\\sqrt[3]{8}", "³√8");
+    math("\\boxed{391}", "391"); /* qwen3 marks its result so */
     math("\\frac{1}{2}", "1/2");
     math("x \\in \\mathbb{R}", "x ∈ ℝ");
     math("\\lim_{x \\to \\infty} f(x)", "lim_(x → ∞) f(x)"); /* no subscript arrow */
@@ -140,6 +143,24 @@ int main(void) {
         fprintf(stderr, "render: %d failures\n", failures);
         return 1;
     }
-    puts("render: Markdown, tables and math for the terminal, split-invariant, raw mode untouched passed");
+    /* wrapping: at word boundaries, under a bullet's text, styles and Unicode
+     * measured by what shows, no spaces at line ends, a line that fills the
+     * width exactly stays, an over-long word on its own line */
+    test_wrap = true, test_width = 30;
+    check("The keeper of the lighthouse had been tending the light for nigh on forty years.\n",
+          "The keeper of the lighthouse\nhad been tending the light for\nnigh on forty years.\n");
+    test_width = 24;
+    check("- a first point that is far too long for one line\n- short\n",
+          "• a first point that is\n  far too long for one\n  line\n• short\n");
+    test_width = 22;
+    check("Energy is **mass times** the speed of light squared: $E=mc^2$ as always.\n",
+          "Energy is «b»mass times«»\nthe speed of light\nsquared: «m»E=mc²«» as\nalways.\n");
+    test_width = 20;
+    check("Grüße aus München, wo die Brezeln größer sind.\n", "Grüße aus München,\nwo die Brezeln\ngrößer sind.\n");
+    test_width = 16;
+    check("Short then Donaudampfschifffahrtsgesellschaftskapitän ends.\n",
+          "Short then\nDonaudampfschifffahrtsgesellschaftskapitän\nends.\n");
+    test_wrap = false, test_width = 0;
+    puts("render: Markdown, tables and math for the terminal, split-invariant, raw mode untouched, word wrap passed");
     return 0;
 }

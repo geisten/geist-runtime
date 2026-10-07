@@ -107,20 +107,23 @@ static const char *hint(struct le *e, char out[static 256]) {
 
 /* ---- drawing ------------------------------------------------------------ */
 
-/* s cut to at most w columns. */
+/* s in at most w columns; cut, it ends with "…". */
 static void put_cut(FILE *out, const char *s, unsigned w) {
-    unsigned used = 0;
-    for (const char *p = s; *p;) {
+    unsigned room = columns(s, strlen(s)) <= w ? w : w ? w - 1 : 0, used = 0;
+    const char *p = s;
+    while (*p) {
         size_t k = 1;
         while (((unsigned char) p[k] & 0xc0) == 0x80)
             k++;
         unsigned cw = columns(p, k);
-        if (used + cw > w)
+        if (used + cw > room)
             break;
         fwrite(p, 1, k, out);
         used += cw;
         p += k;
     }
+    if (*p && w)
+        fputs("…", out);
 }
 
 static void draw(struct le *e, bool with_menu) {
