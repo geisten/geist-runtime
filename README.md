@@ -12,7 +12,13 @@ or the GPU.
 curl -fsSL https://raw.githubusercontent.com/geisten/geist-runtime/main/install.sh | sh
 ```
 
-That's it: Linux (x86_64, arm64) and macOS (Apple Silicon). The script
+Or with [Homebrew](https://brew.sh):
+
+```sh
+brew install geisten/tap/geistr
+```
+
+Both work on Linux (x86_64, arm64) and macOS (Apple Silicon). The script
 downloads the latest release, checks it against `SHA256SUMS` and puts
 `geistr` in `/usr/local/bin`.
 
@@ -211,8 +217,8 @@ Every complete answer records its speed in `speed.tsv` in the data folder;
 
 ## Update
 
-Run the install command again. The model list ships inside geistr, so new
-models come with a new geistr. Afterwards `geistr catalog` marks installed
+`brew upgrade geistr`, or run the install command again. The model list
+ships inside geistr, so new models come with a new geistr. Afterwards `geistr catalog` marks installed
 models whose file changed with ⟳, and `geistr pull` fetches them (the old
 file stays until the new one is verified).
 
