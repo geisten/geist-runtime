@@ -149,7 +149,7 @@ int main(void) {
     free(screen);
     struct le cap;
     le_init(&cap, stdout, 80, nullptr, nullptr);
-    char entry[16];
+    char entry[32];
     for (int i = 0; i < 501; i++)
         snprintf(entry, sizeof entry, "line %d", i), le_remember(&cap, entry);
     CHECK(cap.n_history == 500 && !strcmp(cap.history[0], "line 1"), "the history keeps the last 500");
