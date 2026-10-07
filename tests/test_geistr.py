@@ -255,7 +255,10 @@ def section_resume():
     out = terminal_chat('Hello.', '--new')
     assert '↻' not in out and len(stored()) == 2, (out, stored())  # a new one; the old one stays
     assert geistr_run('chat', 'ref', input='Hi.\n').returncode == 0 and len(stored()) == 2  # piped: nothing kept
-    print('geistr chat: continues the last conversation in a terminal, --new, private files, piped chats keep nothing passed')
+    history = os.path.join(env['GEISTEN_HOME'], 'history')                # what was typed, across chats
+    assert os.stat(history).st_mode & 0o777 == 0o600
+    assert [json.loads(l)['line'] for l in open(history)] == ['My name is Ada.', 'What is my name?', 'Hello.']
+    print('geistr chat: continues the last conversation in a terminal, --new, private files, input history, piped chats keep nothing passed')
 
 # ---- serve and chat --socket --------------------------------------------------
 def section_serve():

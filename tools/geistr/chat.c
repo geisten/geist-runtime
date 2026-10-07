@@ -12,6 +12,7 @@
 #include <stdatomic.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <termios.h>
 #include <time.h>
@@ -344,17 +345,78 @@ static const struct le_candidate commands[] = {
 static char   installed_ids[64][64], model_lines[64][80];
 static size_t n_installed;
 
+/* The installed models, best for this computer first (as geistr catalog
+ * ranks them); in catalog order if the ranking fails. */
 static void find_installed(void) {
-    geistr_catalog *c = load_catalog();
-    n_installed       = 0;
-    for (size_t i = 0; c && i < geistr_catalog_count(c) && n_installed < 64; i++) {
-        const geistr_catalog_entry *m     = geistr_catalog_get(c, i);
-        geistr_install              state = GEISTR_INSTALL_MISSING;
-        if (geistr_catalog_check(m, models_dir, false, &state) == GEISTR_OK &&
-            (state == GEISTR_INSTALL_OK || state == GEISTR_INSTALL_UNVERIFIED))
-            snprintf(installed_ids[n_installed++], sizeof installed_ids[0], "%s", m->id);
+    geistr_catalog *c     = load_catalog();
+    size_t          n     = c ? geistr_catalog_count(c) : 0;
+    geistr_local   *local = n ? calloc(n, sizeof *local) : nullptr;
+    n_installed           = 0;
+    for (size_t i = 0; local && i < n; i++) {
+        geistr_install state = GEISTR_INSTALL_MISSING;
+        bool ok  = geistr_catalog_check(geistr_catalog_get(c, i), models_dir, false, &state) == GEISTR_OK &&
+                   (state == GEISTR_INSTALL_OK || state == GEISTR_INSTALL_UNVERIFIED);
+        local[i] = (geistr_local) {.size = sizeof *local, .installed = ok};
     }
+    if (local)
+        speeds_load(c, local);
+    geistr_device   d      = {};
+    geistr_ranking *r      = nullptr;
+    bool            ranked = local && geistr_device_probe(models_dir, &d) == GEISTR_OK &&
+                             geistr_rank(c, &d, local, nullptr, &r) == GEISTR_OK;
+    for (size_t k = 0; local && k < n && n_installed < 64; k++) {
+        const geistr_catalog_entry *m = ranked ? geistr_ranking_get(r, k)->entry : geistr_catalog_get(c, k);
+        for (size_t i = 0; i < n; i++) /* ponytail: linear lookup, the catalog has a handful of models */
+            if (geistr_catalog_get(c, i) == m && local[i].installed)
+                snprintf(installed_ids[n_installed++], sizeof installed_ids[0], "%s", m->id);
+    }
+    geistr_ranking_free(r);
+    free(local);
     geistr_catalog_free(c);
+}
+
+/* What was typed in the chat, kept between chats in the data folder (one
+ * JSON object per line, private). Not kept with resume off, as nothing is. */
+enum { HISTORY_KEEP = 500 };
+static char history_file[4200];
+
+static void history_load(struct le *e) {
+    history_file[0] = 0;
+    if (!cfg.resume || !data_dir[0] || !make_dirs(data_dir, 0700))
+        return;
+    snprintf(history_file, sizeof history_file, "%s/history", data_dir);
+    FILE *f = fopen(history_file, "r");
+    if (!f)
+        return;
+    static char line[1 << 16], text[4096];
+    size_t      lines = 0;
+    while (fgets(line, sizeof line, f)) {
+        json_get(line, "line", text, sizeof text);
+        le_remember(e, text);
+        lines++;
+    }
+    fclose(f);
+    if (lines <= 2 * HISTORY_KEEP) /* else: rewrite it with the lines the editor kept */
+        return;
+    f = fopen(history_file, "w");
+    for (size_t i = 0; f && i < e->n_history; i++)
+        fputs("{\"line\":", f), json_write(f, e->history[i]), fputs("}\n", f);
+    if (f)
+        fclose(f);
+}
+
+static void history_add(const char *text) {
+    if (!history_file[0] || !*text)
+        return;
+    int   fd = open(history_file, O_WRONLY | O_CREAT | O_APPEND, 0600);
+    FILE *f  = fd >= 0 ? fdopen(fd, "a") : nullptr;
+    if (!f) {
+        if (fd >= 0)
+            close(fd);
+        return;
+    }
+    fputs("{\"line\":", f), json_write(f, text), fputs("}\n", f);
+    fclose(f);
 }
 
 static size_t complete_line(void *ctx, const char *line, struct le_candidate *out, size_t max) {
@@ -587,6 +649,7 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
         find_installed();
         le_init(&editor, stdout, 80, complete_line, nullptr);
         editor.interrupted = &interrupted;
+        history_load(&editor);
         keys_only(true);
     }
     if (edit && cfg.resume && data_dir[0]) { /* the conversation outlives the chat; piped ones do not */
@@ -621,6 +684,7 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
             }
             snprintf(line, sizeof line, "%s", editor.buf);
             le_remember(&editor, line);
+            history_add(line);
         } else {
             fputs(prompt, stdout);
             fflush(stdout);
