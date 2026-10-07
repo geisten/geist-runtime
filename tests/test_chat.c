@@ -92,12 +92,27 @@ int main(void) {
     conv_answered(&next, "Yes.");
     CHECK(files() == 2);
 
+    /* A resumed conversation re-reads only its newest messages within a budget:
+     * starting at a question, the newest one always; the system prompt besides. */
+    struct conversation big = {};
+    conv_push(&big, "system", "Sys.");
+    for (int i = 0; i < 10; i++)
+        conv_push(&big, "user", "0123456789"), conv_push(&big, "assistant", "abcdefghij");
+    CHECK(conv_budget(&big, 1000) == 0);          /* all of it fits: from the start */
+    CHECK(conv_budget(&big, 40) == 17);           /* the last two exchanges: 4 × 10 bytes */
+    CHECK(conv_budget(&big, 45) == 17);           /* never in the middle of an exchange */
+    CHECK(conv_budget(&big, 5) == 19);            /* too small: still the newest question */
+    struct conversation plain = {};
+    conv_push(&plain, "user", "a"), conv_push(&plain, "assistant", "b"), conv_push(&plain, "user", "c");
+    CHECK(conv_budget(&plain, 1) == 2 && conv_budget(&plain, 3) == 0); /* no system prompt */
+    conv_free(&big), conv_free(&plain);
+
     conv_free(&c), conv_free(&next), conv_free(&empty);
     char cmd[64];
     snprintf(cmd, sizeof cmd, "rm -rf %s", tmp);
     CHECK(system(cmd) == 0);
     if (failures)
         return 1;
-    puts("chat conversation: what each send carries, system prompt, /clear, store and resume passed");
+    puts("chat conversation: what each send carries, system prompt, /clear, store and resume, resume budget passed");
     return 0;
 }

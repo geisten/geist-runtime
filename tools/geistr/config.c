@@ -9,7 +9,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-struct settings cfg = {.processor = "auto", .markdown = true, .stats = true, .intro = true, .resume = true, .history = true};
+struct settings cfg = {.processor = "auto", .markdown = true, .stats = true, .intro = true, .resume = true, .history = true, .resume_tokens = 2048};
 char            config_path[4200], data_dir[4096];
 static char     config_dir[4096];
 
@@ -20,16 +20,18 @@ static const struct setting {
     void       *at;
     size_t      cap;     /* TEXT, CHOICE */
     const char *choices; /* CHOICE: the first is the default */
+    double      max;     /* NUMBER: from 0 to this */
 } settings[] = {
         {.key = "model", .kind = TEXT, .at = cfg.model, .cap = sizeof cfg.model},
         {.key = "processor", .kind = CHOICE, .at = cfg.processor, .cap = sizeof cfg.processor, .choices = "auto cpu gpu"},
-        {.key = "temperature", .kind = NUMBER, .at = &cfg.temperature}, /* ponytail: the one number; 0 to 2 */
+        {.key = "temperature", .kind = NUMBER, .at = &cfg.temperature, .max = 2},
         {.key = "system", .kind = TEXT, .at = cfg.system, .cap = sizeof cfg.system},
         {.key = "markdown", .kind = SWITCH, .at = &cfg.markdown},
         {.key = "stats", .kind = SWITCH, .at = &cfg.stats},
         {.key = "intro", .kind = SWITCH, .at = &cfg.intro},
         {.key = "resume", .kind = SWITCH, .at = &cfg.resume},
         {.key = "history", .kind = SWITCH, .at = &cfg.history},
+        {.key = "resume_tokens", .kind = NUMBER, .at = &cfg.resume_tokens, .max = 1e6},
 };
 enum { N_SETTINGS = sizeof settings / sizeof *settings };
 
@@ -63,8 +65,8 @@ static const char *set(const char *key, const char *value) {
     case NUMBER: {
         char  *end = nullptr;
         double t   = *value ? strtod(value, &end) : 0;
-        if (*value && (*end || !(t >= 0 && t <= 2)))
-            return snprintf(why, sizeof why, "%s is a number from 0 to 2", key), why;
+        if (*value && (*end || !(t >= 0 && t <= s->max)))
+            return snprintf(why, sizeof why, "%s is a number from 0 to %g", key, s->max), why;
         *(double *) s->at = t;
         break;
     }

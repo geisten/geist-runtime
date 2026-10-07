@@ -459,6 +459,15 @@ static void usage(const char *text) {
     printf("%s%s%s\n", dim(faint), text, normal(faint));
 }
 
+/* What a resumed conversation (or the first send on another model) re-reads
+ * at most: a quarter of the context, or resume_tokens if less, in bytes.
+ * ponytail: about 4 bytes a token, no tokenizer here; the runtime still
+ * drops more if the estimate falls short. */
+static size_t resume_bytes(const struct session *x) {
+    double tokens = x->context ? x->context / 4.0 : cfg.resume_tokens;
+    return (size_t) (4 * (cfg.resume_tokens < tokens ? cfg.resume_tokens : tokens));
+}
+
 /* How full the context is after the last answer, in percent. */
 static unsigned fill(const struct session *x) {
     return x->context ? (unsigned) ((uint64_t) x->used * 100 / x->context) : 0;
@@ -689,7 +698,12 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
     if (said.n) { /* where it was: its size, the last question */
         int         bytes;
         const char *last = conv_last_question(&said, &bytes);
-        printf("\033[2m↻ %zu · „%.*s%s“ · /clear new\033[0m\n", said.n, bytes, last, last[bytes] ? "…" : "");
+        size_t      skip = remote ? 0 : conv_budget(&said, resume_bytes(&x));
+        char        part[48] = "";
+        if (skip) /* the rest stays in the file, but is not read again */
+            snprintf(part, sizeof part, " · resumes the last %zu", said.n - skip);
+        printf("\033[2m↻ %zu · „%.*s%s“%s · /clear new\033[0m\n", said.n, bytes, last, last[bytes] ? "…" : "",
+               part);
     }
     for (;;) {
         if (!edit) /* the editor takes a Ctrl-C that came between two reads */
@@ -736,13 +750,20 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
             continue;
         }
         /* Normally only the new message; after a switch, the conversation once. */
-        size_t          from  = conv_say(&said, line, remote != nullptr);
-        size_t          count = said.n - from;
-        geistr_message *turn  = calloc(count, sizeof *turn);
+        size_t from = conv_say(&said, line, remote != nullptr);
+        /* All of it again (resumed, another model): only the newest within the
+         * budget, and the system prompt; a service matches the whole. */
+        size_t          skip   = !from && !remote ? conv_budget(&said, resume_bytes(&x)) : 0;
+        bool            system = skip && !strcmp(said.role[0], "system");
+        size_t          count  = (skip ? said.n - skip : said.n - from) + system;
+        geistr_message *turn   = calloc(count, sizeof *turn);
         if (!turn)
             break;
-        for (size_t i = 0; i < count; i++)
-            turn[i] = (geistr_message) {said.role[from + i], said.content[from + i]};
+        if (system)
+            turn[0] = (geistr_message) {said.role[0], said.content[0]};
+        for (size_t i = system; i < count; i++)
+            turn[i] = (geistr_message) {said.role[(skip ? skip : from) + i - system],
+                                        said.content[(skip ? skip : from) + i - system]};
         view_begin(&shown);
         if (edit)
             watch_start(&editor);
@@ -766,6 +787,10 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
         if (remote ? !strcmp(rs.finish, "repetition") : known && done.finish == GEISTR_FINISH_REPETITION)
             printf("%s  ⟲ it repeated itself: stopped there · /clear for a fresh conversation%s\n",
                    dim(tty_out()), normal(tty_out()));
+        if (known && done.dropped_messages) /* the model forgets the start: say so */
+            printf("%s  ↥ %u oldest message%s left out to fit the context (%u tokens) · /clear starts fresh%s\n",
+                   dim(tty_out()), done.dropped_messages, done.dropped_messages == 1 ? "" : "s", x.context,
+                   normal(tty_out()));
         if (s == GEISTR_OK || s == GEISTR_CANCELLED) {
             conv_answered(&said, shown.text);
             if (s == GEISTR_OK && remote) {
