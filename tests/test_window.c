@@ -30,10 +30,18 @@ int main(void) {
     check(window_choose(8192, 100000, 0, 1, 0) == 8192, "explicit window capped at the trained one");
     /* Unknown trained length and memory: 4096, no reduction. */
     check(window_choose(0, 0, 1 * G, 1000, 0) == 4096, "unknown: 4096");
+    /* The GPU budget: free device memory less max(a tenth, 512 MiB), capped by RAM. */
+    const uint64_t M = 1ull << 20;
+    check(window_gpu_budget(48 * G, 11264 * M, 9000 * M) == 9000 * M - 11264 * M / 10, "GPU: free less a tenth");
+    check(window_gpu_budget(4 * G, 11264 * M, 9000 * M) == 4 * G, "GPU: RAM is the smaller budget");
+    check(window_gpu_budget(48 * G, 2 * G, 2 * G) == 2 * G - 512 * M, "GPU: at least 512 MiB headroom");
+    check(window_gpu_budget(48 * G, 11264 * M, 300 * M) == 1, "GPU: nothing to spare is 1 byte, not unlimited");
+    check(window_choose(131072, 0, 3 * G, 45056, window_gpu_budget(48 * G, 11264 * M, 300 * M)) == 0,
+          "GPU: a full device fits nothing");
     if (failures) {
         fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;
     }
-    puts("window: fits, large model, reduced, too big, short trained, explicit, unknown passed");
+    puts("window: fits, large model, reduced, too big, short trained, explicit, unknown, GPU budget passed");
     return 0;
 }

@@ -661,13 +661,43 @@ static int command(struct session *x, struct conversation *said, char *line, con
         return GO_ON;
     }
     if (processor_now || (!strcmp(line, "/model") && *arg)) {
-        /* Open the new session first: a failure keeps the current one. */
+        const char    *name = processor_now ? x->name : arg;
+        const char    *proc = processor_now ? processor_now : x->processor;
         struct session next;
-        if (session_open(&next, processor_now ? x->name : arg, processor_now ? processor_now : x->processor,
-                         x->temperature, true) != OK)
-            return GO_ON;
-        running = nullptr;
-        session_close(x);
+        if (on_gpu(x) && strcmp(proc, "cpu") != 0) {
+            /* Both may be on the GPU, and two models rarely fit its memory
+             * together: the current one goes first. The conversation is kept
+             * here (said); a failure reopens the previous model. */
+            char prev_name[sizeof x->name], prev_proc[sizeof x->processor];
+            char want[sizeof x->name], want_proc[sizeof x->processor];
+            snprintf(prev_name, sizeof prev_name, "%s", x->name);
+            snprintf(prev_proc, sizeof prev_proc, "%s", x->processor);
+            snprintf(want, sizeof want, "%s", name); /* name and proc may point into *x */
+            snprintf(want_proc, sizeof want_proc, "%s", proc);
+            char             path[4200] = "";
+            geistr_reasoning reasoning;
+            if (resolve(want, path, sizeof path, &reasoning) != OK) /* a typo keeps the model */
+                return GO_ON;
+            const double temperature = x->temperature;
+            running                  = nullptr;
+            session_close(x);
+            if (session_open(&next, want, want_proc, temperature, true) != OK) {
+                if (session_open(x, prev_name, prev_proc, temperature, true) != OK) {
+                    fprintf(stderr, "geistr: cannot reopen %s either\n", prev_name);
+                    return LEAVE;
+                }
+                running     = x->chat;
+                said->carry = said->n > 0;
+                status_line(x, " · back on the previous model");
+                return GO_ON;
+            }
+        } else {
+            /* Open the new session first: a failure keeps the current one. */
+            if (session_open(&next, name, proc, x->temperature, true) != OK)
+                return GO_ON;
+            running = nullptr;
+            session_close(x);
+        }
         *x          = next;
         running     = x->chat;
         said->carry = said->n > 0;
