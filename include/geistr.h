@@ -40,6 +40,14 @@ extern "C" {
 #define GEISTR_VERSION_MINOR 1
 #define GEISTR_VERSION_PATCH 0
 
+/* Every call that can fail returns geistr_status: ignoring it is a warning
+ * with C23 or C++17 (attribute [[nodiscard]]), nothing on older compilers. */
+#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L) || (defined(__cplusplus) && __cplusplus >= 201703L)
+#define GEISTR_NODISCARD [[nodiscard]]
+#else
+#define GEISTR_NODISCARD
+#endif
+
 /* "0.1.0" — the library's version, which may be newer than this header's. */
 const char *geistr_version(void);
 
@@ -89,7 +97,7 @@ typedef struct geistr_model geistr_model;
 /* Open a GGUF model. On failure *out is nullptr and, when error is not
  * nullptr, a reason is written to error[0..error_cap).
  * Thread safety: any thread; opening several models at once is allowed. */
-geistr_status geistr_model_open(const char              *path,
+GEISTR_NODISCARD geistr_status geistr_model_open(const char              *path,
                                 const geistr_model_opts *opts,
                                 geistr_model           **out,
                                 char                    *error,
@@ -97,7 +105,7 @@ geistr_status geistr_model_open(const char              *path,
 
 /* Open a model already in memory (e.g. embedded in the executable). The
  * bytes are borrowed, not copied: they must outlive the model. */
-geistr_status geistr_model_open_memory(const void              *data,
+GEISTR_NODISCARD geistr_status geistr_model_open_memory(const void              *data,
                                        size_t                   len,
                                        const geistr_model_opts *opts,
                                        geistr_model           **out,
@@ -119,7 +127,7 @@ typedef struct geistr_model_info {
 
 /* Fill *info. Its strings are borrowed until the model is released.
  * Thread safety: any thread, concurrently with chats on this model. */
-geistr_status geistr_model_info_get(const geistr_model *model, geistr_model_info *info);
+GEISTR_NODISCARD geistr_status geistr_model_info_get(const geistr_model *model, geistr_model_info *info);
 
 /* Detail of the last failure caused by this model handle (never nullptr). */
 const char *geistr_model_error(const geistr_model *model);
@@ -168,7 +176,7 @@ typedef struct geistr_chat geistr_chat;
  * Thread safety: any thread. Several chats on one model may run on different
  * threads at the same time; the runtime serialises the engine where a
  * backend requires it. */
-geistr_status
+GEISTR_NODISCARD geistr_status
 geistr_chat_open(geistr_model *model, const geistr_chat_opts *opts, geistr_chat **out);
 
 /* Close the chat and release its model reference. nullptr is ignored.
@@ -184,7 +192,7 @@ void geistr_chat_close(geistr_chat *chat);
  * GEISTR_INVALID: count is 0 or the last message is from the assistant.
  * GEISTR_CANCELLED: cancelled during input processing; the new messages are
  * then not part of the conversation. */
-geistr_status geistr_chat_send(geistr_chat *chat, size_t count, const geistr_message messages[]);
+GEISTR_NODISCARD geistr_status geistr_chat_send(geistr_chat *chat, size_t count, const geistr_message messages[]);
 
 /* Messages in the conversation: every sent message and every answer (an
  * answer counts once it has started). Turns dropped by DROP_OLDEST are gone. */
@@ -193,12 +201,12 @@ size_t geistr_chat_length(const geistr_chat *chat);
 /* Go back to the first keep messages; later ones and their cache are
  * dropped, an unfinished answer is ended. rewind(chat, 0) starts a new
  * conversation. GEISTR_INVALID if keep > geistr_chat_length. */
-geistr_status geistr_chat_rewind(geistr_chat *chat, size_t keep);
+GEISTR_NODISCARD geistr_status geistr_chat_rewind(geistr_chat *chat, size_t keep);
 
 /* Answer limit for the following sends, as opts.max_tokens (0 = the rest of
  * the context). For callers whose limit differs per request. Not while an
  * answer is running: GEISTR_INVALID then. */
-geistr_status geistr_chat_limit(geistr_chat *chat, uint32_t max_tokens);
+GEISTR_NODISCARD geistr_status geistr_chat_limit(geistr_chat *chat, uint32_t max_tokens);
 
 typedef enum geistr_part {
     GEISTR_PART_ANSWER = 0,
@@ -219,7 +227,7 @@ typedef struct geistr_piece {
  * After END, further calls return END again until the next send.
  * GEISTR_CANCELLED once after a cancel; the chat stays usable for a new send.
  * GEISTR_INVALID before the first send. */
-geistr_status geistr_chat_next(geistr_chat *chat, geistr_piece *piece);
+GEISTR_NODISCARD geistr_status geistr_chat_next(geistr_chat *chat, geistr_piece *piece);
 
 /* Ask the running send/next to stop as soon as possible.
  * Thread safety: the one call that may run on any thread, at any time,
@@ -229,7 +237,7 @@ geistr_status geistr_chat_cancel(geistr_chat *chat);
 /* Convenience: send, then deliver every piece to emit until END.
  * emit returning 0 cancels (the result is GEISTR_CANCELLED). */
 typedef int (*geistr_emit_fn)(void *context, const geistr_piece *piece);
-geistr_status geistr_chat_run(geistr_chat         *chat,
+GEISTR_NODISCARD geistr_status geistr_chat_run(geistr_chat         *chat,
                               size_t               count,
                               const geistr_message messages[],
                               geistr_emit_fn       emit,
@@ -260,7 +268,7 @@ typedef struct geistr_stats {
 
 /* Statistics of the current or last answer.
  * Thread safety: same thread as send/next. */
-geistr_status geistr_chat_stats(const geistr_chat *chat, geistr_stats *stats);
+GEISTR_NODISCARD geistr_status geistr_chat_stats(const geistr_chat *chat, geistr_stats *stats);
 
 /* Detail of the last failure on this chat (never nullptr). */
 const char *geistr_chat_error(const geistr_chat *chat);

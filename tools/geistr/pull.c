@@ -41,19 +41,6 @@ static int on_progress(void *context, curl_off_t total, curl_off_t now, curl_off
     return stop;
 }
 
-static bool mkdirs(const char *dir) {
-    char path[4096];
-    snprintf(path, sizeof path, "%s", dir);
-    for (char *p = path + 1; *p; p++)
-        if (*p == '/') {
-            *p = 0;
-            if (mkdir(path, 0755) != 0 && errno != EEXIST)
-                return false;
-            *p = '/';
-        }
-    return mkdir(path, 0755) == 0 || errno == EEXIST;
-}
-
 int geistr_pull(const geistr_catalog_entry *m, const char *dir) {
     char target[4200], part[4300], url[2048];
     snprintf(target, sizeof target, "%s/%s", dir, m->file);
@@ -64,7 +51,7 @@ int geistr_pull(const geistr_catalog_entry *m, const char *dir) {
     if (base)
         snprintf(url, sizeof url, "%s%s", base, m->url + strlen("https://huggingface.co"));
 #endif
-    if (!mkdirs(dir)) {
+    if (!make_dirs(dir, 0755)) {
         fprintf(stderr, "geistr: cannot create %s: %s\n", dir, strerror(errno));
         return 1;
     }

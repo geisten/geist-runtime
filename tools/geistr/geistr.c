@@ -74,16 +74,16 @@ static struct {
 static char config_path[4200], config_dir[4096], data_dir[4096];
 static const char *const config_keys[] = {"model", "processor", "temperature", "system", "markdown", "stats", "intro", "resume"};
 
-static bool make_dirs(const char *path) {
+bool make_dirs(const char *path, unsigned mode) {
     char dir[4096];
     snprintf(dir, sizeof dir, "%s", path);
     for (char *p = dir + 1; *p; p++)
         if (*p == '/') {
             *p = 0;
-            (void) mkdir(dir, 0700);
+            (void) mkdir(dir, (mode_t) mode);
             *p = '/';
         }
-    return mkdir(dir, 0700) == 0 || errno == EEXIST;
+    return mkdir(dir, (mode_t) mode) == 0 || errno == EEXIST;
 }
 
 /* The geisten data folder: where the default model folder lives. */
@@ -113,7 +113,7 @@ static bool data_folder(void) {
     snprintf(config_path, sizeof config_path, "%s/geistr.conf", config_dir);
     char old[4200]; /* where geistr kept it before: moved once */
     snprintf(old, sizeof old, "%s/geistr.conf", data_dir);
-    if (!own && access(config_path, F_OK) != 0 && access(old, F_OK) == 0 && make_dirs(config_dir))
+    if (!own && access(config_path, F_OK) != 0 && access(old, F_OK) == 0 && make_dirs(config_dir, 0700))
         (void) rename(old, config_path);
     return true;
 }
@@ -187,7 +187,7 @@ static void config_load(void) {
 }
 
 static bool config_save(void) {
-    if (!make_dirs(config_dir)) /* the folder may not exist yet without the app */
+    if (!make_dirs(config_dir, 0700)) /* the folder may not exist yet without the app */
         return false;
     char tmp[4300];
     snprintf(tmp, sizeof tmp, "%s.%ld", config_path, (long) getpid());
@@ -350,9 +350,6 @@ static void json_to(FILE *f, const char *s) {
     fputc('"', f);
 }
 
-static void json_string(const char *s) {
-    json_to(stdout, s);
-}
 
 static bool tty_out(void);
 
@@ -486,7 +483,7 @@ static int catalog(bool installed_only, bool available_only, bool json) {
             max = v[k] > max ? v[k] : max;
     }
     if (json)
-        printf("{\"schema\":1,\"models_dir\":"), json_string(models_dir), printf(",\"models\":[");
+        printf("{\"schema\":1,\"models_dir\":"), json_to(stdout, models_dir), printf(",\"models\":[");
     bool first = true;
     /* Installed first, then available; catalog order within each. */
     for (int pass = 0; pass < 2; pass++)
@@ -503,17 +500,17 @@ static int catalog(bool installed_only, bool available_only, bool json) {
                 static const char *const states[]    = {"available", "unverified", "installed", "mismatch"};
                 static const char *const resources[] = {"fits", "limited", "unavailable"};
                 printf("%s{\"id\":", first ? "" : ",");
-                json_string(m->id);
-                printf(",\"name\":"), json_string(m->name);
-                printf(",\"quantization\":"), m->quantization ? json_string(m->quantization) : (void) printf("null");
-                printf(",\"file\":"), json_string(m->file);
-                printf(",\"url\":"), json_string(m->url);
-                printf(",\"sha256\":"), json_string(m->sha256);
+                json_to(stdout, m->id);
+                printf(",\"name\":"), json_to(stdout, m->name);
+                printf(",\"quantization\":"), m->quantization ? json_to(stdout, m->quantization) : (void) printf("null");
+                printf(",\"file\":"), json_to(stdout, m->file);
+                printf(",\"url\":"), json_to(stdout, m->url);
+                printf(",\"sha256\":"), json_to(stdout, m->sha256);
                 printf(",\"bytes\":%llu,\"recommended_ram_gib\":%u,\"state\":\"%s\",\"resource\":\"%s\","
                        "\"resource_reason\":",
                        (unsigned long long) m->bytes, m->recommended_ram_gib, states[state[i]],
                        resources[f->resource]);
-                json_string(f->resource_reason);
+                json_to(stdout, f->resource_reason);
                 printf(",\"tokens_per_s\":{\"cpu\":");
                 local[i].cpu.rate > 0 ? (void) printf("%.1f", local[i].cpu.rate) : (void) printf("null");
                 printf(",\"gpu\":");
@@ -649,7 +646,7 @@ static void speed_record(const char *model, const char *backend, unsigned tokens
                          double first_ms, const char *source) {
     char path[4200];
     snprintf(path, sizeof path, "%s/speed.tsv", data_dir);
-    if (!data_dir[0] || tokens < 8 || generation_ms <= 0 || !make_dirs(data_dir)) /* too short to tell */
+    if (!data_dir[0] || tokens < 8 || generation_ms <= 0 || !make_dirs(data_dir, 0700)) /* too short to tell */
         return;
     FILE *f = fopen(path, "a");
     if (!f)
@@ -849,8 +846,8 @@ static bool session_chat(struct session *x, geistr_reasoning reasoning, bool int
     opts.temperature      = (float) x->temperature;
     opts.overflow         = interactive ? GEISTR_OVERFLOW_DROP_OLDEST : GEISTR_OVERFLOW_REFUSE;
     geistr_status s       = geistr_chat_open(x->model, &opts, &x->chat);
-    if (s != GEISTR_OK)
-        fprintf(stderr, "geistr: cannot chat: %s\n", geistr_status_text(s));
+    if (s != GEISTR_OK) /* the model says why: e.g. its chat format */
+        fprintf(stderr, "geistr: cannot chat: %s\n", geistr_model_error(x->model));
     return s == GEISTR_OK;
 }
 
@@ -941,7 +938,7 @@ static void chat_store(const struct transcript *t) {
     char dir[4200], tmp[4500];
     snprintf(dir, sizeof dir, "%s/chats", data_dir);
     snprintf(tmp, sizeof tmp, "%s.tmp", chat_file);
-    if (!chat_file[0] || !t->n || !make_dirs(dir))
+    if (!chat_file[0] || !t->n || !make_dirs(dir, 0700))
         return;
     int   fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600); /* private: what was said */
     FILE *f  = fd >= 0 ? fdopen(fd, "w") : nullptr;
@@ -1323,8 +1320,7 @@ static int chat(const char *name, const char *processor) {
         char             why[512];
         geistr_status    s;
         if (remote) {
-            static_assert(sizeof(struct svc_message) == sizeof(geistr_message));
-            s = service_chat(remote, count, (const struct svc_message *) turn, 0, x.temperature, remote_part,
+            s = service_chat(remote, count, turn, 0, x.temperature, remote_part,
                              remote_cancel, nullptr, &rs, why, sizeof why);
         } else
             s = geistr_chat_run(x.chat, count, turn, print_piece, nullptr);

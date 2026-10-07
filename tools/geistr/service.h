@@ -23,10 +23,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-struct svc_message {
-    const char *role, *content;
-};
-
 struct svc_stats {
     char     finish[16];
     unsigned input_tokens, context_tokens, output_tokens;
@@ -62,6 +58,6 @@ typedef bool (*svc_cancel_fn)(void *ctx);
  * waiting and closes the connection (the service stops the answer).
  * GEISTR_OK, GEISTR_CANCELLED, GEISTR_CONTEXT, GEISTR_IO (no service) or
  * GEISTR_BACKEND (error text in error). */
-geistr_status service_chat(const char *socket, size_t n, const struct svc_message *messages, unsigned max,
+geistr_status service_chat(const char *socket, size_t n, const geistr_message *messages, unsigned max,
                            double temperature, svc_part_fn part, svc_cancel_fn cancel, void *ctx,
                            struct svc_stats *stats, char *error, size_t cap);

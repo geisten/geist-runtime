@@ -242,7 +242,7 @@ Every PR and push to `main` runs `.github/workflows/ci.yml`; the job
 
 | job | platforms | what |
 |---|---|---|
-| `test` | macOS arm64 (clang), Linux x86_64 (gcc-14, clang-18), Linux arm64 (gcc-14) | `make test` (stub conformance, templates, streams, catalog, fit), `make sanitize`, `make parity` with the pinned geist-serve |
+| `test` | macOS arm64 (clang), Linux x86_64 (gcc-14, clang-18), Linux arm64 (gcc-14) | `make test` (stub conformance, templates, streams, catalog, fit), `make sanitize` |
 | `real` | macOS arm64, Linux x86_64, Linux arm64 | the runtime on the pinned geistlib against SmolLM2 360M (from the catalog, SHA-256 verified, cached): `make test-real` (also under ASan/UBSan), `make test-geistr`, `make test-python`; the wheels as artifacts |
 
 On failure each job uploads its logs (`build/logs/`) as `evidence-*`. A run

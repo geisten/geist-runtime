@@ -279,7 +279,7 @@ static bool same_role(const char *a, const char *b) {
 }
 
 /* How many of the request's messages (all but the last) this conversation holds. */
-static size_t common(const struct conversation *c, const struct svc_message *m, size_t n) {
+static size_t common(const struct conversation *c, const geistr_message *m, size_t n) {
     size_t k = 0;
     while (k < c->n && k + 1 < n && same_role(c->role[k], m[k].role) && !strcmp(c->content[k], m[k].content))
         k++;
@@ -301,7 +301,7 @@ static void chat_request(const struct svc_options *o, struct conversation *pool,
         return;
     }
     size_t              n = (size_t) j->t[list].size, k = 0;
-    struct svc_message *m = calloc(n, sizeof *m);
+    geistr_message     *m = calloc(n, sizeof *m);
     for (int i = list + 1; m && i < j->n && k < n; i++)
         if (j->t[i].parent == list) {
             m[k].role    = string(j, field(j, i, "role"));
@@ -354,7 +354,7 @@ static void chat_request(const struct svc_options *o, struct conversation *pool,
     }
     c->used = ++clock;
     if (keep < c->n && geistr_chat_rewind(c->chat, keep) != GEISTR_OK) {
-        geistr_chat_rewind(c->chat, 0); /* the runtime dropped turns: start over */
+        (void) geistr_chat_rewind(c->chat, 0); /* the runtime dropped turns: start over (0 always works) */
         keep = 0;
     }
     conversation_keep(c, keep);
@@ -513,7 +513,7 @@ geistr_status service_info(const char *path, char *out, size_t cap) {
     return GEISTR_OK;
 }
 
-geistr_status service_chat(const char *path, size_t n, const struct svc_message *m, unsigned max,
+geistr_status service_chat(const char *path, size_t n, const geistr_message *m, unsigned max,
                            double temperature, svc_part_fn part, svc_cancel_fn cancel, void *ctx,
                            struct svc_stats *stats, char *error, size_t cap) {
     *stats = (struct svc_stats) {};

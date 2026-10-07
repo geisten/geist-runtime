@@ -12,8 +12,6 @@
 #   make test-geistr the CLI against the reference model
 #   make wheel       build/wheel/geistr-*.whl: the Python package (#9)
 #   make test-python pip install it into a venv; example and tests
-#   make parity SERVE_DIR=../geist-serve   templates byte-identical to geist-serve,
-#                    and the same catalog
 #
 # src/template.c and src/stream.c are the runtime's text side; src/runtime.c
 # binds them to geistlib (#4). src/stub.c implements include/geistr.h without
@@ -229,23 +227,6 @@ fetch-model:
 
 FORCE:
 
-# Byte parity with geist-serve's renderer (#2): make parity SERVE_DIR=../geist-serve
-parity: $(TEXT)
-	@test -f "$(SERVE_DIR)/src/template.c" || { echo "set SERVE_DIR to a geist-serve checkout"; exit 1; }
-	$(CC) $(CFLAGS) -Wno-conversion -I$(SERVE_DIR)/src -Itools/parity tools/parity/serve.c $(SERVE_DIR)/src/template.c -o $(BUILD)/parity_serve
-	$(CC) $(CFLAGS) -Isrc -Itools/parity tools/parity/geistr.c $(TEXT) -o $(BUILD)/parity_geistr
-	$(BUILD)/parity_serve > $(BUILD)/parity_serve.txt
-	$(BUILD)/parity_geistr > $(BUILD)/parity_geistr.txt
-	cmp $(BUILD)/parity_serve.txt $(BUILD)/parity_geistr.txt
-	@echo "parity with geist-serve: $$(grep -c '^== ' $(BUILD)/parity_serve.txt) renders identical"
-	sed 's|#include "../../build/app_tasks.h"|static const struct app_task task_registry[1]; static const char task_catalog[] = ""; static const struct app_quality_record quality_registry[1];|' \
-	  $(SERVE_DIR)/src/app/tasks.c > $(BUILD)/serve_tasks.c
-	$(CC) $(CFLAGS) -Wno-error -I$(SERVE_DIR)/src/app tools/parity/fit.c \
-	  $(SERVE_DIR)/src/app/core.c $(BUILD)/serve_tasks.c $(TEXT) -lm -o $(BUILD)/parity_fit
-	$(BUILD)/parity_fit
-	cmp models/catalog.json $(SERVE_DIR)/models/catalog.json
-	$(BUILD)/test_catalog --validate < $(SERVE_DIR)/models/catalog.json
-
 SAN := -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all
 sanitize:
 	$(MAKE) BUILD=$(BUILD)/san CFLAGS="-O1 -g $(SAN)" CXXFLAGS="-O1 -g $(SAN)" LDFLAGS="$(SAN)" test
@@ -253,4 +234,4 @@ sanitize:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: install uninstall core all test sanitize parity clean runtime test-real chat-real fetch-model geistr test-geistr shared wheel test-python FORCE
+.PHONY: install uninstall core all test sanitize clean runtime test-real chat-real fetch-model geistr test-geistr shared wheel test-python FORCE

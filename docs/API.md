@@ -82,41 +82,6 @@ push. `examples/chat.c` is a complete terminal chat with Ctrl-C cancellation.
 - Returned strings are borrowed for the documented lifetime and never freed
   by the caller.
 
-## Mapping: every geist-serve use
-
-| geist-serve today | Where | In the runtime |
-| :-- | :-- | :-- |
-| `app_daemon_chat`: template, tokenize, prefill with reuse, generate with stops, temperature/top_p, max, cancel callback, stats | `src/app/daemon.c`, used by the UI chat, `/v1/chat/completions`, Ollama `/api/chat` (`src/app/chat.c`) and the CPU/GPU comparison (`src/app/compare.c`) | one `geistr_chat` per conversation; `send` with the new messages + `next`/`run`; options → `geistr_chat_opts`; `emit` → pieces; cancel callback → `chat_cancel` or `emit` returning 0. **Change in geist-serve (#148):** the UI chat keeps its chat open and sends only the new turn; for HTTP clients that send whole conversations, geist-serve compares them with what the chat holds, rewinds to the common start and sends the rest |
-| `app_daemon_run` (one prompt) | `geisten test`, single-prompt routes | one user message |
-| `struct app_run_stats` | logs, measurements, activity | `geistr_stats` (input/context/output tokens, prefill, first answer, generation, total; `limited` → `finish` LENGTH/CONTEXT; `reused` → context minus input) |
-| HTTP 400 "chat format not supported" | daemon.c | `GEISTR_FORMAT` |
-| HTTP 400 "does not fit the context" | daemon.c | `GEISTR_CONTEXT` |
-| HTTP 499 cancelled | daemon.c | `GEISTR_CANCELLED` |
-| HTTP 502/504 engine failure, timeouts | daemon.c | `GEISTR_BACKEND`; **timeouts stay in geist-app** (process watchdog) |
-| `chat_render`, `chat_render_fit`, `chat_family_*` | `src/template.c` (geistd, legacy server) | internal (#2); visible as `geistr_model_info.chat_format` and `overflow` |
-| `model_is_stop`, `stop_ids`, `stop_strings` | `src/model.c`, geistd `generate` | internal (#2) |
-| `app_utf8_feed` | `src/app/core.c` | internal (#3); pieces are complete UTF-8 |
-| `app_output_*` (think tags, #93) | `src/app/output.c` | internal (#3); `reasoning` + `thinking` options, `GEISTR_PART_THINKING` |
-| geistd session cache, `pin_prefix`, reuse counting | `src/geistd.c` | internal (#4): the chat's own KV cache, `rewind` |
-| caller stop strings | geistd `generate` (`stop_strings`) | `geistr_chat_opts.stop` |
-| backend probe, CPU/GPU choice | `src/app/child.c` (`--backends`) | `geistr_model_opts.processor`, `geistr_model_info.backend` |
-| catalog parse/apply, SHA-256 verification | `src/app/catalog.c`, `jobs.c` | `geistr_catalog.h` (#5) |
-| `app_assess_device`, `app_judge`, `app_candidate_better`, ranking | `src/app/status.c`, `tasks.c` | `geistr_catalog.h` (#6) |
-| performance history, export, settings | `src/app/performance.c`, `prefs.c` | **stays in geist-serve** (product data); measured speeds are an input to #6 |
-| comparison procedure (warm-up, three answers per processor) | `src/app/compare.c` | **stays in geist-serve**; it opens the model per processor and reads `geistr_stats` |
-| geistd token-level ops (`open`, `tokenize`, `prefill`, `step`, `peek`) for agents | `src/geistd.c` | **out of scope** (D10): geistd keeps serving them from geistlib |
-
-### geist-serve after #148
-
-geist-app keeps process isolation, the watchdog, HTTP and the UI. geistd links
-libgeistr and gains message-level operations (open a chat, send new messages,
-rewind; pieces and stats out), so geist-app no longer renders templates or
-counts tokens. geist-app keeps one chat per conversation (the UI chat, and per
-HTTP client conversation) and sends only what is new.
-Catalog and fit run in geist-app through `geistr_catalog.h`, without an engine.
-The legacy `geist-serve` executable either uses the same chat calls or is
-retired; that is decided in #148.
-
 ## Chat templates (#2)
 
 `src/template.c` (internal) renders messages per model family: Gemma 3
@@ -138,9 +103,7 @@ Rendering is incremental, for the stateful chat (D2):
 Guarantees, checked in CI:
 - `tests/test_template.c`: geist-serve's goldens, and *incremental = whole*
   for every family (turn by turn, with and without the model's end marker,
-  equals rendering the conversation at once);
-- `make parity SERVE_DIR=…`: 40 renders byte-identical to geist-serve's own
-  `src/template.c` at a pinned commit.
+  equals rendering the conversation at once).
 
 Stop tokens: EOS plus the end-of-turn markers of all families
 (`<end_of_turn>`, `<turn|>`, `<|im_end|>`, `<|eot_id|>`, `<|end_of_text|>`),
@@ -218,26 +181,6 @@ slicing unnecessary (geistlib#628).
 chats answer as one alone). On GPU backends the runtime serialises the engine
 calls of a model's chats (geistlib#576).
 
-## What the runtime needs from geistlib (input for geistlib#622)
-
-Used today by geist-serve and needed by the runtime, to be STABLE:
-
-- backend: `geist_backend_create`, `_destroy`, `_name`, `_errmsg`, `geist_backend_resources_snapshot`
-- model: `geist_model_load_with_opts`, `geist_model_load_from_memory`, `_destroy`, `_errmsg`, `_arch`,
-  `geist_model_bos_token`, `_eos_token`, `_add_bos`, `_token_by_text`
-- session: `geist_session_create`, `_destroy`, `_errmsg`, `_reset`, `_tokenize`,
-  `_prefill_tokens`, `_decode_step`, `_token_to_str`, `_pin_prefix`, `_get_stats`
-
-**Missing, agreed in the review:**
-- a metadata getter (e.g. `geist_model_metadata_str(m, "tokenizer.chat_template")`):
-  geist-serve parses the GGUF file a second time for the chat template
-  (`src/gguf.c`); that does not work for `geistr_model_open_memory`, and one
-  GGUF parser is enough;
-- dropping the KV cache after a token position (for `rewind` without
-  processing the kept part again);
-- the model's trained context length and the KV bytes per token, so the
-  runtime can choose the largest window that fits into memory (D8).
-
 ## Catalog and verification (#5)
 
 [`include/geistr_catalog.h`](../include/geistr_catalog.h), no engine and no
@@ -247,7 +190,7 @@ network needed:
   (schema 1 and 2) with geist-serve's rules: strict keys, safe file names,
   only `https://huggingface.co/…/resolve/` URLs, validated quality and speed
   evidence. A bad catalog is refused as a whole, with the reason.
-  `models/catalog.json` is the same file as geist-serve's (`make parity` compares them).
+  `models/catalog.json` started as geist-serve's file.
 - `geistr_catalog_check(entry, models_dir, hash)` gives the install state:
   `MISSING`, `UNVERIFIED` (right size, not hashed yet), `OK` (SHA-256
   matches) or `MISMATCH` (wrong size or hash, or not a regular file: never
@@ -283,9 +226,9 @@ Also in `geistr_catalog.h`, without an engine:
 - Logic moved unchanged from geist-serve (`app_assess`, `app_judge`,
   `app_estimate_seconds`, `app_candidate_better`, the ranking in
   `status.c`). Reasons are codes, the wording stays with the app.
-  `make parity` runs geist-serve's own functions and the runtime on 20,000
-  random devices, catalogs and measurements and requires identical fits,
-  verdicts, seconds, processors, order and recommendation.
+  During the move a parity harness compared both on 20,000 random devices,
+  catalogs and measurements (identical fits, verdicts, order and
+  recommendation); `tests/test_fit.c` keeps the cases.
 - Not moved: the app's first-run default (`app_recommend`: fixed model ids
   per platform) and the speed hint from the last replies
   (`app_assess_device`); both are app policy.
