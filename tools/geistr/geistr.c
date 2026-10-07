@@ -47,6 +47,34 @@
 
 #include "catalog_json.h" /* embedded_catalog[], generated from models/catalog.json */
 
+/* Before every other constructor: the engine is built for this release's CPU
+ * baseline (Linux: x86-64-v3, or ARMv8.2 with dotprod), and some of its own
+ * constructors already use those instructions; on an older CPU the process
+ * would die with "Illegal instruction" before main could say why. This file
+ * is compiled without -march, so this check runs anywhere. */
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+#if defined(__aarch64__)
+#include <sys/auxv.h>
+#endif
+[[gnu::constructor(101)]] static void cpu_check(void) {
+#if defined(__x86_64__)
+    __builtin_cpu_init();
+    if (__builtin_cpu_supports("x86-64-v3"))
+        return;
+    static const char need[] = "geistr: this CPU lacks AVX2 and FMA (x86-64-v3: Intel since 2013, AMD since 2015), "
+                               "which this build needs\n";
+#else
+    const unsigned long required = HWCAP_ATOMICS | HWCAP_FPHP | HWCAP_ASIMDHP | HWCAP_ASIMDDP;
+    if ((getauxval(AT_HWCAP) & required) == required)
+        return;
+    static const char need[] = "geistr: this CPU lacks ARMv8.2 with dotprod (e.g. Raspberry Pi 5, AWS Graviton 2), "
+                               "which this build needs\n";
+#endif
+    (void) !write(STDERR_FILENO, need, sizeof need - 1);
+    _exit(1);
+}
+#endif
+
 
 
 const char        *models_dir;
