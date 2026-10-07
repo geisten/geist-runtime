@@ -251,7 +251,7 @@ static void keys_only(bool on) {
 
 static void shortcuts(void) {
     bool faint = tty_out();
-    printf("%sEnter send · Esc stop the answer · Ctrl-C clear the line, twice: exit · Ctrl-D exit\n"
+    printf("%sEnter send · Ctrl-J or \\ + Enter a new line · Esc stop the answer · Ctrl-C clear the line, twice: exit · Ctrl-D exit\n"
            "/ commands (↑↓ choose · Tab take · Esc close) · ↑↓ earlier lines · → take the hint\n"
            "Ctrl-R search earlier lines · Ctrl-A/E start/end · Ctrl-U/K delete to start/end · Ctrl-W a word · Ctrl-L clear screen%s\n",
            dim(faint), normal(faint));

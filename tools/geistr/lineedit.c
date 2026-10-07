@@ -240,6 +240,15 @@ static void up_down(struct le *e, int step) {
         history_move(e, step);
 }
 
+/* A line break in the text (Ctrl-J, Alt-Enter, \ + Enter): shown as ↵, sent as \n. */
+static void insert_break(struct le *e) {
+    if (e->len + 1 >= sizeof e->buf)
+        return;
+    memmove(e->buf + e->pos + 1, e->buf + e->pos, e->len - e->pos);
+    e->buf[e->pos++] = '\n';
+    e->buf[++e->len] = 0;
+}
+
 /* ---- Ctrl-R: search back through the history ----------------------------- */
 
 /* The newest entry older than `before` that contains the query; n_history if none. */
@@ -399,6 +408,8 @@ enum le_event le_feed(struct le *e, unsigned char c) {
         if (e->n_esc < sizeof e->esc)
             e->esc[e->n_esc++] = (char) c;
         bool done = e->n_esc == 2 ? (c != '[' && c != 'O') : (c >= '@' && c <= '~');
+        if (e->n_esc == 2 && c == '\r') /* Alt/Option-Enter: a line break */
+            insert_break(e);
         if (e->n_esc == sizeof e->esc || done) {
             if (e->n_esc >= 3) /* ESC [ … or ESC O …; ESC + key (Alt) is ignored */
                 escape(e);
@@ -422,13 +433,20 @@ enum le_event le_feed(struct le *e, unsigned char c) {
         }
         return LE_MORE; /* drawn when the paste ends */
     }
-    if (c != '\t' && c != 16 && c != 14 && c != '\r' && c != '\n' && c != 27) { /* the line changes: a new list */
+    if (c != '\t' && c != 16 && c != 14 && c != '\r' && c != 27) { /* the line changes: a new list */
         e->sel    = 0;
         e->closed = false;
     }
     switch (c) {
-    case '\r':
-    case '\n': {
+    case '\n': /* Ctrl-J: a line break (Enter is \r in raw mode) */
+        insert_break(e);
+        break;
+    case '\r': {
+        if (e->pos == e->len && e->len && e->buf[e->len - 1] == '\\') { /* \ + Enter: the text goes on */
+            e->buf[--e->len] = 0, e->pos = e->len;
+            insert_break(e);
+            break;
+        }
         struct le_candidate list[CANDIDATES_MAX];
         if (menu(e, list)) { /* Enter runs the chosen command; one that takes an argument shows its state */
             (void) take(e);
