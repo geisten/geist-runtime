@@ -80,6 +80,16 @@ def until(fd, text, seconds=60):
             except OSError: break
     assert text.encode() in seen, (text, seen[-400:])
     return seen
+def paste(fd, text):
+    # a long message as a terminal paste (drawn once), in pieces while the chat's output is read:
+    # pty buffers are small on macOS, and a chat that cannot write stops reading
+    data = b'\x1b[200~' + text + b'\x1b[201~\r'
+    for i in range(0, len(data), 256):
+        os.write(fd, data[i:i + 256])
+        while i + 256 < len(data) and select.select([fd], [], [], 0.05)[0]:
+            try: os.read(fd, 65536)
+            except OSError: break
+
 def finish_chat(pid, fd):
     # Ctrl-D, then read until the chat exits: a full pty (small on macOS) would block it
     os.write(fd, b'\x04')
@@ -280,7 +290,7 @@ def section_resume():
     if pid == 0:
         os.execve(geistr, [geistr, 'chat', 'ref', '--new', *base], {**env, 'TERM': 'xterm', 'GEISTR_TEST_CONTEXT': '512'})
     until(fd, 'Ctrl-C twice exits'); time.sleep(.3)
-    os.write(fd, b'Ignore these words: ' + b'word ' * 250 + b'Now say OK.\r')
+    paste(fd, b'Ignore these words: ' + b'word ' * 250 + b'Now say OK.')
     out = until(fd, '%\x1b[0m > ', 180)                                # the prompt after the answer
     pct = re.findall(rb'(\d+)%\x1b\[0m > ', out)
     assert pct and 50 <= int(pct[-1]) <= 100, out[-300:]
