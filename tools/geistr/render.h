@@ -32,7 +32,7 @@ enum md_mode {
 struct md {
     enum md_mode mode;
     FILE        *out;
-    bool         bold, italic, code, block, heading, quote, skip_line;
+    bool         bold, italic, code, block, heading, quote, skip_line, underline;
     int          math;      /* 0, or the opener: '$', 'D' ($$), '(' or '[' */
     bool         closing;   /* a '$' that closes unless a digit follows (Pandoc's rule) */
     bool         line_start;
@@ -42,6 +42,13 @@ struct md {
     char         math_buf[2048];
     size_t       n_math;
     char         last[8]; /* the style last emitted */
+    /* links: [text](url) held until it closes (stage 1 text, 2 after ']', 3 url);
+     * a bare http(s):// URL held until its end */
+    int          link;
+    char         link_text[256], link_url[512], bare[512];
+    size_t       n_link_text, n_link_url, n_bare;
+    char         before;  /* the input character before this one: a bare URL starts a word */
+    bool         literal; /* replaying held text, or a link's own: no new link starts */
     unsigned     width;   /* terminal columns for tables (0: 80) */
     char        *table;   /* the table's lines so far, raw */
     size_t       n_table, cap_table, table_rows;

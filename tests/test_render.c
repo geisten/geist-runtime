@@ -159,10 +159,49 @@ int main(void) {
     check("Short then Donaudampfschifffahrtsgesellschaftskapitän ends.\n",
           "Short then\nDonaudampfschifffahrtsgesellschaftskapitän\nends.\n");
     test_wrap = false, test_width = 0;
+    /* links: [text](url) as a hyperlink (OSC 8; «link» here), the URL after the
+     * text when it differs; bare http(s) URLs linked; no link: as written */
+    check("See [the docs](https://ex.com/d) now.\n", "See «link https://ex.com/d»«u»the docs«»«/link» (https://ex.com/d) now.\n");
+    check("[https://ex.com](https://ex.com)\n", "«link https://ex.com»«u»https://ex.com«»«/link»\n");
+    check("a [not a link] b\n", "a [not a link] b\n");
+    check("x [y](no url) z\n", "x [y](no url) z\n");
+    check("[**bold** link](https://b.c)\n", "«link https://b.c»«u»«bu»bold«u» link«»«/link» (https://b.c)\n");
+    check("Visit https://ex.com/a, then.\n", "Visit «link https://ex.com/a»«u»https://ex.com/a«»«/link», then.\n");
+    check("(see https://x.org/p).\n", "(see «link https://x.org/p»«u»https://x.org/p«»«/link»).\n");
+    check("http is a protocol, hello there.\n", "http is a protocol, hello there.\n");
+    check("an unclosed [link", "an unclosed [link");
+    {   /* in the terminal: the OSC sequence takes no columns when wrapping */
+        const char *in[] = {"Read [the guide](https://example.com/guide) before you start the engine now.\n"};
+        test_wrap = true, test_width = 30;
+        char *got = run(in, 1, MD_ANSI), shown[512], *o = shown;
+        test_wrap = false, test_width = 0;
+        for (const char *p = got; *p && o < shown + sizeof shown - 1; p++) {
+            if (p[0] == '\033' && p[1] == ']') { /* OSC … ESC \ */
+                p = strstr(p + 2, "\033\\") + 1;
+                continue;
+            }
+            if (p[0] == '\033') { /* CSI … letter */
+                while (*p && !(*p >= '@' && *p <= '~' && *p != '['))
+                    p++;
+                continue;
+            }
+            *o++ = *p;
+        }
+        *o = 0;
+        if (strcmp(shown, "Read the guide\n(https://example.com/guide)\nbefore you start the engine\nnow.\n")) {
+            fprintf(stderr, "links wrap by what shows, got\n%s\n", shown);
+            failures++;
+        }
+        if (!strstr(got, "\033]8;;https://example.com/guide\033\\")) {
+            fprintf(stderr, "no OSC 8 hyperlink in %s\n", got);
+            failures++;
+        }
+        free(got);
+    }
     if (failures) {
         fprintf(stderr, "render: %d failures\n", failures);
         return 1;
     }
-    puts("render: Markdown, tables and math for the terminal, split-invariant, raw mode untouched, word wrap passed");
+    puts("render: Markdown, tables and math for the terminal, split-invariant, raw mode untouched, word wrap, links passed");
     return 0;
 }
