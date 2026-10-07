@@ -258,11 +258,14 @@ def section_resume():
     history = os.path.join(env['GEISTEN_HOME'], 'history')                # what was typed, across chats
     assert os.stat(history).st_mode & 0o777 == 0o600
     assert [json.loads(l)['line'] for l in open(history)] == ['My name is Ada.', 'What is my name?', 'Hello.']
+    terminal_chat('Line one.\nLine two.\\\rLine three.')                   # Ctrl-J and \ + Enter: one message
+    assert lines(stored()[-1])[-2]['content'] == 'Line one.\nLine two.\nLine three.', lines(stored()[-1])[-2]
     terminal_chat(' Not for the history.')                                # a leading space: not kept
     assert geistr_run('config', 'history', 'off').returncode == 0
     terminal_chat('Nor this.')                                            # history off: not kept
     assert geistr_run('config', 'history', 'on').returncode == 0
-    assert [json.loads(l)['line'] for l in open(history)] == ['My name is Ada.', 'What is my name?', 'Hello.']
+    assert [json.loads(l)['line'] for l in open(history)] == ['My name is Ada.', 'What is my name?', 'Hello.',
+                                                             'Line one.\nLine two.\nLine three.']
     print('geistr chat: continues the last conversation in a terminal, --new, private files, input history, piped chats keep nothing passed')
 
 # ---- serve and chat --socket --------------------------------------------------

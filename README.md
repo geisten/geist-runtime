@@ -100,6 +100,7 @@ Type `/` for the commands:
 
 | key | does |
 |---|---|
+| Ctrl-J, Alt-Enter, `\` + Enter | a new line in the message (Enter sends) |
 | Esc | stop the answer |
 | Ctrl-C | clear the line; twice on an empty line: exit |
 | ↑ ↓ | earlier lines, also from earlier chats; → takes the hint |
