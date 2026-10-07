@@ -295,7 +295,7 @@ def section_resume():
     pct = re.findall(rb'(\d+)%\x1b\[0m > ', out)
     assert pct and 50 <= int(pct[-1]) <= 100, out[-300:]
     os.write(fd, b'/info\r'); out = until(fd, 'of 512 tokens')
-    os.write(fd, b'And these: ' + b'word ' * 250 + b'Say OK again.\r')    # no longer fits: the oldest go
+    paste(fd, b'And these: ' + b'word ' * 250 + b'Say OK again.')    # no longer fits: the oldest go
     until(fd, 'oldest message', 180)                                     # and the chat says so
     until(fd, '%\x1b[0m > ', 60)
     os.write(fd, b'/clear\r'); out = until(fd, 'a new conversation')
