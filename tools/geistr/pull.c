@@ -2,6 +2,7 @@
  * verified before the file takes its final name. Moved from geist-serve's
  * download_model (src/app/jobs.c). */
 #include "pull.h"
+#include "cli.h"
 #include <curl/curl.h>
 #include <errno.h>
 #include <signal.h>
