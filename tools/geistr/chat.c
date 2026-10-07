@@ -8,6 +8,7 @@
 #include "render.h"
 #include "service.h"
 #include <poll.h>
+#include <stdarg.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <string.h>
@@ -251,22 +252,56 @@ static void keys_only(bool on) {
     sigaction(SIGHUP, &sa, nullptr);
 }
 
+/* The terminal's columns; 0 when output is not a terminal. */
+static unsigned columns(void) {
+    struct winsize ws;
+    return isatty(STDOUT_FILENO) && ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 ? ws.ws_col : 0;
+}
+
+/* A line of the chat's own (styles included), wrapped at words to the
+ * terminal: continuation lines under the text after a leading symbol, or at
+ * hang. Piped: as it is. */
+static void say_at(unsigned hang, const char *fmt, ...) {
+    char    text[8192];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(text, sizeof text, fmt, ap);
+    va_end(ap);
+    unsigned w = columns();
+    if (w)
+        md_say(stdout, text, w, hang);
+    else
+        fputs(text, stdout);
+}
+#define say(...) say_at(0, __VA_ARGS__)
+
 static void shortcuts(void) {
-    bool faint = tty_out();
-    printf("%sEnter send · Ctrl-J or \\ + Enter a new line · Esc stop the answer · Ctrl-C clear the line, twice: exit · Ctrl-D exit\n"
-           "/ commands (↑↓ choose · Tab take · Esc close) · ↑↓ earlier lines · → take the hint\n"
-           "Ctrl-R search earlier lines · Ctrl-A/E start/end · Ctrl-U/K delete to start/end · Ctrl-W a word · Ctrl-L clear screen%s\n",
-           dim(faint), normal(faint));
+    bool       faint = tty_out();
+    const char *keys[] = {"Enter send", "Ctrl-J or \\ + Enter a new line", "Esc stop the answer",
+                          "Ctrl-C clear the line, twice: exit", "Ctrl-D exit",
+                          "/ commands (↑↓ choose · Tab take · Esc close)", "↑↓ earlier lines", "→ take the hint",
+                          "Ctrl-R search earlier lines", "Ctrl-A/E start/end", "Ctrl-U/K delete to start/end",
+                          "Ctrl-W a word", "Ctrl-L clear screen"};
+    unsigned    w      = columns();
+    bool        narrow = w && w < 60; /* one per line */
+    char        text[1024] = "";
+    for (size_t i = 0; i < sizeof keys / sizeof *keys; i++) {
+        bool row_end = i == 4 || i == 7; /* three groups in a wide terminal */
+        strcat(text, keys[i]);
+        strcat(text, i + 1 == sizeof keys / sizeof *keys ? "" : narrow || row_end ? "\n" : " · ");
+    }
+    say("%s%s%s\n", dim(faint), text, normal(faint));
 }
 
 static void intro(const char *name, const char *backend, bool gpu) {
     if (!cfg.intro || !tty_out())
         return;
-    printf("\033[2mgeistr · %s on %s %s   (⚙ CPU · ⚡ GPU)\n"
-           "/ commands · ? shortcuts · Esc stops an answer · Ctrl-C twice exits · geistr config intro off\033[0m\n",
-           name, gpu ? "⚡" : "⚙", backend);
+    say("\033[2mgeistr · %s on %s %s   (⚙ CPU · ⚡ GPU)\033[0m\n", name, gpu ? "⚡" : "⚙", backend);
+    unsigned w = columns();
+    if (!w || w >= 60) /* narrower: ? shows the keys */
+        say("\033[2m/ commands · ? shortcuts · Esc stops an answer · Ctrl-C twice exits · geistr config intro "
+            "off\033[0m\n");
 }
-
 
 void session_close(struct session *x) {
     geistr_chat_close(x->chat);
@@ -451,14 +486,14 @@ static size_t complete_line(void *ctx, const char *line, struct le_candidate *ou
 
 static void chat_help(void) {
     for (size_t i = 0; i < sizeof commands / sizeof *commands; i++)
-        printf("%-10s %s\n", commands[i].line, commands[i].help);
+        say_at(11, "%-10s %s\n", commands[i].line, commands[i].help);
     shortcuts();
 }
 
 /* A dim line: how to use a command, what it shows. */
 static void usage(const char *text) {
     bool faint = tty_out();
-    printf("%s%s%s\n", dim(faint), text, normal(faint));
+    say("%s%s%s\n", dim(faint), text, normal(faint));
 }
 
 /* What a resumed conversation (or the first send on another model) re-reads
@@ -493,7 +528,7 @@ static void prompt_text(const struct session *x, char *out, size_t cap) {
 
 static void status_line(const struct session *x, const char *what) {
     bool faint = tty_out();
-    printf("%s%s %s · %s%s%s\n", dim(faint), on_gpu(x) ? "⚡" : "⚙", x->backend, x->name, what,
+    say("%s%s %s · %s%s%s\n", dim(faint), on_gpu(x) ? "⚡" : "⚙", x->backend, x->name, what,
            normal(faint));
 }
 
@@ -664,7 +699,7 @@ static int command(struct session *x, struct conversation *said, char *line, con
         puts(said->system[0] ? "system prompt set" : "no system prompt");
     } else if (!strcmp(line, "/info")) {
         status_line(x, remote ? " · service" : "");
-        printf("chat format %s · context %u of %u tokens (%u %%) · temperature %g%s%s\n", x->format, x->used,
+        say("chat format %s · context %u of %u tokens (%u %%) · temperature %g%s%s\n", x->format, x->used,
                x->context, fill(x), x->temperature, said->system[0] ? " · system: " : "", said->system);
     } else if (!strcmp(line, "/copy")) {
         size_t      len;
@@ -676,7 +711,7 @@ static int command(struct session *x, struct conversation *said, char *line, con
         }
         const char *how = clipboard(text, len);
         if (how)
-            printf("%s⧉ copied %.1f kB%s%s\n", dim(tty_out()), (double) len / 1000, code ? " of code" : "", normal(tty_out()));
+            say("%s⧉ copied %.1f kB%s%s\n", dim(tty_out()), (double) len / 1000, code ? " of code" : "", normal(tty_out()));
         else
             puts("/copy: no clipboard here (a terminal with OSC 52, or pbcopy, wl-copy, xclip)");
     } else if (!strcmp(line, "/save")) {
@@ -693,7 +728,7 @@ static int command(struct session *x, struct conversation *said, char *line, con
         conv_clear(said);
         x->used = 0;
         bool faint = tty_out(); /* what goes on: the system prompt stays */
-        printf("%s○ a new conversation%s%s%s\n", dim(faint), said->system[0] ? " · system: " : "",
+        say("%s○ a new conversation%s%s%s\n", dim(faint), said->system[0] ? " · system: " : "",
                said->system, normal(faint));
     } else
         chat_help();
@@ -758,7 +793,7 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
         if (mark != MARK_NONE) /* how the last answer ended */
             snprintf(part + strlen(part), sizeof part - strlen(part), " · %s",
                      mark == MARK_STOPPED ? "its last answer was stopped" : "its last answer looped (cut)");
-        printf("\033[2m↻ %zu · „%.*s%s“%s · /clear new\033[0m\n", said.n, bytes, last, last[bytes] ? "…" : "",
+        say("\033[2m↻ %zu · „%.*s%s“%s · /clear new\033[0m\n", said.n, bytes, last, last[bytes] ? "…" : "",
                part);
     }
     for (;;) {
@@ -816,7 +851,7 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
                 if (length < 2 || geistr_chat_rewind(x.chat, length - 2) != GEISTR_OK)
                     (void) geistr_chat_rewind(x.chat, 0), said.carry = said.n > 0;
             }
-            printf("%s↻ retry%s%s\n", dim(tty_out()), warmer ? " at temperature 0.7" : "", normal(tty_out()));
+            say("%s↻ retry%s%s\n", dim(tty_out()), warmer ? " at temperature 0.7" : "", normal(tty_out()));
         } else if (line[0] == '/') {
             if (command(&x, &said, line, remote) == LEAVE)
                 break;
@@ -859,10 +894,10 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
             x.used = remote ? rs.context_tokens : known ? done.context_tokens : x.used;
         bool looped = remote ? !strcmp(rs.finish, "repetition") : known && done.finish == GEISTR_FINISH_REPETITION;
         if (looped)
-            printf("%s  ⟲ it repeated itself: kept up to the repeat · /retry or /clear%s\n", dim(tty_out()),
+            say("%s  ⟲ it repeated itself: kept up to the repeat · /retry or /clear%s\n", dim(tty_out()),
                    normal(tty_out()));
         if (known && done.dropped_messages) /* the model forgets the start: say so */
-            printf("%s  ↥ %u oldest message%s left out to fit the context (%u tokens) · /clear starts fresh%s\n",
+            say("%s  ↥ %u oldest message%s left out to fit the context (%u tokens) · /clear starts fresh%s\n",
                    dim(tty_out()), done.dropped_messages, done.dropped_messages == 1 ? "" : "s", x.context,
                    normal(tty_out()));
         if (s == GEISTR_OK || s == GEISTR_CANCELLED) {

@@ -230,7 +230,26 @@ def section_run():
     _, status = os.waitpid(pid, 0)
     assert os.WEXITSTATUS(status) == 0, status
     os.close(fd)
-    print('geistr run/chat: answers, prompt from stdin, Ctrl-C (130 / stopped answer), exit codes, settings, Tab completion in a terminal passed')
+
+    # the chat's own lines wrap at words to the terminal: none wider than it, at any width
+    import struct, termios, fcntl, unicodedata
+    def shown_width(line):
+        return sum(2 if unicodedata.east_asian_width(c) in 'WF' else 0 if unicodedata.combining(c) else 1 for c in line)
+    for cols in (40, 48, 60, 100):
+        pid, fd = pty.fork()
+        if pid == 0:
+            fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack('HHHH', 30, cols, 0, 0))
+            os.execve(geistr, [geistr, 'chat', 'ref', '--new', *base], {**env, 'TERM': 'xterm'})
+        out = until(fd, 'geistr · ')
+        time.sleep(.5)
+        os.write(fd, b'?'); out += until(fd, 'Ctrl-L clear screen')
+        os.write(fd, b'/help\r'); out += until(fd, 'end (or Ctrl-D)')
+        os.write(fd, b'/info\r'); out += until(fd, 'tokens (')
+        finish_chat(pid, fd)
+        text = re.sub(r'\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b\[[0-9;?]*[A-Za-z]', '', out.decode(errors='replace'))
+        wide = [l for l in re.split(r'[\r\n]', text) if shown_width(l) > cols]
+        assert not wide, (cols, wide)
+    print('geistr run/chat: answers, prompt from stdin, Ctrl-C (130 / stopped answer), exit codes, settings, Tab completion in a terminal, lines within 40–100 columns passed')
 
 # ---- the conversation across runs (in a terminal only) ------------------------
 def section_resume():

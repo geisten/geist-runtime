@@ -65,6 +65,8 @@ struct md {
     bool     head;            /* no word on this line yet */
     bool     bar;             /* a quote: its continuation lines repeat the │ */
     bool     nowrap;          /* inside a code block: lines as they are */
+    unsigned say_hang;        /* md_say: the continuation indent (0: after a leading symbol) */
+    bool     saying;          /* md_say: the program's own text, not an answer */
     char     word[512];       /* the word being written (escapes included) */
     size_t   n_word;
 };
@@ -72,6 +74,11 @@ struct md {
 void md_init(struct md *m, enum md_mode mode, FILE *out);
 void md_feed(struct md *m, const char *text);
 void md_finish(struct md *m); /* flushes what is held (a table: drawn), resets the style */
+
+/* The program's own text (escapes included) word-wrapped to width:
+ * continuation lines indented by hang, or with hang 0 under the text after
+ * a leading symbol ("↻ …", "  ⟲ …"), else under the line's leading spaces. */
+void md_say(FILE *out, const char *text, unsigned width, unsigned hang);
 
 /* LaTeX → Unicode into out[0..cap) (always NUL-terminated). */
 void md_math(const char *tex, char *out, size_t cap);

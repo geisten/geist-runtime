@@ -203,10 +203,35 @@ int main(void) {
         }
         free(got);
     }
+    {   /* md_say: the chat's own lines at words, under the text after a symbol, or at a set column */
+        struct {
+            const char *in, *want;
+            unsigned    width, hang;
+        } says[] = {
+            {"\033[2m↻ 80 · „Question 39: tell me more“ · resumes the last 38 · /clear new\033[0m\n",
+             "\033[2m↻ 80 · „Question 39: tell me\n  more“ · resumes the last 38\n  · /clear new\033[0m\n", 30, 0},
+            {"  ⟲ it repeated itself: kept up to the repeat · /retry or /clear\n",
+             "  ⟲ it repeated itself: kept\n    up to the repeat · /retry\n    or /clear\n", 30, 0},
+            {"/model     another model, same conversation\n", "/model     another model,\n           same conversation\n", 28, 11},
+            {"short line\n", "short line\n", 80, 0},
+        };
+        for (size_t i = 0; i < sizeof says / sizeof *says; i++) {
+            char  *buf = nullptr;
+            size_t len = 0;
+            FILE  *f   = open_memstream(&buf, &len);
+            md_say(f, says[i].in, says[i].width, says[i].hang);
+            fclose(f);
+            if (strcmp(buf, says[i].want)) {
+                fprintf(stderr, "md_say at %u\n  got  %s\n  want %s\n", says[i].width, buf, says[i].want);
+                failures++;
+            }
+            free(buf);
+        }
+    }
     if (failures) {
         fprintf(stderr, "render: %d failures\n", failures);
         return 1;
     }
-    puts("render: Markdown, tables and math for the terminal, split-invariant, raw mode untouched, word wrap, links, code frames passed");
+    puts("render: Markdown, tables and math for the terminal, split-invariant, raw mode untouched, word wrap, links, code frames, the chat's own lines passed");
     return 0;
 }
