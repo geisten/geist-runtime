@@ -22,6 +22,7 @@
 #include <signal.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
 
 struct svc_stats {
     char     finish[16];
@@ -36,12 +37,46 @@ struct svc_options {
     geistr_reasoning reasoning;
     const char      *name;   /* shown by info */
     const char      *socket; /* path */
+    const char      *http;   /* ADDR:PORT for the HTTP API, or nullptr */
     size_t           chats;  /* conversations kept, ≥ 1 */
     volatile sig_atomic_t *stop;
 };
 
 /* Serve until *stop is set. Returns a geistr exit code (0 ok, 1 error). */
 int service_run(const struct svc_options *o);
+
+/* ---- inside the service: one chat request, whatever the protocol ---------- */
+
+/* The request, its strings malloc'd (svc_free_request frees them). */
+struct svc_request {
+    geistr_message     *messages;
+    size_t              n;
+    double              temperature; /* 0 to 2 */
+    unsigned            max;         /* answer tokens; 0 = the rest of the context */
+    const char *const  *stop;
+    size_t              n_stop;
+};
+void svc_free_request(struct svc_request *r);
+
+/* Where the answer goes. part returns false when the client is gone (the
+ * answer stops); then neither done nor error follows. error's status is
+ * "invalid", "context" or "error". */
+struct svc_sink {
+    void *ctx;
+    bool (*part)(void *ctx, const char *text, size_t len);
+    void (*done)(void *ctx, const geistr_stats *stats);
+    void (*error)(void *ctx, const char *status, const char *text);
+};
+
+struct held; /* the conversations the service keeps */
+void        svc_chat(const struct svc_options *o, struct held *pool, const struct svc_request *r,
+                     const struct svc_sink *out);
+const char *svc_finish(geistr_finish finish); /* "stop", "length", … */
+
+/* http.c: a listener for ADDR:PORT (-1 on failure, reported), and one HTTP
+ * request on a connection (OpenAI and Ollama APIs); it closes client. */
+int  http_listen(const char *where, bool *loopback);
+void http_serve(const struct svc_options *o, struct held *pool, int client, bool loopback);
 
 /* ---- a client ----------------------------------------------------------- */
 

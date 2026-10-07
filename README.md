@@ -216,6 +216,45 @@ documented in `tools/geistr/service.h`:
 echo '{"op":"chat","messages":[{"role":"user","content":"Hi"}]}' | nc -U ~/…/geistr.sock
 ```
 
+### OpenAI and Ollama APIs
+
+`--http` adds an HTTP API for tools that speak OpenAI or Ollama (Open WebUI,
+editor plugins, the OpenAI SDK), on the same model and conversations:
+
+```sh
+geistr serve gemma4-e2b --http              # 127.0.0.1:11434, Ollama's port
+geistr serve gemma4-e2b --http=127.0.0.1:8080
+```
+
+| endpoint | |
+|---|---|
+| `POST /v1/chat/completions` | OpenAI: `messages`, `temperature`, `max_tokens` / `max_completion_tokens`, `stop`, `stream` (SSE, `stream_options.include_usage`) |
+| `GET /v1/models` | the one model |
+| `POST /api/chat` | Ollama: `messages`, `stream` (NDJSON, default), `options.temperature`, `num_predict`, `stop` |
+| `GET /api/tags`, `/api/version`, `/` | the model, the version, a health check |
+
+```sh
+curl http://127.0.0.1:11434/v1/chat/completions \
+  -d '{"messages":[{"role":"user","content":"Hi"}],"stream":true}'
+```
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://127.0.0.1:11434/v1", api_key="unused")
+print(client.chat.completions.create(model="gemma4-e2b",
+      messages=[{"role": "user", "content": "Hi"}]).choices[0].message.content)
+```
+
+In Open WebUI, add the connection `http://127.0.0.1:11434` (Ollama) or
+`http://127.0.0.1:11434/v1` (OpenAI). Clients that send the whole
+conversation every time pay only for what is new, as on the socket; one
+request is answered at a time, and a client that disconnects stops its
+answer. There is no authentication: by default it listens on loopback and
+answers only requests addressed to this computer (`Host`, against DNS
+rebinding). Another address (`--http=0.0.0.0:11434`) makes it reachable for
+everyone who can reach the computer; geistr warns about that. Not supported:
+embeddings, tool calls, images, more than one model.
+
 ## Python
 
 ```python

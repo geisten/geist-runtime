@@ -83,22 +83,25 @@ static int dial(const char *path) {
 
 /* ---- the service: conversations ---------------------------------------- */
 
-struct conversation {
+/* A conversation the service holds: its chat (KV cache), the options it was
+ * opened with, and the messages in it. */
+struct held {
     geistr_chat *chat;
     double       temperature;
+    char        *stop; /* the stop strings, joined by \x1f; nullptr for none */
     size_t       n;
     char       **role, **content;
     uint64_t     used;
 };
 
-static void conversation_keep(struct conversation *c, size_t n) {
+static void held_keep(struct held *c, size_t n) {
     for (size_t i = n; i < c->n; i++)
         free(c->role[i]), free(c->content[i]);
     if (n < c->n)
         c->n = n;
 }
 
-static bool conversation_push(struct conversation *c, const char *role, const char *content) {
+static bool held_push(struct held *c, const char *role, const char *content) {
     char **r  = realloc(c->role, (c->n + 1) * sizeof *r);
     if (r)
         c->role = r;
@@ -116,11 +119,27 @@ static bool conversation_push(struct conversation *c, const char *role, const ch
     return true;
 }
 
-static void conversation_close(struct conversation *c) {
+static void held_close(struct held *c) {
     geistr_chat_close(c->chat);
-    conversation_keep(c, 0);
-    free(c->role), free(c->content);
-    *c = (struct conversation) {};
+    held_keep(c, 0);
+    free(c->role), free(c->content), free(c->stop);
+    *c = (struct held) {};
+}
+
+/* The stop strings as one key (nullptr for none). */
+static char *stop_key(const struct svc_request *r) {
+    char  *key = nullptr;
+    size_t len = 0;
+    FILE  *f   = r->n_stop ? open_memstream(&key, &len) : nullptr;
+    for (size_t i = 0; f && i < r->n_stop; i++)
+        fprintf(f, "%s%s", i ? "\x1f" : "", r->stop[i]);
+    if (f)
+        fclose(f);
+    return key;
+}
+
+static bool same_options(const struct held *c, double temperature, const char *stop) {
+    return c->temperature == temperature && (c->stop ? stop && !strcmp(c->stop, stop) : !stop);
 }
 
 static bool same_role(const char *a, const char *b) {
@@ -130,11 +149,25 @@ static bool same_role(const char *a, const char *b) {
 }
 
 /* How many of the request's messages (all but the last) this conversation holds. */
-static size_t common(const struct conversation *c, const geistr_message *m, size_t n) {
+static size_t common(const struct held *c, const geistr_message *m, size_t n) {
     size_t k = 0;
     while (k < c->n && k + 1 < n && same_role(c->role[k], m[k].role) && !strcmp(c->content[k], m[k].content))
         k++;
     return k;
+}
+
+const char *svc_finish(geistr_finish finish) {
+    static const char *const names[] = {"none", "stop", "length", "context", "cancelled", "error"};
+    return finish <= GEISTR_FINISH_ERROR ? names[finish] : "error";
+}
+
+void svc_free_request(struct svc_request *r) {
+    for (size_t i = 0; r->messages && i < r->n; i++)
+        free((char *) r->messages[i].role), free((char *) r->messages[i].content);
+    for (size_t i = 0; r->stop && i < r->n_stop; i++)
+        free((char *) r->stop[i]);
+    free(r->messages), free((void *) r->stop);
+    *r = (struct svc_request) {};
 }
 
 static void reply_error(FILE *out, const char *status, const char *text) {
@@ -142,41 +175,29 @@ static void reply_error(FILE *out, const char *status, const char *text) {
     fputs("}\n", out);
 }
 
-static void chat_request(const struct svc_options *o, struct conversation *pool, FILE *out, const struct json *j) {
-    static uint64_t clock;
-    int             list = json_field(j, 0, "messages");
-    if (json_count(j, list) < 1) {
-        reply_error(out, "invalid", "messages: a list with at least one message");
+void svc_chat(const struct svc_options *o, struct held *pool, const struct svc_request *r,
+              const struct svc_sink *out) {
+    static uint64_t       clock;
+    const geistr_message *m = r->messages;
+    size_t                n = r->n;
+    if (!n || !(r->temperature >= 0 && r->temperature <= 2)) {
+        out->error(out->ctx, "invalid", "at least one message; temperature 0 to 2");
         return;
     }
-    size_t          n = (size_t) json_count(j, list);
-    geistr_message *m = calloc(n, sizeof *m);
-    bool            ok = m;
-    for (size_t k = 0; ok && k < n; k++) {
-        int item     = json_item(j, list, (int) k);
-        m[k].role    = json_string(j, json_field(j, item, "role"));
-        m[k].content = json_string(j, json_field(j, item, "content"));
-        ok           = m[k].role && m[k].content;
-    }
-    double   temperature = json_number(j, json_field(j, 0, "temperature"), 0);
-    unsigned max         = (unsigned) json_number(j, json_field(j, 0, "max"), 0);
-    if (!ok || !(temperature >= 0 && temperature <= 2)) {
-        reply_error(out, "invalid", "each message needs role and content; temperature 0 to 2");
-        goto done;
-    }
-    /* The conversation that holds the most of this one (same temperature);
-     * else a free slot, else the least recently used. */
+    char *stop = stop_key(r);
+    /* The conversation that holds the most of this one (same options); else
+     * a free slot, else the least recently used. */
     /* ponytail: a linear scan with full compares; fine for a handful of chats */
-    struct conversation *c = nullptr;
-    size_t               keep = 0;
+    struct held *c    = nullptr;
+    size_t       keep = 0;
     for (size_t i = 0; i < o->chats; i++)
-        if (pool[i].chat && pool[i].temperature == temperature) {
+        if (pool[i].chat && same_options(&pool[i], r->temperature, stop)) {
             size_t h = common(&pool[i], m, n);
             if (!c || h > keep)
                 c = &pool[i], keep = h;
         }
     if (!c || !keep) {
-        struct conversation *slot = nullptr;
+        struct held *slot = nullptr;
         for (size_t i = 0; i < o->chats && !slot; i++)
             if (!pool[i].chat)
                 slot = &pool[i];
@@ -185,42 +206,43 @@ static void chat_request(const struct svc_options *o, struct conversation *pool,
                 slot = &pool[i];
         c    = slot;
         keep = 0;
-        if (c->chat && c->temperature != temperature)
-            conversation_close(c);
+        if (c->chat && !same_options(c, r->temperature, stop))
+            held_close(c);
     }
     if (!c->chat) {
         geistr_chat_opts opts = GEISTR_CHAT_OPTS_INIT;
         opts.reasoning        = o->reasoning;
-        opts.temperature      = (float) temperature;
+        opts.temperature      = (float) r->temperature;
         opts.overflow         = GEISTR_OVERFLOW_DROP_OLDEST;
+        opts.stop             = r->stop;
+        opts.n_stop           = r->n_stop;
         if (geistr_chat_open(o->model, &opts, &c->chat) != GEISTR_OK) {
-            reply_error(out, "error", "cannot open a chat");
-            goto done;
+            out->error(out->ctx, "invalid", geistr_model_error(o->model)); /* e.g. an empty stop string */
+            free(stop);
+            return;
         }
-        c->temperature = temperature;
+        c->temperature = r->temperature;
+        c->stop        = stop, stop = nullptr;
     }
+    free(stop);
     c->used = ++clock;
     if (keep < c->n && geistr_chat_rewind(c->chat, keep) != GEISTR_OK) {
         (void) geistr_chat_rewind(c->chat, 0); /* the runtime dropped turns: start over (0 always works) */
         keep = 0;
     }
-    conversation_keep(c, keep);
-    geistr_message *turn = calloc(n - keep, sizeof *turn);
-    for (size_t i = keep; turn && i < n; i++)
-        turn[i - keep] = (geistr_message) {m[i].role, m[i].content};
-    geistr_status s = turn ? geistr_chat_limit(c->chat, max) : GEISTR_NO_MEMORY;
+    held_keep(c, keep);
+    geistr_status s = geistr_chat_limit(c->chat, r->max);
     if (s == GEISTR_OK)
-        s = geistr_chat_send(c->chat, n - keep, turn);
-    free(turn);
+        s = geistr_chat_send(c->chat, n - keep, m + keep);
     if (s != GEISTR_OK) {
-        reply_error(out, s == GEISTR_CONTEXT ? "context" : s == GEISTR_INVALID ? "invalid" : "error",
-                    geistr_chat_error(c->chat));
-        goto done;
+        out->error(out->ctx, s == GEISTR_CONTEXT ? "context" : s == GEISTR_INVALID ? "invalid" : "error",
+                   geistr_chat_error(c->chat));
+        return;
     }
     for (size_t i = keep; i < n; i++)
-        (void) conversation_push(c, m[i].role, m[i].content);
+        (void) held_push(c, m[i].role, m[i].content);
     /* Stream the answer; a client that goes away stops it. */
-    char        *text = nullptr;
+    char        *text     = nullptr;
     size_t       text_len = 0;
     FILE        *answer   = open_memstream(&text, &text_len);
     geistr_piece p        = {.size = sizeof p};
@@ -230,8 +252,7 @@ static void chat_request(const struct svc_options *o, struct conversation *pool,
             continue;
         if (answer)
             fwrite(p.text, 1, p.len, answer);
-        fputs("{\"part\":\"answer\",\"text\":", out), json_write(out, p.text), fputs("}\n", out);
-        if (fflush(out) == EOF) {
+        if (!out->part(out->ctx, p.text, p.len)) {
             gone = true;
             geistr_chat_cancel(c->chat);
             while (geistr_chat_next(c->chat, &p) == GEISTR_OK && p.part != GEISTR_PART_END) {
@@ -241,27 +262,60 @@ static void chat_request(const struct svc_options *o, struct conversation *pool,
     }
     if (answer)
         fclose(answer);
-    (void) conversation_push(c, "assistant", text ? text : "");
+    (void) held_push(c, "assistant", text ? text : "");
     free(text);
     geistr_stats st = {.size = sizeof st};
     (void) geistr_chat_stats(c->chat, &st);
     if (st.dropped_messages) /* the runtime's conversation is shorter now: match anew next time */
-        conversation_keep(c, 0), (void) geistr_chat_rewind(c->chat, 0);
-    if (!gone && (s == GEISTR_OK || s == GEISTR_CANCELLED)) {
-        static const char *const finish[] = {"none", "stop", "length", "context", "cancelled", "error"};
-        fprintf(out,
-                 "{\"done\":true,\"finish\":\"%s\",\"input_tokens\":%u,\"context_tokens\":%u,\"output_tokens\":%u,"
-                 "\"prefill_ms\":%.1f,\"generation_ms\":%.1f,\"total_ms\":%.1f}\n",
-                 finish[st.finish], st.input_tokens, st.context_tokens, st.output_tokens, st.prefill_ms,
-                 st.generation_ms, st.total_ms);
-    } else if (!gone) {
-        reply_error(out, "error", geistr_chat_error(c->chat));
-        conversation_close(c);
+        held_keep(c, 0), (void) geistr_chat_rewind(c->chat, 0);
+    if (!gone && (s == GEISTR_OK || s == GEISTR_CANCELLED))
+        out->done(out->ctx, &st);
+    else if (!gone) {
+        out->error(out->ctx, "error", geistr_chat_error(c->chat));
+        held_close(c);
     }
-done:
-    for (size_t i = 0; m && i < n; i++)
-        free((char *) m[i].role), free((char *) m[i].content);
-    free(m);
+}
+
+/* ---- the socket protocol: one JSON object per line ----------------------- */
+
+static bool line_part(void *ctx, const char *text, size_t len) {
+    (void) len;
+    FILE *out = ctx;
+    fputs("{\"part\":\"answer\",\"text\":", out), json_write(out, text), fputs("}\n", out);
+    return fflush(out) != EOF;
+}
+
+static void line_done(void *ctx, const geistr_stats *st) {
+    fprintf(ctx,
+            "{\"done\":true,\"finish\":\"%s\",\"input_tokens\":%u,\"context_tokens\":%u,\"output_tokens\":%u,"
+            "\"prefill_ms\":%.1f,\"generation_ms\":%.1f,\"total_ms\":%.1f}\n",
+            svc_finish(st->finish), st->input_tokens, st->context_tokens, st->output_tokens, st->prefill_ms,
+            st->generation_ms, st->total_ms);
+}
+
+static void line_error(void *ctx, const char *status, const char *text) {
+    reply_error(ctx, status, text);
+}
+
+static void chat_request(const struct svc_options *o, struct held *pool, FILE *out, const struct json *j) {
+    int    list = json_field(j, 0, "messages");
+    size_t n    = json_count(j, list) > 0 ? (size_t) json_count(j, list) : 0;
+    struct svc_request r = {.messages    = calloc(n ? n : 1, sizeof *r.messages),
+                            .n           = n,
+                            .temperature = json_number(j, json_field(j, 0, "temperature"), 0),
+                            .max         = (unsigned) json_number(j, json_field(j, 0, "max"), 0)};
+    bool ok = r.messages && n;
+    for (size_t k = 0; ok && k < n; k++) {
+        int item             = json_item(j, list, (int) k);
+        r.messages[k].role    = json_string(j, json_field(j, item, "role"));
+        r.messages[k].content = json_string(j, json_field(j, item, "content"));
+        ok                    = r.messages[k].role && r.messages[k].content;
+    }
+    if (ok)
+        svc_chat(o, pool, &r, &(struct svc_sink) {out, line_part, line_done, line_error});
+    else
+        reply_error(out, "invalid", "messages: a list of messages, each with role and content");
+    svc_free_request(&r);
 }
 
 static void info_request(const struct svc_options *o, FILE *out) {
@@ -296,14 +350,22 @@ int service_run(const struct svc_options *o) {
             close(fd);
         return 1;
     }
+    bool loopback = true;
+    int  web      = o->http ? http_listen(o->http, &loopback) : -1;
+    if (o->http && web < 0) {
+        close(fd), unlink(o->socket);
+        return 1;
+    }
     signal(SIGPIPE, SIG_IGN); /* a vanished client is a failed write, not the end */
-    struct conversation *pool = calloc(o->chats, sizeof *pool);
-    fprintf(stderr, "geistr: serving %s on %s (%zu conversations)\n", o->name, o->socket, o->chats);
+    struct held *pool = calloc(o->chats, sizeof *pool);
+    fprintf(stderr, "geistr: serving %s on %s%s%s (%zu conversations)\n", o->name, o->socket,
+            o->http ? " and http://" : "", o->http ? o->http : "", o->chats);
     while (pool && !*o->stop) {
-        struct pollfd in = {.fd = fd, .events = POLLIN};
-        if (poll(&in, 1, 200) <= 0)
+        struct pollfd in[2] = {{.fd = fd, .events = POLLIN}, {.fd = web, .events = POLLIN}};
+        if (poll(in, web >= 0 ? 2 : 1, 200) <= 0)
             continue;
-        int client = accept(fd, nullptr, nullptr);
+        bool from_web = web >= 0 && (in[1].revents & POLLIN);
+        int  client   = accept(from_web ? web : fd, nullptr, nullptr);
         if (client < 0)
             continue;
 #ifdef SO_NOSIGPIPE
@@ -313,6 +375,10 @@ int service_run(const struct svc_options *o) {
         struct timeval wait = {.tv_sec = 30}; /* a client that never sends or never reads */
         setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &wait, sizeof wait);
         setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &wait, sizeof wait);
+        if (from_web) {
+            http_serve(o, pool, client, loopback);
+            continue;
+        }
         char       *request = read_line(client, REQUEST_MAX);
         FILE       *out     = fdopen(client, "w"); /* closes client */
         struct json j       = {};
@@ -337,9 +403,11 @@ int service_run(const struct svc_options *o) {
     }
     for (size_t i = 0; pool && i < o->chats; i++)
         if (pool[i].chat)
-            conversation_close(&pool[i]);
+            held_close(&pool[i]);
     free(pool);
     close(fd);
+    if (web >= 0)
+        close(web);
     unlink(o->socket);
     fprintf(stderr, "geistr: service stopped\n");
     return 0;
