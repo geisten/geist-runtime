@@ -469,15 +469,18 @@ static int command(struct session *x, struct conversation *said, char *line, con
         return LEAVE;
     if (!strcmp(line, "/model") && !*arg) { /* what runs, and what else could */
         status_line(x, remote ? " · service" : "");
-        char list[1024] = "";
-        for (size_t i = 0; i < n_installed; i++)
-            snprintf(list + strlen(list), sizeof list - strlen(list), "%s%s", i ? " · " : "", installed_ids[i]);
         if (remote)
             usage("the service has its model: geistr serve <model> [--cpu | --gpu]");
         else if (n_installed) {
-            char text[1200];
-            snprintf(text, sizeof text, "installed: %s · /model <id> switches", list);
-            usage(text);
+            char  *text = nullptr;
+            size_t len  = 0;
+            FILE  *f    = open_memstream(&text, &len);
+            for (size_t i = 0; f && i < n_installed; i++)
+                fprintf(f, "%s%s", i ? " · " : "installed: ", installed_ids[i]);
+            if (f)
+                fputs(" · /model <id> switches", f), fclose(f);
+            usage(text ? text : "");
+            free(text);
         } else
             usage("/model <id or .gguf path> switches (geistr catalog lists models)");
         return GO_ON;
