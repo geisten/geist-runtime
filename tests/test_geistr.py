@@ -80,6 +80,14 @@ def until(fd, text, seconds=60):
             except OSError: break
     assert text.encode() in seen, (text, seen[-400:])
     return seen
+def finish_chat(pid, fd):
+    # Ctrl-D, then read until the chat exits: a full pty (small on macOS) would block it
+    os.write(fd, b'\x04')
+    while not os.waitpid(pid, os.WNOHANG)[0]:
+        try:
+            if select.select([fd], [], [], 0.2)[0]: os.read(fd, 4096)
+        except OSError: pass
+    os.close(fd)
 
 # ---- catalog: available → installed (verified) → mismatch ----------------------
 def section_catalog():
@@ -280,7 +288,7 @@ def section_resume():
     os.write(fd, b'/clear\r'); out = until(fd, 'a new conversation')
     os.write(fd, b'/info\r'); out = until(fd, 'of 512 tokens')
     assert b'context 0 of 512 tokens (0 %)' in out, out[-300:]
-    os.write(fd, b'\x04'); os.waitpid(pid, 0); os.close(fd)
+    finish_chat(pid, fd)
     print('geistr chat: continues the last conversation in a terminal, --new, private files, input history, context meter, piped chats keep nothing passed')
 
 # ---- serve and chat --socket --------------------------------------------------
