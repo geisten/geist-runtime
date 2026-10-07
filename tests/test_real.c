@@ -20,6 +20,7 @@
  *   - stop strings, a model outliving its handle.
  */
 #include "geistr.h"
+#include "geistr_engine.h"
 
 #include <geist.h>
 #include <geist_util.h>
@@ -319,6 +320,15 @@ int main(void) {
         CHECK(ask(dc, 1, &p2, again, sizeof again) == GEISTR_OK && stats(dc).dropped_messages > 0 &&
                   stats(dc).context_tokens <= 512,
               "DROP_OLDEST: old turns go, the answer comes");
+        /* a whole long conversation at once (a resumed chat, another model):
+         * its oldest messages go, the system and the last one stay */
+        geistr_chat   *wc     = chat(small, 16, GEISTR_OVERFLOW_DROP_OLDEST);
+        geistr_message long_[] = {SYSTEM, {"user", pad}, {"assistant", pad}, {"user", pad}, {"assistant", "Fine."},
+                                  {"user", "And one more thing?"}};
+        CHECK(ask(wc, 6, long_, again, sizeof again) == GEISTR_OK && stats(wc).dropped_messages >= 2 &&
+                  stats(wc).context_tokens <= 512 && geistr_chat_length(wc) <= 6,
+              "DROP_OLDEST: a whole conversation sent at once loses its oldest messages, not the answer");
+        geistr_chat_close(wc);
         geistr_chat_close(rc);
         geistr_chat_close(dc);
         geistr_model_close(small);
@@ -344,6 +354,40 @@ int main(void) {
     CHECK(ask(last, 1, &hi, again, sizeof again) == GEISTR_OK, "a chat keeps its model alive");
     geistr_chat_close(last);
 
+    /* ---- a model the caller loaded itself (geistd): wrapped, borrowed ---- */
+    {
+        struct geist_backend *be = nullptr;
+        struct geist_model   *gm = nullptr;
+        CHECK(geist_backend_create("cpu_neon", nullptr, nullptr, &be) == GEIST_OK ||
+                      geist_backend_create("cpu_x86", nullptr, nullptr, &be) == GEIST_OK ||
+                      geist_backend_create("cpu_scalar", nullptr, nullptr, &be) == GEIST_OK,
+              "engine backend");
+        CHECK(be && geist_model_load(path, be, &gm) == GEIST_OK, "engine model");
+        geistr_model     *w  = nullptr;
+        geistr_model_opts wo = GEISTR_MODEL_OPTS_INIT;
+        wo.context           = 512;
+        CHECK(geistr_model_wrap(gm, be, &wo, &w, error, sizeof error) == GEISTR_OK, error);
+        geistr_model_info wi = {.size = sizeof wi};
+        CHECK(w && geistr_model_info_get(w, &wi) == GEISTR_OK && wi.context == 512 &&
+                      !strcmp(wi.chat_format, info.chat_format),
+              "wrapped: the caller's window, the same chat format");
+        geistr_chat   *wc   = w ? chat(w, 16, GEISTR_OVERFLOW_REFUSE) : nullptr;
+        geistr_message q2[] = {SYSTEM, {"user", "What is the capital of France?"}};
+        CHECK(wc && ask(wc, 2, q2, again, sizeof again) == GEISTR_OK && strstr(again, "Paris"),
+              "a chat on a wrapped model");
+        geistr_model_close(w);
+        geistr_chat_close(wc); /* releases the wrapper, never the engine model */
+        /* the engine model is still the caller's: usable, then destroyed once */
+        struct geist_session     *raw = nullptr;
+        struct geist_session_opts ro  = {.max_seq_len = 16};
+        CHECK(geist_session_create(gm, be, &ro, &raw) == GEIST_OK, "the caller's model outlives the wrapper");
+        geist_session_destroy(raw);
+        geist_model_destroy(gm);
+        geist_backend_destroy(be);
+        CHECK(geistr_model_wrap(nullptr, be, nullptr, &w, error, sizeof error) == GEISTR_INVALID && !w,
+              "wrap needs a model");
+    }
+
     /* ---- window choice: this model, and a large one if given ---- */
     window(path, "test model");
     const char *rec = getenv("GEIST_TEST_MODEL_RECURRENT");
@@ -358,7 +402,7 @@ int main(void) {
         return 1;
     }
     printf("test_real: window, only-new-tokens, rewind (truncate and re-prefill), stop strings, cancel "
-           "(generation, prefill), overflow, parallel chats, lifetime passed (%s, %s, context %u)\n",
+           "(generation, prefill), overflow, parallel chats, lifetime, wrapped engine model passed (%s, %s, context %u)\n",
            arch, backend, info.context);
     return 0;
 }

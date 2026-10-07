@@ -160,8 +160,8 @@ static bool iso_date(const char *date) {
     return true;
 }
 
-/* [passed, total], 0 <= passed <= total. */
-static bool counts(const struct json *j, int object, const char *key, geistr_catalog_entry *m) {
+/* [passed, total], 0 <= passed <= total, added to sum. */
+static bool counts(const struct json *j, int object, const char *key, uint32_t sum[2]) {
     int      t = get(j, object, key);
     uint64_t v[2];
     if (t < 0 || j->tok[t].type != JSMN_ARRAY || j->tok[t].size != 2)
@@ -181,8 +181,8 @@ static bool counts(const struct json *j, int object, const char *key, geistr_cat
             v[k] = v[k] * 10 + (unsigned) (s[i] - '0');
         }
     }
-    m->quality_passed += (uint32_t) v[0];
-    m->quality_total += (uint32_t) v[1];
+    sum[0] += (uint32_t) v[0];
+    sum[1] += (uint32_t) v[1];
     return v[1] && v[0] <= v[1];
 }
 
@@ -207,13 +207,15 @@ static const char *quality(geistr_catalog *c, const struct json *j, int object, 
         memcpy(name, j->src + j->tok[i].start, n);
         name[n]                 = 0;
         struct quality_tasks *q = &c->tasks[m - c->models];
-        uint32_t before[2]      = {m->quality_passed, m->quality_total};
-        if (!component(name, false) || !keys(j, i + 1, language_keys) || !counts(j, i + 1, "de", m) ||
-            !counts(j, i + 1, "en", m) || q->n == 8)
+        uint32_t sum[2]         = {};
+        if (!component(name, false) || !keys(j, i + 1, language_keys) || !counts(j, i + 1, "de", sum) ||
+            !counts(j, i + 1, "en", sum) || q->n == 8)
             return nullptr;
         memcpy(q->name[q->n], name, n + 1);
-        q->passed[q->n]  = m->quality_passed - before[0];
-        q->total[q->n++] = m->quality_total - before[1];
+        q->passed[q->n]  = sum[0];
+        q->total[q->n++] = sum[1];
+        m->quality_passed += sum[0];
+        m->quality_total += sum[1];
     }
     return keep(c, j->src + j->tok[object].start, (size_t) (j->tok[object].end - j->tok[object].start));
 }

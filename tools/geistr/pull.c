@@ -2,6 +2,7 @@
  * verified before the file takes its final name. Moved from geist-serve's
  * download_model (src/app/jobs.c). */
 #include "pull.h"
+#include "cli.h"
 #include <curl/curl.h>
 #include <errno.h>
 #include <signal.h>
@@ -12,7 +13,7 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t stop;
-static void on_interrupt(int signal) {
+static void on_pull_interrupt(int signal) {
     (void) signal;
     stop = 1;
 }
@@ -41,19 +42,6 @@ static int on_progress(void *context, curl_off_t total, curl_off_t now, curl_off
     return stop;
 }
 
-static bool mkdirs(const char *dir) {
-    char path[4096];
-    snprintf(path, sizeof path, "%s", dir);
-    for (char *p = path + 1; *p; p++)
-        if (*p == '/') {
-            *p = 0;
-            if (mkdir(path, 0755) != 0 && errno != EEXIST)
-                return false;
-            *p = '/';
-        }
-    return mkdir(path, 0755) == 0 || errno == EEXIST;
-}
-
 int geistr_pull(const geistr_catalog_entry *m, const char *dir) {
     char target[4200], part[4300], url[2048];
     snprintf(target, sizeof target, "%s/%s", dir, m->file);
@@ -64,7 +52,7 @@ int geistr_pull(const geistr_catalog_entry *m, const char *dir) {
     if (base)
         snprintf(url, sizeof url, "%s%s", base, m->url + strlen("https://huggingface.co"));
 #endif
-    if (!mkdirs(dir)) {
+    if (!make_dirs(dir, 0755)) {
         fprintf(stderr, "geistr: cannot create %s: %s\n", dir, strerror(errno));
         return 1;
     }
@@ -77,7 +65,7 @@ int geistr_pull(const geistr_catalog_entry *m, const char *dir) {
         return 1;
     }
     struct sink s = {.file = file, .offset = (uint64_t) st.st_size, .bytes = (uint64_t) st.st_size, .limit = m->bytes};
-    struct sigaction sa = {.sa_handler = on_interrupt};
+    struct sigaction sa = {.sa_handler = on_pull_interrupt};
     sigaction(SIGINT, &sa, nullptr);
     bool ok = s.bytes == m->bytes;
     if (!ok) {

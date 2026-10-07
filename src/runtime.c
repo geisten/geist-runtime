@@ -15,6 +15,8 @@
 #include "geistr_decision.h"
 #include "decision_profile.h"
 #include "file_identity.h"
+#include "common.h"
+#include "geistr_engine.h"
 #include "stream.h"
 #include "template.h"
 #include "window.h"
@@ -52,47 +54,7 @@
 #define NO_POSITION SIZE_MAX
 
 const char *geistr_version(void) {
-    return "0.1.0";
-}
-
-const char *geistr_status_text(geistr_status s) {
-    switch (s) {
-    case GEISTR_OK:
-        return "ok";
-    case GEISTR_INVALID:
-        return "invalid argument or call order";
-    case GEISTR_NO_MEMORY:
-        return "out of memory";
-    case GEISTR_IO:
-        return "model file missing or unreadable";
-    case GEISTR_FORMAT:
-        return "not a supported model or chat format";
-    case GEISTR_CONTEXT:
-        return "the conversation does not fit the context window";
-    case GEISTR_BACKEND:
-        return "the engine failed; reopen the model";
-    case GEISTR_CANCELLED:
-        return "cancelled";
-    }
-    return "unknown status";
-}
-
-static bool opts_copy(void *dst, const void *src, size_t known) {
-    if (src == nullptr)
-        return true;
-    size_t size;
-    memcpy(&size, src, sizeof size);
-    if (size < sizeof size || size > known)
-        return false;
-    memcpy(dst, src, size);
-    memcpy(dst, &known, sizeof known);
-    return true;
-}
-
-static double now_ms(void) {
-    struct timespec t;
-    clock_gettime(CLOCK_MONOTONIC, &t);
-    return (double) t.tv_sec * 1e3 + (double) t.tv_nsec / 1e6;
+    return "0.1.2";
 }
 
 static void put_error(char *error, size_t cap, const char *fmt, ...) {
@@ -156,6 +118,7 @@ struct geistr_model {
     bool            serialize;
     pthread_mutex_t engine;
     pthread_rwlock_t setup;
+    bool            borrowed; /* geistr_model_wrap: the caller owns m and be */
     char            error[256];
 };
 
@@ -222,6 +185,63 @@ static geistr_status choose_window(const struct geist_model_plan *plan,
     return GEISTR_OK;
 }
 
+/* The model's chat format, stops and engine rules, from the loaded engine,
+ * and its decision policy. On failure the caller still owns gm, be and m. */
+static geistr_status model_describe(geistr_model *m, struct geist_model *gm, struct geist_backend *be,
+                                    uint32_t window, enum tpl_family forced,
+                                    const geistr_decision_policy *decision, char *error, size_t cap) {
+    atomic_init(&m->refs, 1);
+    atomic_init(&m->decision_allocations, 0);
+    atomic_init(&m->decision_bytes, 0);
+    m->be       = be;
+    m->m        = gm;
+    m->context  = window;
+    m->decision = *decision;
+    m->family   = forced != TPL_UNKNOWN
+                          ? forced
+                          : tpl_family_detect(geist_model_metadata_str(gm, "tokenizer.chat_template", nullptr),
+                                              geist_model_arch(gm));
+    m->n_stops   = tpl_stop_ids(token_lookup, gm, geist_model_eos_token(gm), MAX_STOPS, m->stops);
+    m->bos       = geist_model_bos_token(gm);
+    m->add_bos   = geist_model_add_bos(gm);
+    const char *name = geist_backend_name(be);
+    m->serialize = name && (!strcmp(name, "metal") || !strcmp(name, "vulkan"));
+    if (pthread_mutex_init(&m->engine, nullptr) != 0) {
+        put_error(error, cap, "model synchronization setup failed");
+        return GEISTR_BACKEND;
+    }
+    if (decision->enabled && pthread_rwlock_init(&m->setup, nullptr) != 0) {
+        pthread_mutex_destroy(&m->engine);
+        put_error(error, cap, "decision synchronization setup failed");
+        return GEISTR_BACKEND;
+    }
+    return GEISTR_OK;
+}
+
+/* The caller's options over the defaults, and the chat format they force. */
+static bool model_opts(const geistr_model_opts *opts, geistr_model_opts *o, enum tpl_family *forced, char *error,
+                       size_t cap) {
+    if (!opts_copy(o, opts, sizeof *o) ||
+        (opts && opts->size > offsetof(geistr_model_opts, decision) && opts->size < sizeof *o)) {
+        put_error(error, cap, "model options: unknown size");
+        return false;
+    }
+    if ((o->processor != GEISTR_PROCESSOR_AUTO && o->processor != GEISTR_PROCESSOR_CPU &&
+         o->processor != GEISTR_PROCESSOR_GPU) || o->threads > INT_MAX) {
+        put_error(error, cap, "invalid processor or thread count");
+        return false;
+    }
+    if (o->decision && geistr_decision_policy_validate(o->decision) != GEISTR_OK) {
+        put_error(error, cap, "invalid decision policy or checkpoint/profile binding");
+        return false;
+    }
+    if (o->chat_format && (*forced = tpl_family_from_name(o->chat_format)) == TPL_UNKNOWN) {
+        put_error(error, cap, "unknown chat_format override \"%s\"", o->chat_format);
+        return false;
+    }
+    return true;
+}
+
 static geistr_status model_open(const char              *path,
                                 const void              *data,
                                 size_t                   len,
@@ -230,23 +250,12 @@ static geistr_status model_open(const char              *path,
                                 char                    *error,
                                 size_t                   cap) {
     geistr_model_opts o = GEISTR_MODEL_OPTS_INIT;
-    if (!opts_copy(&o, opts, sizeof o) ||
-        (opts && opts->size > offsetof(geistr_model_opts, decision) && opts->size < sizeof o)) {
-        put_error(error, cap, "model options: unknown size");
+    enum tpl_family forced = TPL_UNKNOWN;
+    if (!model_opts(opts, &o, &forced, error, cap))
         return GEISTR_INVALID;
-    }
     geistr_decision_policy decision = {.mode = GEISTR_DECISION_DENSE};
     struct file_identity identity = {};
-    if ((o.processor != GEISTR_PROCESSOR_AUTO && o.processor != GEISTR_PROCESSOR_CPU &&
-         o.processor != GEISTR_PROCESSOR_GPU) || o.threads > INT_MAX) {
-        put_error(error, cap, "invalid processor or thread count");
-        return GEISTR_INVALID;
-    }
     if (o.decision) {
-        if (geistr_decision_policy_validate(o.decision) != GEISTR_OK) {
-            put_error(error, cap, "invalid decision policy or checkpoint/profile binding");
-            return GEISTR_INVALID;
-        }
         decision = *o.decision;
         if (decision.enabled) {
             if (path && !file_identity_read(path, &identity)) {
@@ -261,11 +270,6 @@ static geistr_status model_open(const char              *path,
                 return verified != GEISTR_OK ? verified : GEISTR_FORMAT;
             }
         }
-    }
-    enum tpl_family forced = TPL_UNKNOWN;
-    if (o.chat_format && (forced = tpl_family_from_name(o.chat_format)) == TPL_UNKNOWN) {
-        put_error(error, cap, "unknown chat_format override \"%s\"", o.chat_format);
-        return GEISTR_INVALID;
     }
     if (path != nullptr) {
         FILE *f = fopen(path, "rb");
@@ -332,32 +336,12 @@ static geistr_status model_open(const char              *path,
         geist_backend_destroy(be);
         return GEISTR_NO_MEMORY;
     }
-    atomic_init(&m->refs, 1);
-    atomic_init(&m->decision_allocations, 0);
-    atomic_init(&m->decision_bytes, 0);
-    m->be      = be;
-    m->m       = gm;
-    m->context = window;
-    m->decision = decision;
-    m->family  = forced != TPL_UNKNOWN
-                         ? forced
-                         : tpl_family_detect(geist_model_metadata_str(gm, "tokenizer.chat_template", nullptr),
-                                             geist_model_arch(gm));
-    m->n_stops   = tpl_stop_ids(token_lookup, gm, geist_model_eos_token(gm), MAX_STOPS, m->stops);
-    m->bos       = geist_model_bos_token(gm);
-    m->add_bos   = geist_model_add_bos(gm);
-    const char *name = geist_backend_name(be);
-    m->serialize = name && (!strcmp(name, "metal") || !strcmp(name, "vulkan"));
-    if (pthread_mutex_init(&m->engine, nullptr) != 0) {
-        geist_model_destroy(gm); geist_backend_destroy(be); free(m);
-        put_error(error, cap, "model synchronization setup failed");
-        return GEISTR_BACKEND;
-    }
-    if (decision.enabled && pthread_rwlock_init(&m->setup, nullptr) != 0) {
-        pthread_mutex_destroy(&m->engine);
-        geist_model_destroy(gm); geist_backend_destroy(be); free(m);
-        put_error(error, cap, "decision synchronization setup failed");
-        return GEISTR_BACKEND;
+    geistr_status ds = model_describe(m, gm, be, window, forced, &decision, error, cap);
+    if (ds != GEISTR_OK) {
+        geist_model_destroy(gm);
+        geist_backend_destroy(be);
+        free(m);
+        return ds;
     }
     *out = m;
     return GEISTR_OK;
@@ -392,10 +376,56 @@ geistr_status geistr_model_open_memory(const void              *data,
     return model_open(nullptr, data, len, opts, out, error, cap);
 }
 
+geistr_status geistr_model_wrap(struct geist_model     *gm,
+                                struct geist_backend   *be,
+                                const geistr_model_opts *opts,
+                                geistr_model           **out,
+                                char                    *error,
+                                size_t                   cap) {
+    if (out)
+        *out = nullptr;
+    geistr_model_opts o = GEISTR_MODEL_OPTS_INIT;
+    if (!gm || !be || !out) {
+        put_error(error, cap, "model, backend and out are required");
+        return GEISTR_INVALID;
+    }
+    enum tpl_family forced = TPL_UNKNOWN;
+    if (!model_opts(opts, &o, &forced, error, cap))
+        return GEISTR_INVALID;
+    /* The caller chose the memory when it loaded the model: the window is
+     * the trained one, or opts.context if smaller. */
+    uint64_t trained = geist_model_context_length(gm);
+    uint32_t window  = trained ? (uint32_t) (trained < UINT32_MAX ? trained : UINT32_MAX) : 4096;
+    if (o.context && o.context < window)
+        window = o.context;
+    /* A wrapped model has no artifact to verify: decisions stay off. */
+    geistr_decision_policy decision = {.mode = GEISTR_DECISION_DENSE};
+    if (o.decision) {
+        if (o.decision->enabled) {
+            put_error(error, cap, "a wrapped model cannot verify a pretrained decision artifact");
+            return GEISTR_FORMAT;
+        }
+        decision = *o.decision;
+    }
+    geistr_model *m = calloc(1, sizeof *m);
+    if (m == nullptr)
+        return GEISTR_NO_MEMORY;
+    geistr_status ds = model_describe(m, gm, be, window, forced, &decision, error, cap);
+    if (ds != GEISTR_OK) {
+        free(m);
+        return ds;
+    }
+    m->borrowed = true;
+    *out        = m;
+    return GEISTR_OK;
+}
+
 static void model_release(geistr_model *m) {
     if (m && atomic_fetch_sub(&m->refs, 1) == 1) {
-        geist_model_destroy(m->m);
-        geist_backend_destroy(m->be);
+        if (!m->borrowed) {
+            geist_model_destroy(m->m);
+            geist_backend_destroy(m->be);
+        }
         pthread_mutex_destroy(&m->engine);
         if (m->decision.enabled) pthread_rwlock_destroy(&m->setup);
         free(m);
@@ -439,11 +469,6 @@ struct turn {
                    all closed; NO_POSITION where that is not known */
 };
 
-struct queued {
-    geistr_part part;
-    char       *text;
-};
-
 struct geistr_chat {
     geistr_model         *model;
     geistr_chat_opts      opts;
@@ -458,15 +483,15 @@ struct geistr_chat {
     size_t      answer_turn;   /* index of its assistant turn */
     const char *end_marker;    /* the model's own end-of-turn text, if it ended so */
     char       *raw;           /* the generated text, markers included (the history) */
+    int32_t    *recent;        /* the answer's tokens, for str_repeats */
+    size_t      n_recent, cap_recent;
     size_t      raw_len, raw_cap;
     uint32_t    limit;
     /* text stages and the pieces they produced */
     struct str_utf8   utf8;
     struct str_output output;
     struct str_stops  stop;
-    struct queued    *queue;
-    size_t            n_queue, head, cap_queue;
-    char             *piece;
+    struct str_pieces pieces;
     geistr_stats      stats;
     double            started;
     char              error[256];
@@ -480,10 +505,31 @@ static geistr_status fail(geistr_chat *c, geistr_status s, const char *fmt, ...)
     return s;
 }
 
-static void stops_free(char **stops, size_t n) {
-    for (size_t i = 0; stops && i < n; i++)
-        free(stops[i]);
-    free(stops);
+/* The token t joins the answer: does the answer loop now? (str_repeats) */
+static bool looping(geistr_chat *c, int32_t t) {
+    if (c->n_recent == c->cap_recent) {
+        size_t   cap   = c->cap_recent ? c->cap_recent * 2 : 256;
+        int32_t *grown = realloc(c->recent, cap * sizeof *grown);
+        if (!grown)
+            return false; /* no memory to watch with: the answer goes on */
+        c->recent = grown, c->cap_recent = cap;
+    }
+    c->recent[c->n_recent++] = t;
+    return str_repeats(c->recent, c->n_recent);
+}
+
+/* A seed for sampling: /dev/urandom, else the clock and the process. */
+static uint64_t fresh_seed(void) {
+    uint64_t seed = 0;
+    FILE    *f    = fopen("/dev/urandom", "rb");
+    if (!f || fread(&seed, sizeof seed, 1, f) != 1) {
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        seed = (uint64_t) ts.tv_nsec ^ ((uint64_t) ts.tv_sec << 20) ^ (uint64_t) getpid();
+    }
+    if (f)
+        fclose(f);
+    return seed ? seed : 1; /* 0 would mean the fixed seed */
 }
 
 geistr_status geistr_chat_open(geistr_model *m, const geistr_chat_opts *opts, geistr_chat **out) {
@@ -500,19 +546,19 @@ geistr_status geistr_chat_open(geistr_model *m, const geistr_chat_opts *opts, ge
         snprintf(m->error, sizeof m->error, "this model's chat format is not supported");
         return GEISTR_FORMAT;
     }
-    geistr_chat *c     = calloc(1, sizeof *c);
-    char       **stops = o.n_stop ? calloc(o.n_stop, sizeof *stops) : nullptr;
-    bool         ok    = c && (!o.n_stop || stops);
-    for (size_t i = 0; ok && i < o.n_stop; i++)
-        ok = o.stop[i] && *o.stop[i] && (stops[i] = strdup(o.stop[i]));
-    if (!ok) {
-        geistr_status s = c && (!o.n_stop || stops) ? GEISTR_INVALID : GEISTR_NO_MEMORY;
-        stops_free(stops, o.n_stop);
+    geistr_chat  *c     = calloc(1, sizeof *c);
+    char        **stops = nullptr;
+    geistr_status s     = c ? stops_copy(&o, &stops) : GEISTR_NO_MEMORY;
+    if (s != GEISTR_OK) {
         free(c);
         snprintf(m->error, sizeof m->error, "chat: out of memory or an empty stop string");
         return s;
     }
-    struct geist_session_opts so = {.max_seq_len = m->context, .temperature = o.temperature, .top_p = o.top_p};
+    /* geistlib uses one fixed seed when given 0: every process would sample the same "random" answer. */
+    struct geist_session_opts so = {.max_seq_len = m->context,
+                                    .temperature = o.temperature,
+                                    .top_p       = o.top_p,
+                                    .random_seed = o.temperature > 0 ? fresh_seed() : 0};
     engine_setup_lock(m);
     enum geist_status es = geist_session_create(m->m, m->be, &so, &c->s);
     engine_setup_unlock(m);
@@ -534,11 +580,6 @@ geistr_status geistr_chat_open(geistr_model *m, const geistr_chat_opts *opts, ge
     return GEISTR_OK;
 }
 
-static void queue_clear(geistr_chat *c) {
-    for (size_t i = c->head; i < c->n_queue; i++)
-        free(c->queue[i].text);
-    c->n_queue = c->head = 0;
-}
 
 static void turns_drop(geistr_chat *c, size_t keep) {
     for (size_t i = keep; i < c->n_turns; i++) {
@@ -559,11 +600,10 @@ void geistr_chat_close(geistr_chat *c) {
     free(c->turns);
     tpl_free(&c->tpl);
     stops_free(c->stops, c->opts.n_stop);
-    queue_clear(c);
-    free(c->queue);
+    str_pieces_free(&c->pieces);
     str_stops_free(&c->stop);
     free(c->raw);
-    free(c->piece);
+    free(c->recent);
     free(c);
     model_release(m);
 }
@@ -740,7 +780,7 @@ static void answer_reset(geistr_chat *c) {
     c->raw_len    = 0;
     if (c->raw)
         c->raw[0] = 0;
-    queue_clear(c);
+    str_pieces_clear(&c->pieces);
 }
 
 /* ---- send ------------------------------------------------------------------ */
@@ -766,6 +806,43 @@ static bool turn_push(geistr_chat *c, const char *role, const char *content, siz
     }
     c->turns[c->n_turns++] = (struct turn) {r, t, cut};
     return true;
+}
+
+/* Would the conversation fit with the oldest `go` turns gone: held ones
+ * first (a system turn stays), then the oldest new messages (a leading
+ * system message stays, the last one always)? kept is scratch of count. */
+static geistr_status drop_fits(geistr_chat *c, bool system, bool new_system, const geistr_message *messages,
+                               size_t count, size_t go, geistr_message *kept, bool *fits) {
+    const size_t held  = c->n_turns - (system ? 1 : 0);
+    const size_t first = (system ? 1 : 0) + (go < held ? go : held), skip = go > held ? go - held : 0;
+    size_t       k     = 0;
+    if (new_system)
+        kept[k++] = messages[0];
+    for (size_t i = (new_system ? 1 : 0) + skip; i < count; i++)
+        kept[k++] = messages[i];
+    struct tpl_state fresh = {};
+    char            *all   = render_all(c, &fresh, system, first, k, kept, true);
+    tpl_free(&fresh);
+    if (!all)
+        return GEISTR_NO_MEMORY;
+    struct ids t = {};
+    if (c->model->add_bos && c->model->bos >= 0)
+        ids_push(&t, 1, &c->model->bos);
+    geistr_status s = tokenize(c, all, &t);
+    *fits           = s == GEISTR_OK && t.n + 1 <= c->model->context;
+    free(all), free(t.v);
+    return s;
+}
+
+/* Stage outputs land here as pieces, in order. */
+static bool queue_answer(void *c, const char *text) {
+    return str_pieces_push(&((geistr_chat *) c)->pieces, GEISTR_PART_ANSWER, text);
+}
+static bool queue_thinking(void *c, const char *text) {
+    return str_pieces_push(&((geistr_chat *) c)->pieces, GEISTR_PART_THINKING, text);
+}
+static bool to_stops(void *c, const char *text) {
+    return str_stops_feed(&((geistr_chat *) c)->stop, text, queue_answer, c);
 }
 
 geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_message messages[]) {
@@ -809,45 +886,58 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
         s = tokenize(c, gen, &prompt);
     const size_t adding = close.n + turns.n + prompt.n;
     size_t       input  = adding;
-    uint32_t     dropped = 0;
+    uint32_t     dropped = 0, dropped_new = 0; /* held turns, and new messages, that went */
     bool         rebuilt = false;
+    const geistr_message *msgs = messages; /* what is sent: fewer when the oldest new ones went */
+    size_t                n_msgs = count;
+    geistr_message       *kept   = nullptr;
 
     if (s == GEISTR_OK && len0 + adding + 1 > c->model->context) {
         if (c->opts.overflow != GEISTR_OVERFLOW_DROP_OLDEST) {
             s = fail(c, GEISTR_CONTEXT, "the conversation does not fit the context window");
         } else {
             /* Drop the oldest turns (a leading system turn stays) until the
-             * whole conversation, rendered again, fits; then prefill it. */
-            const bool system = c->n_turns > 0 && is_role(c->turns[0].role, "system");
-            size_t     first  = system ? 1 : 0;
-            s                 = GEISTR_CONTEXT;
-            for (; first <= c->n_turns; first++) {
-                struct tpl_state fresh = {};
-                char *all = render_all(c, &fresh, system, first, count, messages, true);
-                if (!all) {
-                    tpl_free(&fresh);
-                    s = GEISTR_NO_MEMORY;
-                    break;
+             * whole conversation, rendered again, fits; then prefill it.
+             * Held turns go first; when that is not enough (a whole
+             * conversation sent at once: a resumed chat, another model), the
+             * oldest new messages too (a leading system message among them
+             * stays, and the last one always). Fitting is monotonic in what
+             * goes, so a binary search finds the least: a few tokenizations,
+             * not one per message. */
+            const bool   system     = c->n_turns > 0 && is_role(c->turns[0].role, "system");
+            const bool   new_system = !system && is_role(messages[0].role, "system");
+            const size_t held       = c->n_turns - (system ? 1 : 0);  /* turns that may go */
+            const size_t fixed      = (new_system ? 1 : 0) + 1; /* a leading system message, the last one */
+            const size_t sendable   = count > fixed ? count - fixed : 0;  /* new messages that may go */
+            kept                    = calloc(count, sizeof *kept);
+            size_t lo = 0, hi = held + sendable;                     /* how many go */
+            bool   fit_hi = false;
+            s             = kept ? GEISTR_OK : GEISTR_NO_MEMORY;
+            if (s == GEISTR_OK)
+                s = drop_fits(c, system, new_system, messages, count, hi, kept, &fit_hi);
+            if (s == GEISTR_OK && !fit_hi)
+                s = fail(c, GEISTR_CONTEXT, "the conversation does not fit the context window");
+            while (s == GEISTR_OK && lo < hi) {
+                size_t mid = lo + (hi - lo) / 2;
+                bool   fit = false;
+                s          = drop_fits(c, system, new_system, messages, count, mid, kept, &fit);
+                if (fit)
+                    hi = mid;
+                else
+                    lo = mid + 1;
+            }
+            size_t first = (system ? 1 : 0) + (hi < held ? hi : held);
+            if (s == GEISTR_OK) {
+                dropped     = (uint32_t) (first - (system ? 1 : 0));
+                dropped_new = (uint32_t) (hi > held ? hi - held : 0);
+                if (dropped_new) {
+                    size_t k = 0;
+                    if (new_system)
+                        kept[k++] = messages[0];
+                    for (size_t i = (new_system ? 1 : 0) + dropped_new; i < count; i++)
+                        kept[k++] = messages[i];
+                    msgs = kept, n_msgs = k;
                 }
-                struct ids t = {};
-                if (c->model->add_bos && c->model->bos >= 0)
-                    ids_push(&t, 1, &c->model->bos);
-                const geistr_status ts = tokenize(c, all, &t);
-                free(all);
-                const bool fits = ts == GEISTR_OK && t.n + 1 <= c->model->context;
-                free(t.v);
-                if (ts != GEISTR_OK) {
-                    tpl_free(&fresh);
-                    s = ts;
-                    break;
-                }
-                if (fits) {
-                    tpl_free(&fresh);
-                    dropped = (uint32_t) (first - (system ? 1 : 0));
-                    s       = GEISTR_OK;
-                    break;
-                }
-                tpl_free(&fresh);
             }
             if (s == GEISTR_OK) {
                 /* Commit the drop, then refill the kept conversation with
@@ -864,7 +954,7 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
                 for (size_t i = 0; i < c->n_turns; i++)
                     c->turns[i].cut = NO_POSITION;
                 struct tpl_state fresh = {};
-                char *all = render_all(c, &fresh, false, 0, count, messages, true);
+                char *all = render_all(c, &fresh, false, 0, n_msgs, msgs, true);
                 if (!all) {
                     tpl_free(&fresh);
                     s = GEISTR_NO_MEMORY;
@@ -877,8 +967,6 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
                 rebuilt = true;
                 if (s != GEISTR_OK)
                     s = fail(c, s, "refill after dropping old turns failed");
-            } else if (s == GEISTR_CONTEXT) {
-                fail(c, s, "the conversation does not fit the context window");
             }
         }
     }
@@ -911,15 +999,19 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
     free(text);
     if (s != GEISTR_OK) {
         tpl_free(&st);
+        free(kept);
         return s;
     }
 
     /* Commit: the previous answer is closed, the new turns and the new
      * answer's turn are part of the conversation. */
     const size_t base = len0 + close.n;
-    for (size_t i = 0; i < count; i++)
-        if (!turn_push(c, messages[i].role, messages[i].content, !rebuilt && i == 0 ? base : NO_POSITION))
+    for (size_t i = 0; i < n_msgs; i++)
+        if (!turn_push(c, msgs[i].role, msgs[i].content, !rebuilt && i == 0 ? base : NO_POSITION)) {
+            free(kept);
             return fail(c, GEISTR_NO_MEMORY, "out of memory");
+        }
+    free(kept);
     c->answer_turn = c->n_turns;
     if (!turn_push(c, "assistant", "", rebuilt ? NO_POSITION : answer_at - prompt.n))
         return fail(c, GEISTR_NO_MEMORY, "out of memory");
@@ -933,15 +1025,17 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
     c->limit            = c->opts.max_tokens && c->opts.max_tokens < room ? c->opts.max_tokens : room;
     c->utf8             = (struct str_utf8) {};
     str_output_init(&c->output, c->opts.reasoning == GEISTR_REASONING_THINK_TAGS);
+    str_output_thinking(&c->output, c->opts.thinking ? queue_thinking : nullptr);
     str_stops_free(&c->stop);
     str_stops_init(&c->stop, c->opts.n_stop, (const char *const *) c->stops);
     c->started  = start;
     c->error[0] = 0;
+    c->n_recent = 0;
     c->stats    = (geistr_stats) {
            .size             = sizeof c->stats,
            .input_tokens     = (uint32_t) input,
            .context_tokens   = (uint32_t) used,
-           .dropped_messages = dropped,
+           .dropped_messages = dropped + dropped_new,
            .prefill_ms       = now_ms() - start,
            .first_answer_ms  = -1,
     };
@@ -949,33 +1043,6 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
 }
 
 /* ---- next ------------------------------------------------------------------ */
-
-static bool enqueue(geistr_chat *c, geistr_part part, const char *text) {
-    if (!*text)
-        return true;
-    if (c->n_queue == c->cap_queue) {
-        size_t         cap  = c->cap_queue ? c->cap_queue * 2 : 8;
-        struct queued *grow = realloc(c->queue, cap * sizeof *grow);
-        if (!grow)
-            return false;
-        c->queue     = grow;
-        c->cap_queue = cap;
-    }
-    char *copy = strdup(text);
-    if (!copy)
-        return false;
-    c->queue[c->n_queue++] = (struct queued) {part, copy};
-    return true;
-}
-static bool queue_answer(void *c, const char *text) {
-    return enqueue(c, GEISTR_PART_ANSWER, text);
-}
-static bool queue_thinking(void *c, const char *text) {
-    return enqueue(c, GEISTR_PART_THINKING, text);
-}
-static bool to_stops(void *c, const char *text) {
-    return str_stops_feed(&((geistr_chat *) c)->stop, text, queue_answer, c);
-}
 
 static geistr_status end(geistr_chat *c, geistr_piece *piece, geistr_finish finish) {
     if (c->answering) {
@@ -1015,55 +1082,47 @@ geistr_status geistr_chat_next(geistr_chat *c, geistr_piece *piece) {
             return GEISTR_CANCELLED;
         }
         if (c->answering && atomic_load(&c->cancel)) {
-            queue_clear(c);
+            str_pieces_clear(&c->pieces);
             end(c, piece, GEISTR_FINISH_CANCELLED);
             snprintf(c->error, sizeof c->error, "cancelled");
             continue;
         }
-        if (c->head < c->n_queue) {
-            struct queued q = c->queue[c->head++];
-            free(c->piece);
-            c->piece = q.text;
+        struct str_piece q;
+        if (str_pieces_take(&c->pieces, &q)) {
             if (q.part == GEISTR_PART_ANSWER && c->stats.first_answer_ms < 0)
                 c->stats.first_answer_ms = now_ms() - c->started;
-            piece->part = q.part;
+            piece->part = (geistr_part) q.part;
             piece->text = q.text;
-            piece->len  = strlen(q.text);
+            piece->len  = q.len;
             return GEISTR_OK;
         }
         if (!c->answering)
             return end(c, piece, c->stats.finish);
-        if (c->stop.stopped) {
+        geistr_finish why = c->stop.stopped ? GEISTR_FINISH_STOP : GEISTR_FINISH_NONE;
+        if (!why && (c->stats.output_tokens >= c->limit || session_length(c) + 1 >= c->model->context))
+            why = c->opts.max_tokens && c->stats.output_tokens >= c->opts.max_tokens ? GEISTR_FINISH_LENGTH
+                                                                                     : GEISTR_FINISH_CONTEXT;
+        const char *p = nullptr;
+        if (!why) {
+            geist_token_t t = -1;
+            engine_lock(c->model);
+            enum geist_status es = geist_session_decode_step(c->s, &t);
+            p                    = es == GEIST_OK ? geist_session_token_to_str(c->s, t) : nullptr;
+            engine_unlock(c->model);
+            if (es != GEIST_OK) {
+                end(c, piece, GEISTR_FINISH_ERROR);
+                return fail(c, GEISTR_BACKEND, "decode: %s", geist_session_errmsg(c->s));
+            }
+            c->stats.output_tokens++;
+            const bool stop = is_stop_token(c, t);
+            if (stop) /* the model ended its turn; its marker is in the context now */
+                c->end_marker = p;
+            why = stop ? GEISTR_FINISH_STOP : looping(c, t) ? GEISTR_FINISH_REPETITION : GEISTR_FINISH_NONE;
+        }
+        if (why) {
             if (!finish_stages(c))
                 return fail(c, GEISTR_NO_MEMORY, "out of memory");
-            end(c, piece, GEISTR_FINISH_STOP);
-            continue;
-        }
-        const size_t used = session_length(c);
-        if (c->stats.output_tokens >= c->limit || used + 1 >= c->model->context) {
-            if (!finish_stages(c))
-                return fail(c, GEISTR_NO_MEMORY, "out of memory");
-            end(c, piece,
-                c->opts.max_tokens && c->stats.output_tokens >= c->opts.max_tokens ? GEISTR_FINISH_LENGTH
-                                                                                   : GEISTR_FINISH_CONTEXT);
-            continue;
-        }
-        geist_token_t t = -1;
-        engine_lock(c->model);
-        enum geist_status es = geist_session_decode_step(c->s, &t);
-        const char       *p  = es == GEIST_OK ? geist_session_token_to_str(c->s, t) : nullptr;
-        engine_unlock(c->model);
-        if (es != GEIST_OK) {
-            end(c, piece, GEISTR_FINISH_ERROR);
-            return fail(c, GEISTR_BACKEND, "decode: %s", geist_session_errmsg(c->s));
-        }
-        c->stats.output_tokens++;
-        if (is_stop_token(c, t)) {
-            /* The model ended its turn; its marker is in the context now. */
-            c->end_marker = p;
-            if (!finish_stages(c))
-                return fail(c, GEISTR_NO_MEMORY, "out of memory");
-            end(c, piece, GEISTR_FINISH_STOP);
+            end(c, piece, why);
             continue;
         }
         if (p == nullptr)
@@ -1076,7 +1135,6 @@ geistr_status geistr_chat_next(geistr_chat *c, geistr_piece *piece) {
             return fail(c, c->utf8.failed ? GEISTR_BACKEND : GEISTR_NO_MEMORY,
                         c->utf8.failed ? "the model produced invalid UTF-8" : "a token piece is too long");
         }
-        str_output_thinking(&c->output, c->opts.thinking ? queue_thinking : nullptr);
         if (!str_output_feed(&c->output, text, to_stops, c))
             return fail(c, GEISTR_NO_MEMORY, "out of memory");
     }
@@ -1089,25 +1147,14 @@ geistr_status geistr_chat_cancel(geistr_chat *c) {
     return GEISTR_OK;
 }
 
-geistr_status geistr_chat_run(geistr_chat         *c,
-                              size_t               count,
-                              const geistr_message messages[],
-                              geistr_emit_fn       emit,
-                              void                *context) {
-    if (!emit)
-        return GEISTR_INVALID;
-    geistr_status s     = geistr_chat_send(c, count, messages);
-    geistr_piece  piece = {.size = sizeof piece};
-    while (s == GEISTR_OK && (s = geistr_chat_next(c, &piece)) == GEISTR_OK) {
-        if (piece.part == GEISTR_PART_END)
-            return GEISTR_OK;
-        if (!emit(context, &piece))
-            geistr_chat_cancel(c);
-    }
-    return s;
-}
-
 /* ---- rewind ---------------------------------------------------------------- */
+
+geistr_status geistr_chat_limit(geistr_chat *c, uint32_t max_tokens) {
+    if (!c || c->answering)
+        return GEISTR_INVALID;
+    c->opts.max_tokens = max_tokens;
+    return GEISTR_OK;
+}
 
 geistr_status geistr_chat_rewind(geistr_chat *c, size_t keep) {
     if (!c || keep > c->n_turns)
@@ -1203,7 +1250,7 @@ geistr_status geistr_decision_capability_get(const geistr_model *m, geistr_decis
     out->backend = geist_backend_name(m->be);
     out->engine_version = geist_version_string();
     out->engine_revision = GEISTR_ENGINE_REVISION;
-    out->available = geist_decision_available() && geist_decision_supported(m->m);
+    out->available = geist_decision_available() && geist_decision_mode_supported(m->m, GEIST_DECISION_DENSE);
     out->dense = out->available && geist_decision_mode_supported(m->m, GEIST_DECISION_DENSE);
     out->selected_rows = out->available && geist_decision_mode_supported(m->m, GEIST_DECISION_SELECTED_ROWS);
     return GEISTR_OK;
@@ -1280,7 +1327,7 @@ geistr_status geistr_decision_open(geistr_model *m, size_t error_cap, const geis
     }
     const enum geist_decision_mode numeric =
         mode == GEISTR_DECISION_DENSE ? GEIST_DECISION_DENSE : GEIST_DECISION_SELECTED_ROWS;
-    if (!m->decision.enabled || !geist_decision_available() || !geist_decision_supported(m->m) ||
+    if (!m->decision.enabled || !geist_decision_available() || !geist_decision_mode_supported(m->m, GEIST_DECISION_DENSE) ||
         !geist_decision_mode_supported(m->m, numeric)) {
         put_error(error, error_cap, "decision permission disabled or linked engine/model/mode unsupported");
         return GEISTR_FORMAT;
@@ -1441,11 +1488,10 @@ geistr_status geistr_decision_reset(geistr_decision *d) {
     d->n_prompt = d->n_candidates = 0;
     memset(d->logits, 0, sizeof d->logits);
     memset(d->probabilities, 0, sizeof d->probabilities);
-    engine_lock(d->model);
-    const enum geist_status es = geist_decision_reset(d->scorer);
-    engine_unlock(d->model);
+    /* geistlib dropped geist_decision_reset (126a2f4): every score starts
+     * from empty attention/recurrence state, so the engine has nothing to reset. */
     d->error[0] = 0;
-    return from_engine(es);
+    return GEISTR_OK;
 }
 geistr_status geistr_decision_cancel(geistr_decision *d) {
     if (!d)

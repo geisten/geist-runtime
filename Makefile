@@ -9,15 +9,13 @@
 #                    default: the engine's fetched SmolLM2; make fetch-model)
 #   make chat-real   build/chat-real: the example chat on the real runtime
 #   make geistr      build/geistr: the CLI (PULL=0: without the download module)
-#   make test-geistr the CLI against the reference model
+#   make test-geistr the CLI against the reference model (ONLY=serve,bench: some sections)
 #   make wheel       build/wheel/geistr-*.whl: the Python package (#9)
 #   make test-python pip install it into a venv; example and tests
-#   make parity SERVE_DIR=../geist-serve   templates byte-identical to geist-serve,
-#                    and the same catalog
 #
 # src/template.c and src/stream.c are the runtime's text side; src/runtime.c
 # binds them to geistlib (#4). src/stub.c implements include/geistr.h without
-# an engine, for the API conformance tests.
+# an engine, for the API conformance tests; src/common.c is what both share.
 
 CC       ?= cc
 CXX      ?= c++
@@ -33,12 +31,12 @@ LIB  := $(BUILD)/libgeistr-stub.a
 CORE := $(BUILD)/libgeistr-core.a
 TEXT := $(BUILD)/template.o $(BUILD)/stream.o $(BUILD)/catalog.o $(BUILD)/fit.o $(BUILD)/decision_config.o $(BUILD)/decision_profile.o
 
-all: $(LIB) $(CORE) $(BUILD)/test_api $(BUILD)/test_cxx $(BUILD)/test_template $(BUILD)/test_stream $(BUILD)/test_window $(BUILD)/test_catalog $(BUILD)/test_fit $(BUILD)/test_decision_config $(BUILD)/test_decision_profile $(BUILD)/chat
+all: $(LIB) $(CORE) $(BUILD)/test_api $(BUILD)/test_cxx $(BUILD)/test_template $(BUILD)/test_stream $(BUILD)/test_window $(BUILD)/test_catalog $(BUILD)/test_fit $(BUILD)/test_decision_config $(BUILD)/test_decision_profile $(BUILD)/test_render $(BUILD)/test_lineedit $(BUILD)/test_chat $(BUILD)/chat
 
 $(BUILD)/%.o: src/%.c src/*.h include/*.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(LIB): $(BUILD)/stub.o $(TEXT)
+$(LIB): $(BUILD)/stub.o $(BUILD)/common.o $(TEXT)
 	ar rcs $@ $^
 
 # Everything that needs no engine: templates, text stages, catalog, fit. For
@@ -75,6 +73,16 @@ $(BUILD)/test_decision_config: tests/test_decision_config.c $(LIB)
 $(BUILD)/test_decision_profile: tests/test_decision_profile.c tests/native_cases.h tests/fixtures/decisions/*.h $(TEXT)
 	$(CC) $(CFLAGS) -Isrc $< $(TEXT) $(LDFLAGS) $(LDLIBS) -o $@
 
+$(BUILD)/test_render: tests/test_render.c tools/geistr/render.c tools/geistr/render.h | $(BUILD)
+	$(CC) $(CFLAGS) -Itools/geistr tests/test_render.c tools/geistr/render.c $(LDFLAGS) -o $@
+
+CHAT_PARTS := tools/geistr/conversation.c tools/geistr/json.c tools/geistr/config.c
+$(BUILD)/test_chat: tests/test_chat.c $(CHAT_PARTS) tools/geistr/cli.h tools/geistr/json.h $(CORE) | $(BUILD)
+	$(CC) $(CFLAGS) -Itools/geistr -Isrc tests/test_chat.c $(CHAT_PARTS) $(CORE) $(LDFLAGS) -o $@
+
+$(BUILD)/test_lineedit: tests/test_lineedit.c tools/geistr/lineedit.c tools/geistr/lineedit.h | $(BUILD)
+	$(CC) $(CFLAGS) -Itools/geistr tests/test_lineedit.c tools/geistr/lineedit.c $(LDFLAGS) -o $@
+
 $(BUILD)/chat: examples/chat.c $(LIB)
 	$(CC) $(CFLAGS) $< $(LIB) $(LDFLAGS) $(LDLIBS) -o $@
 
@@ -94,6 +102,9 @@ test: all $(BUILD)/test_decide_driver
 	python3 tests/test_decision_evidence.py
 	python3 tests/test_catalog.py $(BUILD)/test_catalog models/catalog.json
 	$(BUILD)/test_fit
+	$(BUILD)/test_render
+	$(BUILD)/test_lineedit
+	$(BUILD)/test_chat
 	@out=$$(printf 'Hallo Welt\nnoch einmal\n' | $(BUILD)/chat stub:echo) && \
 	  echo "$$out" | grep -q 'Echo: noch einmal' && echo "example chat: two turns passed" || \
 	  { echo "example chat failed: $$out"; exit 1; }
@@ -102,7 +113,7 @@ test: all $(BUILD)/test_decide_driver
 ENGINE_GOALS := runtime test-real chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python $(BUILD)/test_decision_real
 ifneq (,$(filter $(ENGINE_GOALS),$(MAKECMDGOALS)))
 GEIST_REPO ?= https://github.com/geisten/geistlib.git
-GEIST_REF  ?= 5dd7e1747df86092a320e638c66993afd409e3b6
+GEIST_REF  ?= b682ef842fbbf71c17e007ddd18a4af68d3a6c06
 GEISTLIB   ?= geistlib
 DECISION   ?= 0
 ENGINE := $(shell GEIST_REPO='$(GEIST_REPO)' GEIST_REF='$(GEIST_REF)' \
@@ -139,7 +150,7 @@ $(ENGINE_LIB): FORCE
 $(BUILD)/runtime.o: src/runtime.c src/*.h include/*.h $(ENGINE_LIB) | $(BUILD)
 	$(CC) $(CFLAGS) $(ENGINE_CFLAGS) -isystem $(GEISTLIB)/include -c $< -o $@
 
-$(RUNTIME): $(BUILD)/runtime.o $(TEXT)
+$(RUNTIME): $(BUILD)/runtime.o $(BUILD)/common.o $(TEXT)
 	ar rcs $@ $^
 
 runtime: $(RUNTIME)
@@ -196,11 +207,23 @@ endif
 $(BUILD)/catalog_json.h: models/catalog.json | $(BUILD)
 	python3 -c 'import sys; d = open(sys.argv[1], "rb").read(); print("static const unsigned char embedded_catalog[] = {" + ",".join(map(str, d)) + "};")' $< > $@
 
-$(BUILD)/geistr: tools/geistr/geistr.c tools/geistr/decide.c tools/geistr/decide.h $(GEISTR_PULL) tools/geistr/pull.h $(BUILD)/catalog_json.h $(RUNTIME) $(ENGINE_LIB)
-	$(CC) $(CFLAGS) $(GEISTR_CFLAGS) -I$(BUILD) -Itools/geistr tools/geistr/geistr.c tools/geistr/decide.c $(GEISTR_PULL) $(RUNTIME) \
+$(BUILD)/geistr: tools/geistr/geistr.c tools/geistr/decide.c tools/geistr/decide.h tools/geistr/render.c tools/geistr/render.h tools/geistr/lineedit.c tools/geistr/lineedit.h tools/geistr/service.c tools/geistr/service.h tools/geistr/json.c tools/geistr/json.h tools/geistr/config.c tools/geistr/speed.c tools/geistr/conversation.c tools/geistr/chat.c tools/geistr/http.c tools/geistr/cli.h $(GEISTR_PULL) tools/geistr/pull.h $(BUILD)/catalog_json.h $(RUNTIME) $(ENGINE_LIB)
+	$(CC) $(CFLAGS) $(GEISTR_CFLAGS) -DGEISTR_ENGINE='"$(GEIST_REF)"' -I$(BUILD) -Itools/geistr -Isrc tools/geistr/geistr.c tools/geistr/decide.c tools/geistr/render.c tools/geistr/lineedit.c tools/geistr/service.c tools/geistr/json.c tools/geistr/config.c tools/geistr/speed.c tools/geistr/conversation.c tools/geistr/chat.c tools/geistr/http.c $(GEISTR_PULL) $(RUNTIME) \
 		$(ENGINE_LINK) $(GEISTR_LIBS) $(LDFLAGS) $(LDLIBS) -o $@
 
 geistr: $(BUILD)/geistr
+
+# ---- make install: the built geistr into $(DESTDIR)$(PREFIX)/bin ------------------
+# Not an engine goal: `sudo make install` copies, it never builds (as root) in
+# the engine checkout. geistlib and (on macOS) libomp are linked in statically.
+PREFIX ?= /usr/local
+install:
+	@test -x $(BUILD)/geistr || { echo "build it first: make geistr"; exit 1; }
+	install -d $(DESTDIR)$(PREFIX)/bin
+	install -m 755 $(BUILD)/geistr $(DESTDIR)$(PREFIX)/bin/geistr
+
+uninstall:
+	rm -f $(DESTDIR)$(PREFIX)/bin/geistr
 
 # The CLI against the reference model: run, chat, cancellation, catalog
 # (--json schema), pull from a local server (a GEISTR_TESTING build).
@@ -208,7 +231,7 @@ test-geistr:
 	@test -f "$(GEIST_TEST_MODEL)" || { echo "no reference model at $(GEIST_TEST_MODEL): make fetch-model"; exit 1; }
 	$(MAKE) BUILD=$(BUILD)/geistr-test GEISTR_CFLAGS=-DGEISTR_TESTING geistr
 	$(MAKE) BUILD=$(BUILD)/geistr-nonet PULL=0 geistr
-	python3 tests/test_geistr.py $(BUILD)/geistr-test/geistr $(BUILD)/geistr-nonet/geistr "$(GEIST_TEST_MODEL)" $(PULL)
+	GEISTR_TEST_ONLY=$(ONLY) python3 -u tests/test_geistr.py $(BUILD)/geistr-test/geistr $(BUILD)/geistr-nonet/geistr "$(GEIST_TEST_MODEL)" $(PULL)
 
 # An explicit target never skips: a missing model is an error, not a pass.
 test-real: $(BUILD)/test_real
@@ -216,7 +239,7 @@ test-real: $(BUILD)/test_real
 	GEIST_TEST_MODEL="$(GEIST_TEST_MODEL)" $(BUILD)/test_real
 
 $(BUILD)/test_decision_real: tests/test_decision_real.c tests/native_cases.h tests/fixtures/decisions/*.h $(RUNTIME) $(ENGINE_LIB)
-	$(CC) $(CFLAGS) $(ENGINE_CFLAGS) -Isrc -isystem $(GEISTLIB)/include $< $(TEXT) $(ENGINE_LINK) $(LDFLAGS) $(LDLIBS) -o $@
+	$(CC) $(CFLAGS) $(ENGINE_CFLAGS) -Isrc -isystem $(GEISTLIB)/include $< $(BUILD)/common.o $(TEXT) $(ENGINE_LINK) $(LDFLAGS) $(LDLIBS) -o $@
 
 test-decision-real: $(BUILD)/test_decision_real
 	$(BUILD)/test_decision_real "$(DECISION_MODEL)" "$(DECISION_PROFILE)" "$(DECISION_PROCESSOR)"
@@ -238,23 +261,6 @@ fetch-model:
 
 FORCE:
 
-# Byte parity with geist-serve's renderer (#2): make parity SERVE_DIR=../geist-serve
-parity: $(TEXT)
-	@test -f "$(SERVE_DIR)/src/template.c" || { echo "set SERVE_DIR to a geist-serve checkout"; exit 1; }
-	$(CC) $(CFLAGS) -Wno-conversion -I$(SERVE_DIR)/src -Itools/parity tools/parity/serve.c $(SERVE_DIR)/src/template.c -o $(BUILD)/parity_serve
-	$(CC) $(CFLAGS) -Isrc -Itools/parity tools/parity/geistr.c $(TEXT) -o $(BUILD)/parity_geistr
-	$(BUILD)/parity_serve > $(BUILD)/parity_serve.txt
-	$(BUILD)/parity_geistr > $(BUILD)/parity_geistr.txt
-	cmp $(BUILD)/parity_serve.txt $(BUILD)/parity_geistr.txt
-	@echo "parity with geist-serve: $$(grep -c '^== ' $(BUILD)/parity_serve.txt) renders identical"
-	sed 's|#include "../../build/app_tasks.h"|static const struct app_task task_registry[1]; static const char task_catalog[] = ""; static const struct app_quality_record quality_registry[1];|' \
-	  $(SERVE_DIR)/src/app/tasks.c > $(BUILD)/serve_tasks.c
-	$(CC) $(CFLAGS) -Wno-error -I$(SERVE_DIR)/src/app tools/parity/fit.c \
-	  $(SERVE_DIR)/src/app/core.c $(BUILD)/serve_tasks.c $(TEXT) -lm -o $(BUILD)/parity_fit
-	$(BUILD)/parity_fit
-	cmp models/catalog.json $(SERVE_DIR)/models/catalog.json
-	$(BUILD)/test_catalog --validate < $(SERVE_DIR)/models/catalog.json
-
 SAN := -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all
 sanitize:
 	$(MAKE) BUILD=$(BUILD)/san CFLAGS="-O1 -g $(SAN)" CXXFLAGS="-O1 -g $(SAN)" LDFLAGS="$(SAN)" test
@@ -262,4 +268,4 @@ sanitize:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: core all test sanitize parity clean runtime test-real chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python FORCE
+.PHONY: install uninstall core all test sanitize clean runtime test-real chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python FORCE

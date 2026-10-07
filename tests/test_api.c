@@ -241,6 +241,18 @@ static void test_limits(void) {
     geistr_stats st = {.size = sizeof st};
     CHECK(geistr_chat_stats(chat, &st) == GEISTR_OK && st.finish == GEISTR_FINISH_LENGTH && st.output_tokens == 2,
           "max_tokens ends with LENGTH");
+    /* geistr_chat_limit: a different limit for the next send. */
+    CHECK(geistr_chat_limit(chat, 3) == GEISTR_OK && geistr_chat_send(chat, 1, &msg) == GEISTR_OK,
+          "limit, then send");
+    CHECK(geistr_chat_limit(chat, 1) == GEISTR_INVALID, "no new limit while an answer runs");
+    CHECK(drain(chat, &got) == GEISTR_OK && geistr_chat_stats(chat, &st) == GEISTR_OK &&
+              st.finish == GEISTR_FINISH_LENGTH && st.output_tokens == 3,
+          "the new limit applies");
+    CHECK(geistr_chat_limit(chat, 0) == GEISTR_OK && geistr_chat_send(chat, 1, &msg) == GEISTR_OK &&
+              drain(chat, &got) == GEISTR_OK && geistr_chat_stats(chat, &st) == GEISTR_OK &&
+              st.finish == GEISTR_FINISH_STOP,
+          "0: the rest of the context");
+    CHECK(geistr_chat_limit(nullptr, 1) == GEISTR_INVALID, "limit needs a chat");
     geistr_chat_close(chat);
     geistr_model_close(model);
 

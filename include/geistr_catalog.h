@@ -65,7 +65,7 @@ typedef struct geistr_catalog_entry {
 /* Parse len bytes of catalog JSON (at most 1 MiB, at most 1024 models).
  * On failure *out is nullptr, the status is GEISTR_FORMAT (or NO_MEMORY /
  * INVALID), and error (if cap > 0) says why. Thread-safe. */
-geistr_status geistr_catalog_parse(const char *json, size_t len, geistr_catalog **out, char *error,
+GEISTR_NODISCARD geistr_status geistr_catalog_parse(const char *json, size_t len, geistr_catalog **out, char *error,
                                    size_t cap);
 
 /* A parsed catalog is immutable: safe to read from any number of threads. */
@@ -88,17 +88,17 @@ typedef enum geistr_install {
  * A file that changes while it is hashed is MISMATCH.
  * GEISTR_IO when the file exists but cannot be read. Never deletes anything.
  * Blocking; thread-safe for distinct files. */
-geistr_status geistr_catalog_check(const geistr_catalog_entry *entry, const char *models_dir,
+GEISTR_NODISCARD geistr_status geistr_catalog_check(const geistr_catalog_entry *entry, const char *models_dir,
                                    bool hash, geistr_install *out);
 
 /* The models folder shared with the geisten app: $GEISTEN_HOME/models, else
  * ~/Library/Application Support/geisten/models (macOS) or
  * ${XDG_DATA_HOME:-~/.local/share}/geisten/models. Not created here.
  * GEISTR_INVALID when HOME is unset or out is too small. */
-geistr_status geistr_models_dir(char *out, size_t cap);
+GEISTR_NODISCARD geistr_status geistr_models_dir(char *out, size_t cap);
 
 /* Lowercase hex SHA-256 of a file into out[65]. GEISTR_IO if unreadable. */
-geistr_status geistr_sha256_file(const char *path, char out[65]);
+GEISTR_NODISCARD geistr_status geistr_sha256_file(const char *path, char out[65]);
 
 /* Reference-suite counts of one task ("classify", "extract", …), or of all
  * tasks with task == nullptr. 0/0 when the entry has no such evidence. */
@@ -130,7 +130,7 @@ typedef struct geistr_device {
 /* Read this computer's memory, free disk in models_dir, cores and platform.
  * gpu is METAL on Apple Silicon; Vulkan is not probed yet (set it yourself).
  * GEISTR_IO when RAM cannot be read. */
-geistr_status geistr_device_probe(const char *models_dir, geistr_device *out);
+GEISTR_NODISCARD geistr_status geistr_device_probe(const char *models_dir, geistr_device *out);
 
 /* Measured here on one processor: tokens/s while answering and seconds to
  * the first token. rate 0 = not measured. */
@@ -205,7 +205,7 @@ typedef struct geistr_ranking geistr_ranking;
  * catalog (geistr_catalog_get) and may be nullptr (nothing installed or
  * measured); each element's size is local[0].size. The catalog must outlive
  * the ranking. */
-geistr_status geistr_rank(const geistr_catalog *catalog, const geistr_device *device, const geistr_local *local,
+GEISTR_NODISCARD geistr_status geistr_rank(const geistr_catalog *catalog, const geistr_device *device, const geistr_local *local,
                           const geistr_rank_opts *opts, geistr_ranking **out);
 void          geistr_ranking_free(geistr_ranking *ranking);
 /* In suitability order: verdict (good, usable, unknown, not recommended),
