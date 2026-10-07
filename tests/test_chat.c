@@ -2,6 +2,7 @@
  * model or a terminal: what each send carries, the system prompt, /clear,
  * storing and resuming. */
 #include "cli.h"
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,7 +45,7 @@ int main(void) {
     conv_file_new(&c);
     CHECK(conv_say(&c, "Hi", false) == 0);
     CHECK(is(&c, 0, "system", "Be brief.") && is(&c, 1, "user", "Hi") && c.n == 2);
-    conv_answered(&c, "Hello.");
+    conv_answered(&c, "Hello.", MARK_NONE);
     CHECK(!c.carry && is(&c, 2, "assistant", "Hello.") && files() == 1);
     struct stat st;
     CHECK(stat(c.file, &st) == 0 && (st.st_mode & 0777) == 0600);
@@ -58,7 +59,7 @@ int main(void) {
      * reads the conversation anew. */
     CHECK(conv_system(&c, "Be kind.") && c.carry && is(&c, 0, "system", "Be kind.") && c.n == 3);
     CHECK(conv_say(&c, "Why?", false) == 0);
-    conv_answered(&c, "Because.");
+    conv_answered(&c, "Because.", MARK_NONE);
     CHECK(conv_system(&c, "") && c.n == 4 && is(&c, 0, "user", "Hi"));
     CHECK(conv_system(&c, "New.") && c.n == 5 && is(&c, 0, "system", "New.") && is(&c, 1, "user", "Hi"));
     struct conversation empty = {};
@@ -71,7 +72,7 @@ int main(void) {
     conv_say(&c, "äöü äöü äöü äöü äöü äöü äöü äöü äöü äöü äöü äöü äöü äöü äöü äöü", false);
     q = conv_last_question(&c, &bytes);
     CHECK(bytes == 60 * 2 - 15); /* 45 umlauts of 2 bytes and 15 spaces */
-    conv_answered(&c, "…");
+    conv_answered(&c, "…", MARK_NONE);
 
     /* The next chat continues the newest, with its system prompt, carrying
      * it all; once it writes, the old file is gone. */
@@ -80,7 +81,7 @@ int main(void) {
     conv_resume(&next);
     CHECK(next.n == c.n && next.carry && !strcmp(next.system, "New.") && is(&next, 1, "user", "Hi"));
     CHECK(conv_say(&next, "More?", false) == 0);
-    conv_answered(&next, "Yes.");
+    conv_answered(&next, "Yes.", MARK_NONE);
     CHECK(files() == 1 && access(c.file, F_OK) != 0);
 
     /* /clear: a new conversation in a new file; the old file stays. */
@@ -89,7 +90,7 @@ int main(void) {
     conv_clear(&next);
     CHECK(!next.n && !next.carry && strcmp(next.file, before) && access(before, F_OK) == 0);
     conv_say(&next, "Fresh.", false);
-    conv_answered(&next, "Yes.");
+    conv_answered(&next, "Yes.", MARK_NONE);
     CHECK(files() == 2);
 
     /* A resumed conversation re-reads only its newest messages within a budget:
@@ -106,6 +107,30 @@ int main(void) {
     conv_push(&plain, "user", "a"), conv_push(&plain, "assistant", "b"), conv_push(&plain, "user", "c");
     CHECK(conv_budget(&plain, 1) == 2 && conv_budget(&plain, 3) == 0); /* no system prompt */
     conv_free(&big), conv_free(&plain);
+
+    /* An answer that looped is kept through the first copy of its cycle. */
+    CHECK(conv_loop_cut("Hello hello hello hello hello hello hello hello") == 5); /* "Hello": at a word */
+    const char *loop = "Sure! I can help. I can help. I can help. I can help. I can help.";
+    CHECK(conv_loop_cut(loop) == strlen("Sure! I can help.")); /* the first copy only */
+    CHECK(conv_loop_cut("No loop here, just a sentence that ends.") == strlen("No loop here, just a sentence that ends."));
+    CHECK(conv_loop_cut("ab ab ab") == 8);                       /* too short to be a loop */
+    CHECK(conv_loop_cut("Grüße! Grüße! Grüße! Grüße! Grüße!") == strlen("Grüße!"));
+
+    /* Marks are stored and come back; a cut answer is sent again with the next question. */
+    struct conversation m = {};
+    conv_file_new(&m);
+    conv_say(&m, "Loop?", false);
+    conv_answered(&m, "la la la", MARK_CUT);
+    m.unsent = m.n - 1;                        /* the chat dropped the looping answer: resend the cut one */
+    CHECK(conv_say(&m, "Stop?", false) == 1);  /* from the cut answer, not only the new question */
+    conv_answered(&m, "Stopp", MARK_STOPPED);
+    CHECK(m.unsent == SIZE_MAX && conv_say(&m, "Next.", false) == 4);
+    conv_refused(&m);
+    struct conversation back = {};
+    conv_file_new(&back);
+    conv_resume(&back);
+    CHECK(back.n == 4 && back.mark[1] == MARK_CUT && back.mark[3] == MARK_STOPPED && back.mark[0] == MARK_NONE);
+    conv_free(&m), conv_free(&back);
 
     /* /retry takes the last exchange back; /copy finds the answer and its code */
     struct conversation r = {};
@@ -137,6 +162,6 @@ int main(void) {
     CHECK(system(cmd) == 0);
     if (failures)
         return 1;
-    puts("chat conversation: what each send carries, system prompt, /clear, store and resume, resume budget, retry and copy passed");
+    puts("chat conversation: what each send carries, system prompt, /clear, store and resume, resume budget, retry and copy, looping and stopped answers passed");
     return 0;
 }

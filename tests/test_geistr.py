@@ -320,6 +320,26 @@ def section_resume():
     os.write(fd, b'/copy code\r'); until(fd, 'no code block')
     finish_chat(pid, fd)
 
+    # a conversation poisoned by the model's own loops: answers no longer grow, loops are kept cut and marked
+    loop = '"Hello, I\'m here to help you with your questions and ideas. ' + "I'm here to help you with your questions and ideas. " * 30
+    with open(os.path.join(chats, '9999999999998-1.jsonl'), 'w') as f:
+        for _ in range(7):
+            f.write(json.dumps({'role': 'user', 'content': 'Say hello in five words.'}) + '\n')
+            f.write(json.dumps({'role': 'assistant', 'content': loop}) + '\n')
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execve(geistr, [geistr, 'chat', 'ref', *base], {**env, 'TERM': 'xterm'})
+    until(fd, 'Ctrl-C twice exits'); time.sleep(.3)
+    for _ in range(5):
+        os.write(fd, b'Say hello in five words.\r'); until(fd, 'tok/s', 180); time.sleep(.5)
+    os.write(fd, b'\x04'); os.waitpid(pid, 0); os.close(fd)
+    newest = max(stored(), key=lambda n: os.stat(os.path.join(chats, n)).st_mtime)
+    answers = [m for m in lines(newest) if m['role'] == 'assistant'][7:]
+    sizes = [len(m['content']) for m in answers]
+    assert len(sizes) == 5 and max(sizes) <= 2 * sizes[0] + 40, sizes          # no longer growing
+    assert all(len(m['content']) < len(loop) // 4 for m in answers if m.get('cut')), sizes  # a loop: kept cut
+    os.remove(os.path.join(chats, newest))
+
     # resuming a long conversation re-reads only its newest messages (the budget)
     with open(os.path.join(chats, '9999999999999-1.jsonl'), 'w') as f:
         for i in range(40):
@@ -329,7 +349,7 @@ def section_resume():
     out = terminal_chat('Say OK.')
     assert '↻ 80 · ' in out and 'resumes the last' in out, out[-400:]
     assert time.time() - started < 60, time.time() - started
-    print('geistr chat: continues the last conversation in a terminal, --new, private files, input history, context meter, drop notice, resume budget, /retry, /copy, piped chats keep nothing passed')
+    print('geistr chat: continues the last conversation in a terminal, --new, private files, input history, context meter, drop notice, resume budget, /retry, /copy, loops cut, piped chats keep nothing passed')
 
 # ---- serve and chat --socket --------------------------------------------------
 def section_serve():

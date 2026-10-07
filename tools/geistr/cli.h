@@ -54,9 +54,12 @@ int    speed_compare(int n, const char **refs); /* geistr bench --compare [A [B]
 
 /* ---- conversation.c: what was said in a chat --------------------------------- */
 
+enum { MARK_NONE, MARK_STOPPED, MARK_CUT }; /* an answer stopped by Esc, or cut where it looped */
 struct conversation {
-    size_t n, cap;
-    char **role, **content;
+    size_t         n, cap;
+    char         **role, **content;
+    unsigned char *mark;   /* per message, MARK_… */
+    size_t         unsent; /* from here the chat does not hold the messages (SIZE_MAX: it holds all) */
     char   system[2048]; /* the system prompt for a new conversation */
     bool   carry;        /* the next send carries it all (a new model, prompt or temperature) */
     char   file[4400], resumed_from[4400]; /* "" when not kept */
@@ -75,7 +78,10 @@ size_t conv_say(struct conversation *c, const char *text, bool whole);
  * messages fit about `bytes` — at a user message, the newest question always;
  * the system prompt goes besides. 0 when everything fits. */
 size_t conv_budget(const struct conversation *c, size_t bytes);
-void   conv_answered(struct conversation *c, const char *answer); /* also stores it */
+void   conv_answered(struct conversation *c, const char *answer, int mark); /* also stores it */
+/* An answer that ended looping: the length to keep, through the first copy of
+ * the repeated part (all of it when no repeat is found at its end). */
+size_t conv_loop_cut(const char *answer);
 void   conv_refused(struct conversation *c);                      /* the chat refused the last message */
 /* /retry: the last answer and its question leave; the question into out.
  * false when the conversation does not end in an answer. */
