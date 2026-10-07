@@ -82,7 +82,7 @@ speed after each answer and continues your last conversation (see below).
 Type `/` for the commands:
 
 ```
-/model gemma4-e2b    switch the model, keep the conversation
+/model gemma4-e2b    switch the model, keep the conversation (best fit first)
 /gpu /cpu /auto      switch the processor (Metal on macOS, Vulkan on Linux)
 /temp 0.7            sampling temperature
 /system Be brief.    system prompt (/system off removes it)
@@ -95,7 +95,7 @@ Type `/` for the commands:
 |---|---|
 | Esc | stop the answer |
 | Ctrl-C | clear the line; twice on an empty line: exit |
-| ↑ ↓ | earlier lines; → takes the hint |
+| ↑ ↓ | earlier lines, also from earlier chats; → takes the hint |
 | `?` | the shortcuts |
 
 ### Your conversation stays

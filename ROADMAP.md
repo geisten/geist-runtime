@@ -7,21 +7,18 @@ change as we learn. Ideas and feedback are welcome in
 
 | | Theme | Goal |
 |---|---|---|
-| **Now** | Everyday chat | The chat remembers what you typed and shows the models that suit your computer first. |
-| **Next** | Tools and skills | The local model can act: call tools over MCP and run reusable skills. |
-| **Later** | A local AI platform | Build your own local AI on geistr, including fast, typed decisions instead of generated text. |
+| **Now** | Tools and skills | The local model can act: call tools over MCP and run reusable skills. |
+| **Next** | A local AI platform | Build your own local AI on geistr, including fast, typed decisions instead of generated text. |
 
-## Now: everyday chat
+## Done
 
-**Input history across sessions.** ↑ and ↓ already browse what you typed in
-the current chat. The history will persist between sessions, as in a shell,
-so a question from yesterday is one keystroke away.
+- **Input history across sessions.** ↑ and ↓ browse what you typed, also in
+  earlier chats (kept privately in the data folder; not with `resume off`).
+- **Models sorted by fit.** The model picker (`/model`) lists the installed
+  models best-for-this-computer first, by the same ranking as `geistr catalog`
+  uses for its verdicts.
 
-**Models sorted by fit.** `geistr catalog` already rates every model for this
-computer (RAM, CPU, GPU, measured speed). The model picker (`/model`) will use
-the same ranking, so the best model for your machine comes first.
-
-## Next: tools and skills
+## Now: tools and skills
 
 **MCP.** geistr becomes a [Model Context Protocol](https://modelcontextprotocol.io)
 host. Two paths, possibly both:
@@ -36,7 +33,7 @@ does not support it yet.
 this diff", "summarize my notes"), loaded by name in the chat and through the
 API.
 
-## Later: a local AI platform
+## Next: a local AI platform
 
 **A framework for building local AI.** Today's pieces (C runtime, Python
 package, OpenAI/Ollama API, model catalog with device fit) become a toolkit
