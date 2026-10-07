@@ -353,8 +353,7 @@ enum le_event le_feed(struct le *e, unsigned char c) {
             e->buf[e->pos++] = *add;
             e->buf[++e->len] = 0;
         }
-        draw(e, true);
-        return LE_MORE;
+        return LE_MORE; /* drawn when the paste ends */
     }
     if (c != '\t' && c != 16 && c != 14 && c != '\r' && c != '\n' && c != 27) { /* the line changes: a new list */
         e->sel    = 0;
@@ -462,7 +461,7 @@ enum le_event le_feed(struct le *e, unsigned char c) {
         memmove(e->buf + e->pos + 1, e->buf + e->pos, e->len - e->pos);
         e->buf[e->pos++] = (char) c;
         e->buf[++e->len] = 0;
-        if (partial(e)) /* wait for the rest of the character */
+        if (partial(e) || e->pasting) /* wait for the rest of the character, or the paste's end */
             return LE_MORE;
     }
     draw(e, true);

@@ -15,7 +15,7 @@
 #
 # src/template.c and src/stream.c are the runtime's text side; src/runtime.c
 # binds them to geistlib (#4). src/stub.c implements include/geistr.h without
-# an engine, for the API conformance tests.
+# an engine, for the API conformance tests; src/common.c is what both share.
 
 CC       ?= cc
 CXX      ?= c++
@@ -36,7 +36,7 @@ all: $(LIB) $(CORE) $(BUILD)/test_api $(BUILD)/test_cxx $(BUILD)/test_template $
 $(BUILD)/%.o: src/%.c src/*.h include/*.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(LIB): $(BUILD)/stub.o $(TEXT)
+$(LIB): $(BUILD)/stub.o $(BUILD)/common.o $(TEXT)
 	ar rcs $@ $^
 
 # Everything that needs no engine: templates, text stages, catalog, fit. For
@@ -138,7 +138,7 @@ $(ENGINE_LIB): FORCE
 $(BUILD)/runtime.o: src/runtime.c src/*.h include/geistr.h $(ENGINE_LIB) | $(BUILD)
 	$(CC) $(CFLAGS) -isystem $(GEISTLIB)/include -c $< -o $@
 
-$(RUNTIME): $(BUILD)/runtime.o $(TEXT)
+$(RUNTIME): $(BUILD)/runtime.o $(BUILD)/common.o $(TEXT)
 	ar rcs $@ $^
 
 runtime: $(RUNTIME)

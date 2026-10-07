@@ -120,20 +120,18 @@ static char *slurp(const char *path, size_t *len) {
  * only models the engine runs. An update of geistr is the catalog's update. */
 geistr_catalog *load_catalog(void) {
     char            error[256];
-    geistr_catalog *c    = nullptr;
-    const char     *file = catalog_file;
-    if (file) {
+    geistr_catalog *c = nullptr;
+    if (catalog_file) {
         size_t len  = 0;
-        char  *text = slurp(file, &len);
+        char  *text = slurp(catalog_file, &len);
         if (!text) {
-            fprintf(stderr, "geistr: cannot read %s\n", file);
+            fprintf(stderr, "geistr: cannot read %s\n", catalog_file);
             return nullptr;
         }
         if (geistr_catalog_parse(text, len, &c, error, sizeof error) != GEISTR_OK)
-            fprintf(stderr, "geistr: %s: %s\n", file, error);
+            fprintf(stderr, "geistr: %s: %s\n", catalog_file, error);
         free(text);
-        if (c || catalog_file)
-            return c;
+        return c;
     }
     if (geistr_catalog_parse((const char *) embedded_catalog, sizeof embedded_catalog, &c, error, sizeof error) !=
         GEISTR_OK)
@@ -364,18 +362,14 @@ static void on_stop(int signal) {
 
 static int serve(const char *name, const char *processor, const char *socket, const char *http, size_t chats) {
     struct session x;
-    geistr_reasoning reasoning;
-    char             path[4200];
-    int              rc = resolve(name, path, sizeof path, &reasoning);
-    if (rc == OK)
-        rc = session_open(&x, name, processor, 0, true);
+    int            rc = session_open(&x, name, processor, 0, true);
     if (rc != OK)
         return rc;
     geistr_chat_close(x.chat); /* the service opens its own */
     struct sigaction sa = {.sa_handler = on_stop};
     sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
-    struct svc_options o = {.model = x.model, .reasoning = reasoning, .name = x.name, .socket = socket,
+    struct svc_options o = {.model = x.model, .reasoning = x.reasoning, .name = x.name, .socket = socket,
                             .http = http, .chats = chats, .stop = &stopping};
     rc = service_run(&o) ? ERROR : OK;
     geistr_model_close(x.model);
@@ -482,7 +476,7 @@ int main(int argc, char **argv) {
     if (data_folder())
         config_load();
     const char *command = args[0];
-    if (!strcmp(command, "config") && n <= 64)
+    if (!strcmp(command, "config"))
         return processor ? usage() : config(n, args);
     if (!processor)
         processor = cfg.processor;
