@@ -332,7 +332,7 @@ def section_resume():
     until(fd, 'Ctrl-C twice exits'); time.sleep(.3)
     for _ in range(5):
         os.write(fd, b'Say hello in five words.\r'); until(fd, 'tok/s', 180); time.sleep(.5)
-    os.write(fd, b'\x04'); os.waitpid(pid, 0); os.close(fd)
+    finish_chat(pid, fd)
     newest = max(stored(), key=lambda n: os.stat(os.path.join(chats, n)).st_mtime)
     answers = [m for m in lines(newest) if m['role'] == 'assistant'][7:]
     sizes = [len(m['content']) for m in answers]
