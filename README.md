@@ -4,6 +4,13 @@ Run language models on your own computer: download, chat, serve. One small
 binary, no Python, no Docker, no account. The model runs locally, on the CPU
 or the GPU.
 
+> [!WARNING]
+> **geistr is at an early stage (v0.1).** It works and every change is tested
+> on Linux and macOS, but expect rough edges: commands, settings and file formats may
+> still change between versions, and the model list is small. Please
+> [report what breaks or confuses you](https://github.com/geisten/geist-runtime/issues);
+> early feedback shapes what comes next ([roadmap](ROADMAP.md)).
+
 ![geistr chat in action: qwen3-0.6b answers on the CPU, /model switches to gemma4-e2b on the GPU for a table, and a new session continues the conversation](docs/demo.gif)
 
 ## Install
