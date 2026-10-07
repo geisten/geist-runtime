@@ -121,7 +121,7 @@ _ranking_count = _fn("geistr_ranking_count", C.c_size_t, _p)
 _ranking_get = _fn("geistr_ranking_get", C.POINTER(_Fit), _p, C.c_size_t)
 
 _STATUS = ["ok", "invalid", "no_memory", "io", "format", "context", "backend", "cancelled"]
-_FINISH = [None, "stop", "length", "context", "cancelled", "error"]
+_FINISH = [None, "stop", "length", "context", "cancelled", "error", "repetition"]
 _INSTALL = ["available", "unverified", "installed", "mismatch"]
 _RESOURCE = ["fits", "limited", "unavailable"]
 

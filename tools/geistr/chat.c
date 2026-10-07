@@ -360,6 +360,9 @@ int answer_once(const char *name, const char *prompt, const char *processor) {
     md_finish(&out.view);
     putchar('\n');
     speed(x.chat, x.name, x.backend, s == GEISTR_OK, "answer", stderr);
+    geistr_stats done = {.size = sizeof done};
+    if (geistr_chat_stats(x.chat, &done) == GEISTR_OK && done.finish == GEISTR_FINISH_REPETITION)
+        fputs("geistr: the answer repeated itself; stopped there\n", stderr);
     if (s != GEISTR_OK && s != GEISTR_CANCELLED)
         fprintf(stderr, "geistr: %s: %s\n", geistr_status_text(s), geistr_chat_error(x.chat));
     running = nullptr;
@@ -575,6 +578,11 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
         md_finish(&shown.view);
         free(turn);
         puts(s == GEISTR_CANCELLED ? " [stopped]" : "");
+        geistr_stats done = {.size = sizeof done};
+        if (remote ? !strcmp(rs.finish, "repetition")
+                   : geistr_chat_stats(x.chat, &done) == GEISTR_OK && done.finish == GEISTR_FINISH_REPETITION)
+            printf("%s  ⟲ it repeated itself: stopped there · /clear for a fresh conversation%s\n",
+                   tty_out() ? "\033[2m" : "", tty_out() ? "\033[0m" : "");
         if (s == GEISTR_OK || s == GEISTR_CANCELLED) {
             conv_answered(&said, shown.text);
             if (s == GEISTR_OK && remote) {

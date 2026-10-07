@@ -13,6 +13,7 @@
  */
 #pragma once
 #include <stddef.h>
+#include <stdint.h>
 
 /* Token pieces may end inside a UTF-8 character. Emits only complete,
  * validated code points (no overlongs, surrogates or values above U+10FFFF).
@@ -67,3 +68,11 @@ void str_stops_free(struct str_stops *s);
 bool str_stops_feed(struct str_stops *s, const char *text, str_emit_fn emit, void *context);
 /* The answer is over: emit what was held back (it matched no stop string). */
 bool str_stops_finish(struct str_stops *s, str_emit_fn emit, void *context);
+
+/* ---- repetition: an answer that loops ---------------------------------------
+ * True when the tokens end in one cycle repeated back to back: a period of 4
+ * to 256 tokens, at least 3 times and at least 48 tokens in all. A small model
+ * can repeat itself without end (the more so when its earlier repetitions are
+ * in the conversation); this ends such an answer. Prose, lists and tables do
+ * not repeat a whole token sequence that often. */
+bool str_repeats(const int32_t *tokens, size_t n);

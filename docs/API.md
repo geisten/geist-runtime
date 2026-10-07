@@ -129,6 +129,15 @@ job in the stateful design (#4, `GEISTR_OVERFLOW_DROP_OLDEST`).
 3. **Stop strings** (D11): the answer ends before the first match; a
    possible start of one is held back across tokens.
 
+Besides the text, the answer's tokens are watched for a loop (`str_repeats`):
+when it ends in one cycle repeated back to back (a period of 4 to 256
+tokens, at least 3 times and 48 tokens in all; runs of 1 to 3 tokens such
+as 64 zeros are data, not a loop), the answer ends there with finish
+`REPETITION`. Small models do this, and the more so when their earlier
+loops are in the conversation. With a temperature above 0 each chat gets a
+fresh sampling seed: geistlib's seed 0 is one fixed seed, so every process
+would otherwise sample the same answer.
+
 Stages 1 and 2 are geist-serve's `app_utf8_feed` and `src/app/output.c`,
 moved with only names changed; their tests are ported unchanged
 (`tests/test_stream.c`: every split position, literal Markdown, Unicode,

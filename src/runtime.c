@@ -424,6 +424,8 @@ struct geistr_chat {
     size_t      answer_turn;   /* index of its assistant turn */
     const char *end_marker;    /* the model's own end-of-turn text, if it ended so */
     char       *raw;           /* the generated text, markers included (the history) */
+    int32_t    *recent;        /* the answer's tokens, for str_repeats */
+    size_t      n_recent, cap_recent;
     size_t      raw_len, raw_cap;
     uint32_t    limit;
     /* text stages and the pieces they produced */
@@ -452,6 +454,33 @@ static void stops_free(char **stops, size_t n) {
     free(stops);
 }
 
+/* The token t joins the answer: does the answer loop now? (str_repeats) */
+static bool looping(geistr_chat *c, int32_t t) {
+    if (c->n_recent == c->cap_recent) {
+        size_t   cap   = c->cap_recent ? c->cap_recent * 2 : 256;
+        int32_t *grown = realloc(c->recent, cap * sizeof *grown);
+        if (!grown)
+            return false; /* no memory to watch with: the answer goes on */
+        c->recent = grown, c->cap_recent = cap;
+    }
+    c->recent[c->n_recent++] = t;
+    return str_repeats(c->recent, c->n_recent);
+}
+
+/* A seed for sampling: /dev/urandom, else the clock and the process. */
+static uint64_t fresh_seed(void) {
+    uint64_t seed = 0;
+    FILE    *f    = fopen("/dev/urandom", "rb");
+    if (!f || fread(&seed, sizeof seed, 1, f) != 1) {
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        seed = (uint64_t) ts.tv_nsec ^ ((uint64_t) ts.tv_sec << 20) ^ (uint64_t) getpid();
+    }
+    if (f)
+        fclose(f);
+    return seed ? seed : 1; /* 0 would mean the fixed seed */
+}
+
 geistr_status geistr_chat_open(geistr_model *m, const geistr_chat_opts *opts, geistr_chat **out) {
     if (out)
         *out = nullptr;
@@ -478,7 +507,11 @@ geistr_status geistr_chat_open(geistr_model *m, const geistr_chat_opts *opts, ge
         snprintf(m->error, sizeof m->error, "chat: out of memory or an empty stop string");
         return s;
     }
-    struct geist_session_opts so = {.max_seq_len = m->context, .temperature = o.temperature, .top_p = o.top_p};
+    /* geistlib uses one fixed seed when given 0: every process would sample the same "random" answer. */
+    struct geist_session_opts so = {.max_seq_len = m->context,
+                                    .temperature = o.temperature,
+                                    .top_p       = o.top_p,
+                                    .random_seed = o.temperature > 0 ? fresh_seed() : 0};
     engine_lock(m);
     enum geist_status es = geist_session_create(m->m, m->be, &so, &c->s);
     engine_unlock(m);
@@ -529,6 +562,7 @@ void geistr_chat_close(geistr_chat *c) {
     free(c->queue);
     str_stops_free(&c->stop);
     free(c->raw);
+    free(c->recent);
     free(c->piece);
     free(c);
     model_release(m);
@@ -903,6 +937,7 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
     str_stops_init(&c->stop, c->opts.n_stop, (const char *const *) c->stops);
     c->started  = start;
     c->error[0] = 0;
+    c->n_recent = 0;
     c->stats    = (geistr_stats) {
            .size             = sizeof c->stats,
            .input_tokens     = (uint32_t) input,
@@ -1024,6 +1059,12 @@ geistr_status geistr_chat_next(geistr_chat *c, geistr_piece *piece) {
             return fail(c, GEISTR_BACKEND, "decode: %s", geist_session_errmsg(c->s));
         }
         c->stats.output_tokens++;
+        if (!is_stop_token(c, t) && looping(c, t)) {
+            if (!finish_stages(c))
+                return fail(c, GEISTR_NO_MEMORY, "out of memory");
+            end(c, piece, GEISTR_FINISH_REPETITION);
+            continue;
+        }
         if (is_stop_token(c, t)) {
             /* The model ended its turn; its marker is in the context now. */
             c->end_marker = p;

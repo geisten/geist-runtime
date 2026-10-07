@@ -249,7 +249,8 @@ typedef enum geistr_finish {
     GEISTR_FINISH_LENGTH,    /* max_tokens reached */
     GEISTR_FINISH_CONTEXT,   /* the context window is full */
     GEISTR_FINISH_CANCELLED, /* geistr_chat_cancel or emit */
-    GEISTR_FINISH_ERROR      /* see geistr_chat_error */
+    GEISTR_FINISH_ERROR,     /* see geistr_chat_error */
+    GEISTR_FINISH_REPETITION /* the answer repeated one passage back to back; ended there */
 } geistr_finish;
 
 typedef struct geistr_stats {
