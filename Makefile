@@ -31,7 +31,7 @@ LIB  := $(BUILD)/libgeistr-stub.a
 CORE := $(BUILD)/libgeistr-core.a
 TEXT := $(BUILD)/template.o $(BUILD)/stream.o $(BUILD)/catalog.o $(BUILD)/fit.o
 
-all: $(LIB) $(CORE) $(BUILD)/test_api $(BUILD)/test_cxx $(BUILD)/test_template $(BUILD)/test_stream $(BUILD)/test_window $(BUILD)/test_catalog $(BUILD)/test_fit $(BUILD)/test_render $(BUILD)/test_lineedit $(BUILD)/chat
+all: $(LIB) $(CORE) $(BUILD)/test_api $(BUILD)/test_cxx $(BUILD)/test_template $(BUILD)/test_stream $(BUILD)/test_window $(BUILD)/test_catalog $(BUILD)/test_fit $(BUILD)/test_render $(BUILD)/test_lineedit $(BUILD)/test_chat $(BUILD)/chat
 
 $(BUILD)/%.o: src/%.c src/*.h include/*.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -70,6 +70,10 @@ $(BUILD)/test_fit: tests/test_fit.c $(TEXT)
 $(BUILD)/test_render: tests/test_render.c tools/geistr/render.c tools/geistr/render.h | $(BUILD)
 	$(CC) $(CFLAGS) -Itools/geistr tests/test_render.c tools/geistr/render.c $(LDFLAGS) -o $@
 
+CHAT_PARTS := tools/geistr/conversation.c tools/geistr/json.c tools/geistr/config.c
+$(BUILD)/test_chat: tests/test_chat.c $(CHAT_PARTS) tools/geistr/cli.h tools/geistr/json.h $(CORE) | $(BUILD)
+	$(CC) $(CFLAGS) -Itools/geistr -Isrc tests/test_chat.c $(CHAT_PARTS) $(CORE) $(LDFLAGS) -o $@
+
 $(BUILD)/test_lineedit: tests/test_lineedit.c tools/geistr/lineedit.c tools/geistr/lineedit.h | $(BUILD)
 	$(CC) $(CFLAGS) -Itools/geistr tests/test_lineedit.c tools/geistr/lineedit.c $(LDFLAGS) -o $@
 
@@ -90,6 +94,7 @@ test: all
 	$(BUILD)/test_fit
 	$(BUILD)/test_render
 	$(BUILD)/test_lineedit
+	$(BUILD)/test_chat
 	@out=$$(printf 'Hallo Welt\nnoch einmal\n' | $(BUILD)/chat stub:echo) && \
 	  echo "$$out" | grep -q 'Echo: noch einmal' && echo "example chat: two turns passed" || \
 	  { echo "example chat failed: $$out"; exit 1; }
@@ -190,8 +195,8 @@ endif
 $(BUILD)/catalog_json.h: models/catalog.json | $(BUILD)
 	python3 -c 'import sys; d = open(sys.argv[1], "rb").read(); print("static const unsigned char embedded_catalog[] = {" + ",".join(map(str, d)) + "};")' $< > $@
 
-$(BUILD)/geistr: tools/geistr/geistr.c tools/geistr/render.c tools/geistr/render.h tools/geistr/lineedit.c tools/geistr/lineedit.h tools/geistr/service.c tools/geistr/service.h tools/geistr/json.c tools/geistr/json.h tools/geistr/config.c tools/geistr/speed.c tools/geistr/cli.h $(GEISTR_PULL) tools/geistr/pull.h $(BUILD)/catalog_json.h $(RUNTIME) $(ENGINE_LIB)
-	$(CC) $(CFLAGS) $(GEISTR_CFLAGS) -DGEISTR_ENGINE='"$(GEIST_REF)"' -I$(BUILD) -Itools/geistr -Isrc tools/geistr/geistr.c tools/geistr/render.c tools/geistr/lineedit.c tools/geistr/service.c tools/geistr/json.c tools/geistr/config.c tools/geistr/speed.c $(GEISTR_PULL) $(RUNTIME) \
+$(BUILD)/geistr: tools/geistr/geistr.c tools/geistr/render.c tools/geistr/render.h tools/geistr/lineedit.c tools/geistr/lineedit.h tools/geistr/service.c tools/geistr/service.h tools/geistr/json.c tools/geistr/json.h tools/geistr/config.c tools/geistr/speed.c tools/geistr/conversation.c tools/geistr/chat.c tools/geistr/cli.h $(GEISTR_PULL) tools/geistr/pull.h $(BUILD)/catalog_json.h $(RUNTIME) $(ENGINE_LIB)
+	$(CC) $(CFLAGS) $(GEISTR_CFLAGS) -DGEISTR_ENGINE='"$(GEIST_REF)"' -I$(BUILD) -Itools/geistr -Isrc tools/geistr/geistr.c tools/geistr/render.c tools/geistr/lineedit.c tools/geistr/service.c tools/geistr/json.c tools/geistr/config.c tools/geistr/speed.c tools/geistr/conversation.c tools/geistr/chat.c $(GEISTR_PULL) $(RUNTIME) \
 		$(ENGINE_LINK) $(GEISTR_LIBS) $(LDFLAGS) $(LDLIBS) -o $@
 
 geistr: $(BUILD)/geistr

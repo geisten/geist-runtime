@@ -1,6 +1,7 @@
 /* cli.h — what the parts of the geistr CLI share. */
 #pragma once
 #include "geistr_catalog.h"
+#include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,3 +49,58 @@ void   speeds_load(const geistr_catalog *c, geistr_local *local);
 double reference_rate(const geistr_catalog_entry *m, const char *proc); /* the catalog's; 0 if none */
 void   speed_bar(const char *symbol, double measured, double reference, double max, int width, bool tty);
 int    speed_compare(int n, const char **refs); /* geistr bench --compare [A [B]] */
+
+/* ---- conversation.c: what was said in a chat --------------------------------- */
+
+struct conversation {
+    size_t n, cap;
+    char **role, **content;
+    char   system[2048]; /* the system prompt for a new conversation */
+    bool   carry;        /* the next send carries it all (a new model, prompt or temperature) */
+    char   file[4400], resumed_from[4400]; /* "" when not kept */
+};
+
+void conv_push(struct conversation *c, const char *role, const char *content);
+void conv_clear(struct conversation *c); /* /clear: a new conversation, and a new file */
+void conv_free(struct conversation *c);
+/* /system: set it, and in the conversation (first, or removed); true when a
+ * chat holding the conversation has to read it anew. */
+bool conv_system(struct conversation *c, const char *text);
+/* The user said text: where the next send starts (0 = all of it; whole for a
+ * service, which finds what it holds). */
+size_t conv_say(struct conversation *c, const char *text, bool whole);
+void   conv_answered(struct conversation *c, const char *answer); /* also stores it */
+void   conv_refused(struct conversation *c);                      /* the chat refused the last message */
+/* The last question and its first 60 characters' bytes, for "↻ … „…“". */
+const char *conv_last_question(const struct conversation *c, int *bytes);
+void        conv_file_new(struct conversation *c);
+void        conv_store(struct conversation *c);
+void        conv_resume(struct conversation *c); /* the newest conversation, if any */
+
+/* ---- chat.c: geistr chat and run --------------------------------------------- */
+
+/* A model with a chat on it, and the choices behind both. Replaced as a whole
+ * by a runtime switch (/gpu, /model …); the conversation moves along. */
+struct session {
+    geistr_model *model;
+    geistr_chat  *chat;
+    char          name[256], processor[8], backend[16], format[16];
+    double        temperature;
+    uint32_t      context;
+};
+
+extern geistr_chat *volatile running; /* the answer Ctrl-C stops */
+extern volatile sig_atomic_t interrupted;
+void on_interrupt(int signal);
+
+int  session_open(struct session *x, const char *name, const char *processor, double temperature, bool interactive);
+void session_close(struct session *x);
+bool on_gpu(const struct session *x);
+int  answer_once(const char *name, const char *prompt, const char *processor); /* geistr run */
+int  chat(const char *name, const char *processor, const char *remote, bool fresh); /* remote: a service's socket */
+
+/* ---- geistr.c --------------------------------------------------------------- */
+
+extern const char *models_dir;
+geistr_catalog    *load_catalog(void);
+int                resolve(const char *model, char *path, size_t cap, geistr_reasoning *reasoning);
