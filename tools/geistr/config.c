@@ -9,7 +9,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-struct settings cfg = {.processor = "auto", .markdown = true, .stats = true, .intro = true, .resume = true};
+struct settings cfg = {.processor = "auto", .markdown = true, .stats = true, .intro = true, .resume = true, .history = true};
 char            config_path[4200], data_dir[4096];
 static char     config_dir[4096];
 
@@ -29,6 +29,7 @@ static const struct setting {
         {.key = "stats", .kind = SWITCH, .at = &cfg.stats},
         {.key = "intro", .kind = SWITCH, .at = &cfg.intro},
         {.key = "resume", .kind = SWITCH, .at = &cfg.resume},
+        {.key = "history", .kind = SWITCH, .at = &cfg.history},
 };
 enum { N_SETTINGS = sizeof settings / sizeof *settings };
 

@@ -18,7 +18,7 @@ enum { OK = 0, ERROR = 1, USAGE = 2, CANCELLED = 130 }; /* exit codes */
 struct settings {
     char   model[256], processor[8], system[2048];
     double temperature;
-    bool   markdown, stats, intro, resume;
+    bool   markdown, stats, intro, resume, history;
 };
 extern struct settings cfg;
 extern char            config_path[4200], data_dir[4096]; /* "" when unknown */

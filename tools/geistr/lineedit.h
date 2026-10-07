@@ -40,7 +40,10 @@ struct le {
     size_t         n_esc;
     char         **history; /* oldest first; owned */
     size_t         n_history, browsing;
-    char           draft[4096]; /* the line being typed while browsing history */
+    char           draft[4096]; /* the line being typed while browsing or searching history */
+    bool           searching;   /* Ctrl-R: an incremental search back through the history */
+    char           query[256];
+    size_t         n_query, found; /* found: the matching entry, n_history if none */
     size_t         sel;         /* the chosen entry of the list */
     bool           closed;      /* Esc closed the list until the line changes */
     unsigned       menu_rows;   /* list rows of the last drawing */
@@ -58,7 +61,7 @@ void          le_init(struct le *e, FILE *out, unsigned width, le_complete_fn co
 void          le_free(struct le *e);
 void          le_begin(struct le *e, const char *prompt); /* a new line: draw the prompt */
 enum le_event le_feed(struct le *e, unsigned char byte);
-void          le_remember(struct le *e, const char *line); /* add to the history */
+void          le_remember(struct le *e, const char *line); /* add to the history (not if it starts with a space) */
 void          le_escape(struct le *e); /* the Esc key alone: close the list */
 void          le_type_ahead(struct le *e, const unsigned char *keys, size_t n);
 
