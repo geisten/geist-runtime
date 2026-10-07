@@ -103,7 +103,7 @@ test: all
 ENGINE_GOALS := runtime test-real chat-real fetch-model geistr test-geistr shared wheel test-python
 ifneq (,$(filter $(ENGINE_GOALS),$(MAKECMDGOALS)))
 GEIST_REPO ?= https://github.com/geisten/geistlib.git
-GEIST_REF  ?= 1b5380a2acc60c1690d45d2a90f76f5c4a58ebcb
+GEIST_REF  ?= b682ef842fbbf71c17e007ddd18a4af68d3a6c06
 GEISTLIB   ?= geistlib
 ENGINE := $(shell GEIST_REPO='$(GEIST_REPO)' GEIST_REF='$(GEIST_REF)' \
                   GEISTLIB='$(GEISTLIB)' sh scripts/sync-engine.sh >&2 && echo ok)
