@@ -92,7 +92,8 @@ static int usage(void) {
           "       geistr chat <model>\n"
           "       geistr catalog [--installed | --available] [--json]\n"
           "       geistr pull [id]               a model, or: update the installed ones to this catalog\n"
-          "       geistr config [key [value]]   (keys: model processor temperature system markdown stats intro resume)\n"
+          "       geistr config [key [value]]   keys: model processor temperature system markdown stats\n"
+          "                                     intro resume history resume_tokens\n"
           "       geistr bench [model…]          tokens/s on ⚙ CPU and ⚡ GPU, shown in geistr catalog\n"
           "       geistr bench --compare [A [B]] two geistlib commits' bench speeds and the change in %\n"
           "       geistr serve <model> [--socket=PATH] [--chats N] [--http[=ADDR:PORT]]\n"
@@ -221,7 +222,7 @@ static int catalog(bool installed_only, bool available_only, bool json) {
     bool           tty = tty_out();
     struct winsize ws;
     int            columns = tty && ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col ? ws.ws_col : 80;
-    int            bar     = (columns - 66 - 2 * 9) / 2;
+    int            bar     = (columns - 66 - 2 * 9 - 20) / 2; /* 20: a row's note (⚠ free RAM tight) */
     bar                    = !tty ? 0 : bar > 12 ? 12 : bar < 4 ? 0 : bar;
     double max             = 0;
     for (size_t i = 0; i < n; i++) {
@@ -482,6 +483,13 @@ int main(int argc, char **argv) {
         first += 2;
     }
     if (first < argc && !strcmp(argv[first], "decide")) {
+        if (first + 1 < argc && (!strcmp(argv[first + 1], "--help") || !strcmp(argv[first + 1], "-h"))) {
+            fputs("usage: geistr decide <model> --config FILE --question TEXT --option ID DESC [--option ID DESC…]\n"
+                  "       --question-file FILE|-  --context TEXT  --processor auto|cpu|gpu\n"
+                  "       --mode dense|selected_rows  --profile NAME  --models DIR  --catalog FILE\n",
+                  stdout);
+            return OK;
+        }
         if (!models_dir) {
             if (geistr_models_dir(default_models, sizeof default_models) != GEISTR_OK) {
                 fputs("geistr: no model folder: set HOME or GEISTEN_HOME, or use --models\n", stderr);
@@ -573,6 +581,18 @@ int main(int argc, char **argv) {
             return ERROR;
         }
         snprintf(socket_path, sizeof socket_path, "%s/geistr.sock", data_dir);
+        /* A socket path has at most 103 bytes; for a long data folder, a
+         * private runtime folder (only ours: another user's socket must not
+         * stand in for the service). */
+        for (const char *const *v = (const char *const[]) {"XDG_RUNTIME_DIR", "TMPDIR", nullptr};
+             strlen(socket_path) > 103 && *v; v++) {
+            const char *run = getenv(*v);
+            struct stat st;
+            if (run && *run && strlen(run) < 80 && stat(run, &st) == 0 && S_ISDIR(st.st_mode) &&
+                st.st_uid == getuid() && !(st.st_mode & 022))
+                snprintf(socket_path, sizeof socket_path, "%s%sgeistr.sock", run,
+                         run[strlen(run) - 1] == '/' ? "" : "/");
+        }
         socket = socket_path;
     }
     if (!strcmp(command, "serve") && n == 2)
