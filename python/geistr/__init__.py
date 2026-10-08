@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 __all__ = ["catalog", "chat", "open", "models_dir", "Model", "Chat", "Piece", "Entry", "GeistrError"]
-__version__ = "0.1.2"
+__version__ = "0.2.0"
 
 _HERE = Path(__file__).resolve().parent
 _lib = C.CDLL(os.environ.get("GEISTR_LIBRARY") or str(_HERE / ("libgeistr.dylib" if sys.platform == "darwin" else "libgeistr.so")))
