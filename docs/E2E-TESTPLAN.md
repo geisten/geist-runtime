@@ -54,6 +54,16 @@ Rules that keep agent runs reliable:
   it as a human would.
 - **Watch the load.** A busy CPU slows geistr's threads badly (#93); note the
   load average in the report, and re-run timing cases on an idle machine.
+- **Wait for the idle prompt**, not for a count of lines: `/clear` and
+  scrolling change counts. Idle means the last non-empty line is
+  `^(⚡|⚙)( NN%)? >$`.
+- **One tmux server per tester** (`tmux -L <name>`), when several agents test
+  at once, so they don't close each other's sessions.
+- **Short paths for the service:** a Unix socket path holds about 100 bytes,
+  so keep `GEISTEN_HOME` short for section H, or pass a short `--socket=`.
+- **`/copy` evidence:** run the chat under `script -q -f -c '…' out.log` and
+  decode the OSC 52 payload (`\e]52;c;<base64>\a`) from the log; tmux's
+  own clipboard capture is unreliable.
 
 ## A. Install, update, version
 
