@@ -114,6 +114,7 @@ struct session {
     bool             embedding; /* the catalog says so (#91): it serves, it does not chat */
 };
 extern bool serving; /* session_open for geistr serve: embedding models too */
+extern const char *files_option; /* --files DIR (#91) */
 
 extern geistr_chat *volatile running; /* the answer Ctrl-C stops */
 extern volatile sig_atomic_t interrupted;

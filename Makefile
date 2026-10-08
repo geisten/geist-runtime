@@ -192,7 +192,7 @@ test-python: wheel $(BUILD)/abi_sizes
 	rm -rf $(BUILD)/venv && python3 -m venv $(BUILD)/venv
 	$(BUILD)/venv/bin/pip install -q $(BUILD)/wheel/geistr-*.whl
 	cd $(BUILD) && venv/bin/python ../examples/chat.py "$(abspath $(GEIST_TEST_MODEL))" < /dev/null
-	$(BUILD)/venv/bin/python tests/test_python.py "$(abspath $(GEIST_TEST_MODEL))" $(BUILD)/abi_sizes
+	GEIST_TEST_EMBED_MODEL="$(abspath $(GEIST_TEST_EMBED_MODEL))" $(BUILD)/venv/bin/python tests/test_python.py "$(abspath $(GEIST_TEST_MODEL))" $(BUILD)/abi_sizes
 
 # ---- the geistr CLI (#11) -------------------------------------------------------
 # PULL=1 adds the download module (libcurl); PULL=0 builds without network code.
@@ -207,8 +207,8 @@ endif
 $(BUILD)/catalog_json.h: models/catalog.json | $(BUILD)
 	python3 -c 'import sys; d = open(sys.argv[1], "rb").read(); print("static const unsigned char embedded_catalog[] = {" + ",".join(map(str, d)) + "};")' $< > $@
 
-$(BUILD)/geistr: tools/geistr/geistr.c tools/geistr/decide.c tools/geistr/decide.h tools/geistr/render.c tools/geistr/render.h tools/geistr/lineedit.c tools/geistr/lineedit.h tools/geistr/service.c tools/geistr/service.h tools/geistr/json.c tools/geistr/json.h tools/geistr/config.c tools/geistr/speed.c tools/geistr/conversation.c tools/geistr/chat.c tools/geistr/http.c tools/geistr/cli.h $(GEISTR_PULL) tools/geistr/pull.h $(BUILD)/catalog_json.h $(RUNTIME) $(ENGINE_LIB)
-	$(CC) $(CFLAGS) $(GEISTR_CFLAGS) -DGEISTR_ENGINE='"$(GEIST_REF)"' -I$(BUILD) -Itools/geistr -Isrc tools/geistr/geistr.c tools/geistr/decide.c tools/geistr/render.c tools/geistr/lineedit.c tools/geistr/service.c tools/geistr/json.c tools/geistr/config.c tools/geistr/speed.c tools/geistr/conversation.c tools/geistr/chat.c tools/geistr/http.c $(GEISTR_PULL) $(RUNTIME) \
+$(BUILD)/geistr: tools/geistr/geistr.c tools/geistr/decide.c tools/geistr/decide.h tools/geistr/render.c tools/geistr/render.h tools/geistr/lineedit.c tools/geistr/lineedit.h tools/geistr/service.c tools/geistr/service.h tools/geistr/json.c tools/geistr/json.h tools/geistr/config.c tools/geistr/speed.c tools/geistr/conversation.c tools/geistr/chat.c tools/geistr/http.c tools/geistr/files.c tools/geistr/files.h tools/geistr/cli.h $(GEISTR_PULL) tools/geistr/pull.h $(BUILD)/catalog_json.h $(RUNTIME) $(ENGINE_LIB)
+	$(CC) $(CFLAGS) $(GEISTR_CFLAGS) -DGEISTR_ENGINE='"$(GEIST_REF)"' -I$(BUILD) -Itools/geistr -Isrc tools/geistr/geistr.c tools/geistr/decide.c tools/geistr/render.c tools/geistr/lineedit.c tools/geistr/service.c tools/geistr/json.c tools/geistr/config.c tools/geistr/speed.c tools/geistr/conversation.c tools/geistr/chat.c tools/geistr/http.c tools/geistr/files.c $(GEISTR_PULL) $(RUNTIME) \
 		$(ENGINE_LINK) $(GEISTR_LIBS) $(LDFLAGS) $(LDLIBS) -o $@
 
 geistr: $(BUILD)/geistr

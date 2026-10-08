@@ -38,6 +38,7 @@
 #include "service.h"
 #include "json.h"
 #include "cli.h"
+#include "files.h"
 #include "decide.h"
 
 #include <time.h>
@@ -90,6 +91,7 @@ static const char *decision_config_file;
 static int usage(void) {
     fputs("usage: geistr run <model> [prompt…]\n"
           "       geistr chat <model>\n"
+          "       geistr index <folder>         your files for chat --files (text, Markdown, PDF)\n"
           "       geistr catalog [--installed | --available] [--json]\n"
           "       geistr pull [id]               a model, or: update the installed ones to this catalog\n"
           "       geistr config [key [value]]   keys: model processor temperature system markdown stats\n"
@@ -104,6 +106,7 @@ static int usage(void) {
           "          --mode dense|selected_rows  --profile NAME\n"
           "catalog: --decision-config FILE (permission only; does not load a model)\n"
           "options: --models DIR  --catalog FILE  --cpu  --gpu  --threads N  --new (chat)\n"
+          "         --files DIR (chat, run: answers from your files, #91)\n"
           "<model> is a catalog id or a path to a .gguf file\n",
           stderr);
     return USAGE;
@@ -615,6 +618,8 @@ int main(int argc, char **argv) {
             comparing = true;
         else if (!strcmp(argv[i], "--new"))
             fresh = true;
+        else if (!strcmp(argv[i], "--files") && i + 1 < argc)
+            files_option = argv[++i];
         else if (!strcmp(argv[i], "--cpu") || !strcmp(argv[i], "--gpu"))
             processor = argv[i] + 2;
         else if (!strcmp(argv[i], "--version")) {
@@ -705,6 +710,13 @@ int main(int argc, char **argv) {
         return chat(args[1], processor, nullptr, fresh);
     if (!strcmp(command, "bench"))
         return comparing ? speed_compare(n - 1, args + 1) : bench(n - 1, n > 1 ? args + 1 : nullptr);
+    if (!strcmp(command, "index") && n == 2) {
+        struct sigaction sa = {.sa_handler = on_interrupt};
+        sigaction(SIGINT, &sa, nullptr);
+        struct files *f = files_open(args[1], false);
+        files_close(f);
+        return f ? OK : interrupted ? CANCELLED : ERROR;
+    }
     if (!strcmp(command, "pull") && n <= 2)
         return n == 2 ? pull(args[1]) : pull_all();
     if (!strcmp(command, "run") && n >= 2) {

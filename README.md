@@ -103,6 +103,7 @@ from 80 %, red from 95 %); `/info` always shows it. Type `/` for the commands:
 /temp 0.7            sampling temperature
 /system Be brief.    system prompt (/system off removes it)
 /info                what runs now, and how full the context is
+/files ~/Notes       answers from your files (/files off: none)
 /retry               the last answer again (at temperature 0: once at 0.7)
 /copy  /copy code    the last answer, or its last code block, to the clipboard
 /save                keep model, processor, temperature and system prompt
@@ -145,6 +146,21 @@ out, and the chat says so (`↥ 12 oldest messages left out …`).
 - `geistr chat --new` starts fresh once; `geistr config resume off` always.
 - Piped chats (`echo … | geistr chat`) keep nothing, so scripts stay reproducible.
 
+### Ask your own files
+
+```
+geistr pull bitnet-embed-0.6b      # the embedding model, 428 MB, once
+geistr index ~/Notes               # text, Markdown, PDF (with pdftotext)
+geistr chat --files ~/Notes        # or /files ~/Notes in a chat
+```
+
+Each question gets the most relevant passages of your files put in front of
+it, and the answer shows where they came from (`sources: garden/shed.md`).
+`geistr run --files ~/Notes "…"` does the same once. The index is updated by
+file hash whenever you use the folder, so only new and changed files are
+read again. It stays on your computer, readable only by you, in the data
+folder (`index/`); hidden files and folders are left out.
+
 ## Use it from other tools
 
 Keep a model loaded and talk to it over the OpenAI or Ollama API, e.g. from
@@ -177,8 +193,10 @@ what is new.
 | endpoint | |
 |---|---|
 | `POST /v1/chat/completions` | OpenAI: `messages`, `temperature`, `max_tokens` / `max_completion_tokens`, `stop`, `stream` (SSE, `stream_options.include_usage`), `tools` / `tool_choice` |
+| `POST /v1/embeddings` | OpenAI: `input` (a text or a list), `encoding_format` (`float`, `base64`); with an embedding model |
 | `GET /v1/models` | the one model |
 | `POST /api/chat` | Ollama: `messages`, `stream` (NDJSON, default), `options.temperature`, `num_predict`, `stop`, `tools` |
+| `POST /api/embed` | Ollama: `input` (a text or a list); with an embedding model |
 | `GET /api/tags`, `/api/version`, `/` | the model, the version, a health check |
 
 There is no authentication. By default geistr listens on loopback only and
@@ -199,7 +217,15 @@ also fetches its vision tower (the vision tensors of the original model, a
 `image_url` part with a `data:` URL (OpenAI) or `images` (Ollama), PNG, JPEG
 or BMP, one per message; the image goes with the last message, and the
 conversation keeps it for the follow-up questions. Other models refuse images
-(400). Not supported yet: embeddings, more than one model.
+(400).
+
+**Embeddings**: `geistr serve bitnet-embed-0.6b --http` answers
+`/v1/embeddings` (the OpenAI SDK's `embeddings.create` works) and Ollama's
+`/api/embed`: unit-length vectors of 1024 dimensions, multilingual. For
+retrieval, put a one-line task before a query (`Instruct: Given a question,
+retrieve passages that answer the question\nQuery: …`), nothing before
+documents. An embedding model does not chat, and a chat model does not
+embed (400). Not supported yet: more than one model per service.
 
 Without `--http`, `geistr serve` listens on a Unix socket only (owner only,
 0600), and `geistr chat --socket` chats through it. `--chats N` sets how many
