@@ -239,24 +239,227 @@ static char *content_of(const struct json *j, int t) {
     return all.s ? all.s : strdup("");
 }
 
-static bool read_messages(const struct json *j, struct svc_request *r) {
+/* ---- tools: Qwen3's format (Hermes style), as its chat template renders it --
+ * The tool list goes into the system message; an assistant's earlier calls
+ * become <tool_call> blocks, tool results a user turn of <tool_response>
+ * blocks. The answer's calls come back as <tool_call> blocks (calls_parse). */
+
+/* The model has a tool format geistr renders. ponytail: Qwen3 only, the
+ * catalog's tool-trained family; another family needs its own format. */
+static bool tools_supported(const struct svc_options *o) {
+    geistr_model_info i = {.size = sizeof i};
+    return geistr_model_info_get(o->model, &i) == GEISTR_OK && i.arch && !strcmp(i.arch, "qwen3");
+}
+
+static const char tools_head[] =
+        "# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with "
+        "function signatures within <tools></tools> XML tags:\n<tools>";
+static const char tools_tail[] =
+        "\n</tools>\n\nFor each function call, return a json object with function name and arguments within "
+        "<tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": "
+        "<args-json-object>}\n</tool_call>";
+
+/* An assistant message's tool_calls after its content, as <tool_call> blocks.
+ * OpenAI's arguments are a JSON string, Ollama's an object. */
+static char *with_calls(const struct json *j, int calls, const char *content) {
+    struct text t;
+    FILE       *f = text_open(&t);
+    if (!f)
+        return nullptr;
+    fputs(content, f);
+    for (int call = json_next(j, calls, -1); call >= 0; call = json_next(j, calls, call)) {
+        int    fn   = json_field(j, call, "function");
+        char  *name = json_string(j, json_field(j, fn, "name"));
+        int    a    = json_field(j, fn, "arguments");
+        char  *text = json_string(j, a); /* OpenAI: the arguments' JSON as a string */
+        size_t len  = 0;
+        const char *raw = text ? text : json_raw(j, a, &len);
+        fputs(ftell(f) ? "\n<tool_call>\n{\"name\": " : "<tool_call>\n{\"name\": ", f);
+        json_write(f, name ? name : "");
+        fputs(", \"arguments\": ", f);
+        text ? (void) fputs(text, f) : raw ? (void) fwrite(raw, 1, len, f) : (void) fputs("{}", f);
+        fputs("}\n</tool_call>", f);
+        free(name), free(text);
+    }
+    fclose(f);
+    return t.s;
+}
+
+/* messages, and with tools (a list, already checked) their rendering. */
+static bool read_messages(const struct json *j, struct svc_request *r, int tools) {
     int list = json_field(j, 0, "messages");
     int n    = json_count(j, list);
-    if (n < 1 || !(r->messages = calloc((size_t) n, sizeof *r->messages)))
+    if (n < 1 || !(r->messages = calloc((size_t) n + 1, sizeof *r->messages))) /* +1: a system message for tools */
         return false;
-    r->n = (size_t) n;
-    int item = -1;
-    for (int k = 0; k < n; k++) {
+    size_t k = 0, results = SIZE_MAX; /* results: the user turn that collects tool results */
+    int    item = -1;
+    for (int m = 0; m < n; m++) {
         item       = json_next(j, list, item);
         char *role = json_string(j, json_field(j, item, "role"));
         if (role && !strcmp(role, "developer")) /* OpenAI's newer name for system */
             free(role), role = strdup("system");
+        char *content = content_of(j, json_field(j, item, "content"));
+        if (!content && role && !strcmp(role, "assistant")) /* only tool_calls: no content at all */
+            content = strdup("");
+        if (!role || !content) {
+            free(role), free(content);
+            return r->n = k, false;
+        }
+        int calls = json_field(j, item, "tool_calls");
+        if (tools >= 0 && !strcmp(role, "assistant") && json_count(j, calls) > 0) {
+            char *both = with_calls(j, calls, content);
+            free(content), content = both;
+        }
+        if (tools >= 0 && !strcmp(role, "tool")) { /* a result: into the user turn of results */
+            struct text t;
+            FILE       *f = text_open(&t);
+            if (f) {
+                if (results == k - 1 && k)
+                    fprintf(f, "%s\n", r->messages[k - 1].content);
+                fprintf(f, "<tool_response>\n%s\n</tool_response>", content);
+                fclose(f);
+            }
+            free(content), free(role);
+            if (!t.s)
+                return r->n = k, false;
+            if (results == k - 1 && k) {
+                free((char *) r->messages[k - 1].content);
+                r->messages[k - 1].content = t.s;
+                continue;
+            }
+            role = strdup("user"), content = t.s, results = k;
+        }
         r->messages[k].role    = role;
-        r->messages[k].content = content_of(j, json_field(j, item, "content"));
-        if (!r->messages[k].role || !r->messages[k].content)
+        r->messages[k].content = content;
+        k++;
+        if (!role || !content)
+            return r->n = k, false;
+    }
+    r->n = k;
+    if (tools < 0)
+        return true;
+    /* the tool list into the system message: after its text, or a new one first */
+    struct text t;
+    FILE       *f      = text_open(&t);
+    bool        system = !strcmp(r->messages[0].role, "system");
+    if (!f)
+        return false;
+    if (system)
+        fprintf(f, "%s\n\n", r->messages[0].content);
+    fputs(tools_head, f);
+    for (int tool = json_next(j, tools, -1); tool >= 0; tool = json_next(j, tools, tool)) {
+        size_t      len = 0;
+        const char *raw = json_raw(j, tool, &len);
+        fputc('\n', f), fwrite(raw, 1, len, f);
+    }
+    fputs(tools_tail, f);
+    fclose(f);
+    if (!t.s)
+        return false;
+    if (system)
+        free((char *) r->messages[0].content), r->messages[0].content = t.s;
+    else {
+        memmove(r->messages + 1, r->messages, r->n * sizeof *r->messages);
+        r->messages[0] = (geistr_message) {strdup("system"), t.s};
+        r->n++;
+        if (!r->messages[0].role)
             return false;
     }
     return true;
+}
+
+/* The request's tools: their list's token, -1 without (or tool_choice none);
+ * -2 when the model has no tool format (the client is told so, 400). */
+static int request_tools(const struct svc_options *o, const struct json *j) {
+    int   tools  = json_field(j, 0, "tools");
+    char *choice = json_string(j, json_field(j, 0, "tool_choice"));
+    bool  none   = choice && !strcmp(choice, "none");
+    free(choice);
+    if (json_count(j, tools) < 1 || none)
+        return -1;
+    return tools_supported(o) ? tools : -2;
+}
+
+/* ---- the answer's calls ------------------------------------------------------ */
+
+#define CALLS_MAX 16
+struct calls {
+    size_t n;
+    char  *name[CALLS_MAX], *args[CALLS_MAX]; /* args: a JSON object's text */
+};
+
+static void calls_free(struct calls *c) {
+    for (size_t i = 0; i < c->n; i++)
+        free(c->name[i]), free(c->args[i]);
+    c->n = 0;
+}
+
+/* The <tool_call> blocks of text (the last one may be unclosed): their name
+ * and arguments; the count of valid ones. */
+static size_t calls_parse(const char *text, struct calls *c) {
+    *c = (struct calls) {};
+    for (const char *p = text; (p = strstr(p, "<tool_call>")) && c->n < CALLS_MAX;) {
+        p += strlen("<tool_call>");
+        const char *end  = strstr(p, "</tool_call>");
+        size_t      len  = end ? (size_t) (end - p) : strlen(p);
+        char       *body = strndup(p, len);
+        struct json j    = {};
+        if (body && json_parse(&j, body, len)) {
+            char       *name = json_string(&j, json_field(&j, 0, "name"));
+            size_t      n    = 0;
+            const char *args = json_raw(&j, json_field(&j, 0, "arguments"), &n);
+            if (name && args && body[args - body - 1] != '"') { /* an object, not a string */
+                c->name[c->n] = name;
+                c->args[c->n] = strndup(args, n);
+                c->n += c->args[c->n] != nullptr;
+            } else
+                free(name);
+        }
+        json_free(&j);
+        free(body);
+        p += len;
+    }
+    return c->n;
+}
+
+/* Streaming with tools: text goes out until "<tool_call>" begins (a possible
+ * start of it is held); from there on it is calls, read at the end. */
+struct hold {
+    bool   tools, calling;
+    char  *text; /* held: a possible start of "<tool_call>", or the calls */
+    size_t n;
+};
+
+/* What of text can go out now (into out[0..*n)); false when out of memory. */
+static bool hold_feed(struct hold *h, const char *text, char **out, size_t *n) {
+    size_t add  = strlen(text);
+    char  *grow = realloc(h->text, h->n + add + 1);
+    if (!grow)
+        return false;
+    h->text = grow;
+    memcpy(h->text + h->n, text, add + 1);
+    h->n += add;
+    *out = h->text, *n = 0;
+    if (h->calling)
+        return true;
+    char *at = strstr(h->text, "<tool_call>");
+    if (at) {
+        *n         = (size_t) (at - h->text);
+        h->calling = true;
+        return true;
+    }
+    size_t keep = 0; /* the longest end that may begin "<tool_call>" */
+    for (size_t k = h->n < 10 ? h->n : 10; k > 0 && !keep; k--)
+        if (!strncmp(h->text + h->n - k, "<tool_call>", k))
+            keep = k;
+    *n = h->n - keep;
+    return true;
+}
+
+/* After hold_feed: drop what went out. */
+static void hold_sent(struct hold *h, size_t n) {
+    memmove(h->text, h->text + n, h->n - n + 1);
+    h->n -= n;
 }
 
 /* stop: a string or a list of strings. */
@@ -287,7 +490,23 @@ struct openai {
     char        id[32];
     long long   created;
     bool        stream, usage, started;
+    struct hold hold; /* with tools: what may be a call */
 };
+
+/* OpenAI's tool_calls: an array of {id, type, function: {name, arguments}}
+ * (arguments as a JSON string); in a stream delta, with their index. */
+static void openai_calls(FILE *f, const char *id, const struct calls *c, bool delta) {
+    fputc('[', f);
+    for (size_t i = 0; i < c->n; i++) {
+        fprintf(f, "%s{", i ? "," : "");
+        if (delta)
+            fprintf(f, "\"index\":%zu,", i);
+        fprintf(f, "\"id\":\"call_%s_%zu\",\"type\":\"function\",\"function\":{\"name\":", id, i);
+        json_write(f, c->name[i]);
+        fputs(",\"arguments\":", f), json_write(f, c->args[i]), fputs("}}", f);
+    }
+    fputc(']', f);
+}
 
 /* A chunk whose delta has the role (the first), content, or neither (the last). */
 static void openai_chunk(struct openai *a, bool role, const char *content, const char *finish) {
@@ -318,7 +537,21 @@ static bool openai_part(void *ctx, const char *text, size_t len) {
     if (!a->stream) /* the answer comes whole, to done */
         return true;
     openai_start(a);
-    openai_chunk(a, false, text, nullptr);
+    if (!a->hold.tools)
+        openai_chunk(a, false, text, nullptr);
+    else { /* text until a call begins */
+        char  *ready;
+        size_t n;
+        if (!hold_feed(&a->hold, text, &ready, &n))
+            return false;
+        if (n) {
+            char *content = strndup(ready, n);
+            if (content)
+                openai_chunk(a, false, content, nullptr);
+            free(content);
+            hold_sent(&a->hold, n);
+        }
+    }
     return fflush(a->out) != EOF;
 }
 
@@ -349,8 +582,27 @@ static void openai_done(void *ctx, const geistr_stats *st, const char *answer) {
     char           usage[128];
     snprintf(usage, sizeof usage, "{\"prompt_tokens\":%u,\"completion_tokens\":%u,\"total_tokens\":%u}", prompt,
              st->output_tokens, prompt + st->output_tokens);
+    struct calls calls = {};
+    if (a->hold.tools) { /* the answer's calls, if it made any */
+        const char *text = a->stream ? (a->hold.calling ? a->hold.text : "") : answer;
+        if (calls_parse(text ? text : "", &calls))
+            finish = "tool_calls";
+        else if (a->stream && a->hold.n) { /* no call after all: the held text is content */
+            openai_start(a);
+            openai_chunk(a, false, a->hold.text, nullptr);
+        }
+    }
     if (a->stream) {
         openai_start(a);
+        if (calls.n) {
+            fprintf(a->out, "data: {\"id\":\"%s\",\"object\":\"chat.completion.chunk\",\"created\":%lld,\"model\":",
+                    a->id, a->created);
+            json_write(a->out, a->model);
+            fputs(",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":", a->out);
+            openai_calls(a->out, a->id, &calls, true);
+            fputs("},\"finish_reason\":null}]}\n\n", a->out);
+        }
+        calls_free(&calls);
         openai_chunk(a, false, nullptr, finish);
         if (a->usage)
             fprintf(a->out,
@@ -369,7 +621,18 @@ static void openai_done(void *ctx, const geistr_stats *st, const char *answer) {
     fprintf(f, "{\"id\":\"%s\",\"object\":\"chat.completion\",\"created\":%lld,\"model\":", a->id, a->created);
     json_write(f, a->model);
     fputs(",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":", f);
-    json_write(f, answer);
+    if (calls.n) { /* the text before the calls, if any, and the calls */
+        const char *at = strstr(answer, "<tool_call>");
+        size_t      n  = at ? (size_t) (at - answer) : 0;
+        while (n && strchr(" \t\r\n", answer[n - 1]))
+            n--;
+        char *before = strndup(answer, n);
+        before && *before ? json_write(f, before) : (void) fputs("null", f);
+        free(before);
+        fputs(",\"tool_calls\":", f), openai_calls(f, a->id, &calls, false);
+    } else
+        json_write(f, answer);
+    calls_free(&calls);
     fprintf(f, "},\"finish_reason\":\"%s\"}],\"usage\":%s}", finish, usage);
     respond_json(a->out, 200, &body);
 }
@@ -392,9 +655,14 @@ static void openai_error(void *ctx, geistr_status status, const char *text) {
 
 static void openai_chat(const struct svc_options *o, struct held *pool, FILE *out, const struct json *j) {
     static unsigned    serial;
-    struct svc_request r   = {};
-    int                max = json_field(j, 0, "max_completion_tokens");
-    if (!read_messages(j, &r)) {
+    struct svc_request r     = {};
+    int                max   = json_field(j, 0, "max_completion_tokens");
+    int                tools = request_tools(o, j);
+    if (tools == -2) {
+        error_json(out, 400, true, "this model has no tool-calling format (tools work with Qwen3 models)", nullptr);
+        return;
+    }
+    if (!read_messages(j, &r, tools)) {
         svc_free_request(&r);
         error_json(out, 400, true, "messages: a list of messages with role and content", nullptr);
         return;
@@ -409,7 +677,9 @@ static void openai_chat(const struct svc_options *o, struct held *pool, FILE *ou
                              .stream  = json_bool(j, json_field(j, 0, "stream"), false),
                              .usage   = json_bool(j, json_field(j, options, "include_usage"), false)};
     snprintf(a.id, sizeof a.id, "chatcmpl-%x%x", (unsigned) a.created, ++serial);
+    a.hold.tools = tools >= 0;
     svc_chat(o, pool, &r, &(struct svc_sink) {&a, openai_part, openai_done, openai_error, openai_alive});
+    free(a.hold.text);
     svc_free_request(&r);
 }
 
@@ -431,7 +701,19 @@ struct ollama {
     FILE       *out;
     const char *model;
     bool        stream, started;
+    struct hold hold; /* with tools: what may be a call */
 };
+
+/* Ollama's tool_calls: [{function: {name, arguments}}], arguments an object. */
+static void ollama_calls(FILE *f, const struct calls *c) {
+    fputc('[', f);
+    for (size_t i = 0; i < c->n; i++) {
+        fprintf(f, "%s{\"function\":{\"name\":", i ? "," : "");
+        json_write(f, c->name[i]);
+        fprintf(f, ",\"arguments\":%s}}", c->args[i]);
+    }
+    fputc(']', f);
+}
 
 static void ollama_head(struct ollama *a, FILE *f) {
     char now[32];
@@ -446,9 +728,22 @@ static bool ollama_part(void *ctx, const char *text, size_t len) {
         return true;
     if (!a->started)
         a->started = true, stream_begin(a->out, "application/x-ndjson");
-    ollama_head(a, a->out);
-    fputs(",\"message\":{\"role\":\"assistant\",\"content\":", a->out), json_write(a->out, text);
-    fputs("},\"done\":false}\n", a->out);
+    char  *ready = nullptr;
+    size_t n     = strlen(text);
+    if (a->hold.tools) { /* text until a call begins */
+        if (!hold_feed(&a->hold, text, &ready, &n))
+            return false;
+        text = ready;
+    }
+    if (n) {
+        char *content = strndup(text, n);
+        ollama_head(a, a->out);
+        fputs(",\"message\":{\"role\":\"assistant\",\"content\":", a->out), json_write(a->out, content ? content : "");
+        fputs("},\"done\":false}\n", a->out);
+        free(content);
+        if (a->hold.tools)
+            hold_sent(&a->hold, n);
+    }
     return fflush(a->out) != EOF;
 }
 
@@ -470,9 +765,28 @@ static void ollama_done(void *ctx, const geistr_stats *st, const char *answer) {
     }
     if (a->stream && !a->started)
         a->started = true, stream_begin(a->out, "application/x-ndjson");
+    struct calls calls = {};
+    const char  *rest  = "";
+    if (a->hold.tools) { /* the answer's calls, if it made any */
+        const char *text = a->stream ? (a->hold.calling ? a->hold.text : "") : answer;
+        if (!calls_parse(text ? text : "", &calls) && a->stream && a->hold.n)
+            rest = a->hold.text; /* no call after all: the held text is content */
+    }
+    char *before = nullptr; /* without a stream: the text before the calls */
+    if (!a->stream && calls.n) {
+        const char *at = strstr(answer, "<tool_call>");
+        size_t      n  = at ? (size_t) (at - answer) : 0;
+        while (n && strchr(" \t\r\n", answer[n - 1]))
+            n--;
+        before = strndup(answer, n);
+    }
     ollama_head(a, f);
     fputs(",\"message\":{\"role\":\"assistant\",\"content\":", f);
-    json_write(f, a->stream ? "" : answer);
+    json_write(f, a->stream ? rest : calls.n ? (before ? before : "") : answer);
+    free(before);
+    if (calls.n)
+        fputs(",\"tool_calls\":", f), ollama_calls(f, &calls);
+    calls_free(&calls);
     fprintf(f,
             "},\"done\":true,\"done_reason\":\"%s\",\"total_duration\":%.0f,\"load_duration\":0,"
             "\"prompt_eval_count\":%u,\"prompt_eval_duration\":%.0f,\"eval_count\":%u,\"eval_duration\":%.0f}%s",
@@ -494,7 +808,12 @@ static void ollama_error(void *ctx, geistr_status status, const char *text) {
 static void ollama_chat(const struct svc_options *o, struct held *pool, FILE *out, const struct json *j) {
     struct svc_request r       = {};
     int                options = json_field(j, 0, "options");
-    if (!read_messages(j, &r)) {
+    int                tools   = request_tools(o, j);
+    if (tools == -2) {
+        error_json(out, 400, false, "this model has no tool-calling format (tools work with Qwen3 models)", nullptr);
+        return;
+    }
+    if (!read_messages(j, &r, tools)) {
         svc_free_request(&r);
         error_json(out, 400, false, "messages: a list of messages with role and content", nullptr);
         return;
@@ -503,8 +822,12 @@ static void ollama_chat(const struct svc_options *o, struct held *pool, FILE *ou
     double predict = json_number(j, json_field(j, options, "num_predict"), 0);
     r.max          = predict > 0 ? (unsigned) predict : 0; /* -1: unlimited */
     read_stop(j, json_field(j, options, "stop"), &r);
-    struct ollama a = {.out = out, .model = o->name, .stream = json_bool(j, json_field(j, 0, "stream"), true)};
+    struct ollama a = {.out    = out,
+                       .model  = o->name,
+                       .stream = json_bool(j, json_field(j, 0, "stream"), true),
+                       .hold   = {.tools = tools >= 0}};
     svc_chat(o, pool, &r, &(struct svc_sink) {&a, ollama_part, ollama_done, ollama_error, ollama_alive});
+    free(a.hold.text);
     svc_free_request(&r);
 }
 

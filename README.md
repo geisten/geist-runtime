@@ -176,17 +176,23 @@ what is new.
 
 | endpoint | |
 |---|---|
-| `POST /v1/chat/completions` | OpenAI: `messages`, `temperature`, `max_tokens` / `max_completion_tokens`, `stop`, `stream` (SSE, `stream_options.include_usage`) |
+| `POST /v1/chat/completions` | OpenAI: `messages`, `temperature`, `max_tokens` / `max_completion_tokens`, `stop`, `stream` (SSE, `stream_options.include_usage`), `tools` / `tool_choice` |
 | `GET /v1/models` | the one model |
-| `POST /api/chat` | Ollama: `messages`, `stream` (NDJSON, default), `options.temperature`, `num_predict`, `stop` |
+| `POST /api/chat` | Ollama: `messages`, `stream` (NDJSON, default), `options.temperature`, `num_predict`, `stop`, `tools` |
 | `GET /api/tags`, `/api/version`, `/` | the model, the version, a health check |
 
 There is no authentication. By default geistr listens on loopback only and
 answers only requests addressed to this computer (`Host` check, against DNS
 rebinding). `--http=0.0.0.0:11434` makes it reachable for everyone who can
-reach the computer; geistr warns about that. Not supported: embeddings,
-tool calls, images, more than one model. One request is answered at a time;
-a client that disconnects stops its answer.
+reach the computer; geistr warns about that. One request is answered at a
+time; a client that disconnects stops its answer.
+
+**Tool calling** works with Qwen3 models (e.g. `qwen3-0.6b`): send `tools`,
+get `tool_calls` back (`finish_reason: tool_calls`; streamed too), send the
+results as `role: tool` messages, and the model answers with them, as in the
+OpenAI SDK's function-calling example. `tool_choice: "none"` turns tools off
+for a request. A model without a tool format refuses `tools` (400). Not
+supported yet: embeddings, images, more than one model.
 
 Without `--http`, `geistr serve` listens on a Unix socket only (owner only,
 0600), and `geistr chat --socket` chats through it. `--chats N` sets how many

@@ -98,6 +98,13 @@ char *json_string(const struct json *j, int t) {
     return out;
 }
 
+const char *json_raw(const struct json *j, int t, size_t *len) {
+    if (t < 0 || t >= j->n)
+        return nullptr;
+    *len = (size_t) (T(j)[t].end - T(j)[t].start);
+    return j->s + T(j)[t].start;
+}
+
 double json_number(const struct json *j, int t, double dflt) {
     return t >= 0 && T(j)[t].type == JSMN_PRIMITIVE ? strtod(j->s + T(j)[t].start, nullptr) : dflt;
 }
