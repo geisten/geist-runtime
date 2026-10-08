@@ -110,7 +110,7 @@ The engine is the Makefile's pin (`GEIST_REF`). The recorded validation evidence
 (`tests/fixtures/decisions/validation`): the Apple records (NEON, Metal) were
 produced on engine `5dd7e1747df86092a320e638c66993afd409e3b6` and are kept as
 recorded; the x86 CPU records (`*-x86.jsonl`, `manifest.json` → `x86_cpu`) on
-the current pin `0707c3b1c9e547c909d200331a0750b4ff8e8cbe` (#94). Evidence is
+engine `0707c3b1c9e547c909d200331a0750b4ff8e8cbe` (#94). Evidence is
 not re-established for later pins until it is recorded again.
 Required EXPERIMENTAL engine symbols are availability/support/mode probes,
 create/score/destroy, error access, tokenization and resource observation
