@@ -106,9 +106,14 @@ establish neither numerical parity nor quality-matched performance.
 Build the optional engine with `make runtime DECISION=1` (or `make geistr
 DECISION=1 PULL=0`, `make wheel DECISION=1`). `DECISION=0` remains the default;
 all decision symbols stay linkable and return explicit unsupported errors.
-The engine is pinned to `5dd7e1747df86092a320e638c66993afd409e3b6`.
+The engine is the Makefile's pin (`GEIST_REF`). The recorded validation evidence
+(`tests/fixtures/decisions/validation`) was produced on engine
+`5dd7e1747df86092a320e638c66993afd409e3b6` and is kept as recorded; it is not
+re-established for later pins until it is recorded again.
 Required EXPERIMENTAL engine symbols are availability/support/mode probes,
-create/score/reset/destroy, error access, tokenization and resource observation.
+create/score/destroy, error access, tokenization and resource observation
+(`geistr_decision_reset` clears only the wrapper's state: every score starts
+from an empty engine state).
 Future stability promotion is tracked by geisten/geistlib#622.
 
 `geistr_decision_open(model, error_cap, opts, &decision, error)` owns an

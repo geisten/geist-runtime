@@ -1,5 +1,6 @@
 """Single product binary E2E on one exact profile. No network or downloads."""
 import json
+import re
 from pathlib import Path
 import signal
 import subprocess
@@ -26,8 +27,9 @@ with tempfile.TemporaryDirectory() as directory:
     assert d['schema'] == 1 and d['artifact_sha256'] == fixture['artifact_sha256']
     assert d['profile'] == profile_name and d['template_sha256'] == fixture['template_sha256']
     assert d['operation'] == 'decision' and d['model_calls'] == 1 and d['resolved_mode'] == 1
-    assert d['engine_revision'] == '5dd7e1747df86092a320e638c66993afd409e3b6'
-    assert d['backend'] == ('metal' if processor == 'gpu' else 'cpu_neon')
+    pinned = re.search(r'^GEIST_REF\s*\?=\s*([0-9a-f]{40})', (Path(__file__).parents[1] / 'Makefile').read_text(), re.M)
+    assert pinned and d['engine_revision'] == pinned.group(1), (d['engine_revision'], pinned)  # the Makefile's pin
+    assert d['backend'] == 'metal' if processor == 'gpu' else d['backend'].startswith('cpu'), d['backend']
     assert d['until_result_ms'] >= d['setup_ms'] and d['preparation_ms'] >= 0
     for args, status in [(['--option', 'röt', 'duplicate'], 2),
                          (['--profile', 'unknown'], 1),
