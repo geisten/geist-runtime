@@ -637,10 +637,37 @@ def section_pull():
             assert r.returncode == 1 and word in r.stderr and 'No error' not in r.stderr, r.stderr
             assert not os.path.exists(target + '.part') and open(target, 'rb').read() == previous, r.stderr
         os.unlink(target)
+        # first run (#89): nothing installed → the recommendation; piped, only the command; in a terminal
+        # n downloads nothing, Enter downloads, verifies and opens the chat
+        first_models, first_catalog = os.path.join(tmp, 'first-models'), os.path.join(tmp, 'first-catalog.json')
+        os.makedirs(first_models)
+        with open(first_catalog, 'w') as f:
+            json.dump({**catalog, 'models': [catalog['models'][0]]}, f)  # ref alone: the one to recommend
+        os.link(model_path, os.path.join(www, ref_file))
+        first = ['--models', first_models, '--catalog', first_catalog]
+        first_env = {**env, 'GEISTEN_HOME': os.path.join(tmp, 'home-first'), 'TERM': 'xterm'}
+        r = subprocess.run([geistr, 'chat', *first], input='', capture_output=True, text=True, env=first_env)
+        assert r.returncode == 2 and 'For this computer: ref' in r.stdout and 'geistr pull ref' in r.stdout, (r.stdout, r.stderr)
+        assert not os.listdir(first_models)
+        for key in (b'n\r', b'\r'):
+            pid, fd = pty.fork()
+            if pid == 0:
+                os.execve(geistr, [geistr, 'chat', *first], first_env)
+            until(fd, '[Y/n]')
+            os.write(fd, key)
+            if key == b'n\r':
+                until(fd, 'Later: geistr pull ref')
+                assert os.waitpid(pid, 0)[1] >> 8 == 2 and not os.listdir(first_models)
+                os.close(fd)
+            else:
+                until(fd, 'ref installed', 120)
+                until(fd, 'Ctrl-C twice exits', 120)  # the chat, with the downloaded model
+                finish_chat(pid, fd)
+                assert os.path.exists(os.path.join(first_models, ref_file))
         r = geistr_run('pull')  # nothing left to update
         assert r.returncode == 0 and 'installed models are current' in r.stdout, (r.stdout, r.stderr)
         server.shutdown()
-        print('geistr pull: download, restart after an ignored range, verify, refuse a mismatch, keep the previous file, size mismatch; PULL=0 has no network code passed')
+        print('geistr pull: download, restart after an ignored range, verify, refuse a mismatch, keep the previous file, size mismatch, first run; PULL=0 has no network code passed')
     else:
         print('geistr pull: PULL=0 has no network code passed (no libcurl: download not tested)')
 
