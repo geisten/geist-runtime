@@ -518,6 +518,9 @@ def section_http():
     assert c.recv(100).startswith(b'HTTP/1.1 411'); c.close()
     status, _, body = call('POST', '/v1/chat/completions', {'messages': [{'role': 'user', 'content': 'word ' * 20000}]})
     assert status == 400 and json.loads(body)['error']['code'] == 'context_length_exceeded', body
+    # a stream's headers go once the request is accepted (#99): a refused one is still an HTTP error
+    too_long = {'messages': [{'role': 'user', 'content': 'word ' * 20000}], 'stream': True}
+    assert call('POST', '/v1/chat/completions', too_long)[0] == 400 and call('POST', '/api/chat', too_long)[0] == 400
     # a client that leaves mid-stream stops its answer; the next request is served
     c = unix.create_connection(('127.0.0.1', port))
     long = json.dumps({'messages': [{'role': 'user', 'content': 'Write a long story.'}], 'stream': True, 'max_tokens': 400})
