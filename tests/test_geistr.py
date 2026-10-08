@@ -318,8 +318,9 @@ def section_resume():
     assert pct and 50 <= int(pct[-1]) <= 100, out[-300:]
     os.write(fd, b'/info\r'); out = until(fd, 'of 512 tokens')
     paste(fd, b'And these: ' + b'word ' * 250 + b'Say OK again.')    # no longer fits: the oldest go
-    until(fd, 'oldest message', 180)                                     # and the chat says so
-    until(fd, '%\x1b[0m > ', 60)
+    out = until(fd, 'oldest message', 180)                               # and the chat says so
+    if b'%\x1b[0m > ' not in out.split(b'oldest message')[-1]:            # the prompt, unless it came along
+        until(fd, '%\x1b[0m > ', 60)
     os.write(fd, b'/clear\r'); out = until(fd, 'a new conversation')
     os.write(fd, b'/info\r'); out = until(fd, 'of 512 tokens')
     assert b'context 0 of 512 tokens (0 %)' in out, out[-300:]
@@ -339,7 +340,13 @@ def section_resume():
     sent = re.search(rb'\x1b\]52;c;([A-Za-z0-9+/=]*)\x07', out)
     import base64
     assert sent and base64.b64decode(sent.group(1)).decode() == said[1]['content'], out[-300:]
-    os.write(fd, b'/copy code\r'); until(fd, 'no code block')
+    os.write(fd, b'/copy code\r')                       # at 0.7 the answer may hold code, or not
+    want, other = (b'kB of code', b'no code block') if '```' in said[1]['content'] else (b'no code block', b'kB of code')
+    out, deadline = b'', time.time() + 60
+    while want not in out and other not in out and time.time() < deadline:
+        if select.select([fd], [], [], 1)[0]:
+            out += os.read(fd, 4096)
+    assert want in out, out[-300:]
     finish_chat(pid, fd)
 
     # a conversation poisoned by the model's own loops: answers no longer grow, loops are kept cut and marked
