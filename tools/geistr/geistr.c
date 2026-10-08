@@ -472,6 +472,64 @@ static int pull(const char *id) {
     return rc;
 }
 
+/* geistr chat with nothing installed (#89): the recommended model for this
+ * computer, and in a terminal the offer to download it and start. Piped,
+ * nothing is downloaded. 0 when nothing could be recommended. */
+static int first_run(const char *processor, bool fresh) {
+    geistr_catalog *c = load_catalog();
+    size_t          n = c ? geistr_catalog_count(c) : 0;
+    geistr_local   *local = calloc(n ? n : 1, sizeof *local);
+    bool            any   = false;
+    for (size_t i = 0; local && i < n; i++) {
+        local[i] = (geistr_local) {.size = sizeof *local,
+                                   .installed = install_state(geistr_catalog_get(c, i), false) == GEISTR_INSTALL_OK};
+        any |= local[i].installed;
+    }
+    geistr_device     d    = {};
+    geistr_ranking   *r    = nullptr;
+    const geistr_fit *best = !any && local && geistr_device_probe(models_dir, &d) == GEISTR_OK &&
+                                             geistr_rank(c, &d, local, nullptr, &r) == GEISTR_OK
+                                     ? geistr_ranking_best(r)
+                                     : nullptr;
+    int rc = 0;
+    if (best) {
+        static char id[128];
+        char        size[16];
+        snprintf(id, sizeof id, "%s", best->entry->id);
+        bool quant = best->entry->quantization && !strstr(best->entry->name, best->entry->quantization);
+        static const char *const why[][2] = {{"good", "good and fast enough here"}, {"slow", "works here, slowly"},
+                                             {"tight_memory", "fits, with little memory to spare"},
+                                             {"speed_unknown", "fits; speed not known yet"},
+                                             {"quality_unknown", "fits; quality not known yet"}};
+        const char *reason = best->reason;
+        for (size_t i = 0; i < sizeof why / sizeof *why; i++)
+            if (!strcmp(best->reason, why[i][0]))
+                reason = why[i][1];
+        printf("No model yet. For this computer: %s (%s%s%s): %s\n", id, best->entry->name, quant ? " · " : "",
+               quant ? best->entry->quantization : "", reason);
+        if (isatty(STDIN_FILENO) && isatty(STDOUT_FILENO)) {
+            printf("Download it now, %s? [Y/n] ", size_text(best->entry->bytes, size));
+            fflush(stdout);
+            char answer[16] = "";
+            bool yes        = fgets(answer, sizeof answer, stdin) && strchr("yY\n", answer[0]);
+            rc              = !yes ? USAGE : geistr_pull(best->entry, models_dir);
+            if (!yes)
+                printf("Later: geistr pull %s, then geistr chat %s\n", id, id);
+            if (rc == OK) {
+                geistr_ranking_free(r), free(local), geistr_catalog_free(c);
+                return chat(id, processor, nullptr, fresh);
+            }
+        } else {
+            printf("To download it: geistr pull %s (%s), then geistr chat %s\n", id, size_text(best->entry->bytes, size), id);
+            rc = USAGE;
+        }
+    }
+    geistr_ranking_free(r);
+    free(local);
+    geistr_catalog_free(c);
+    return rc;
+}
+
 int main(int argc, char **argv) {
     setlocale(LC_CTYPE, ""); /* character widths for the view and the line editor */
     /* Preserve leading global options, then pass decision arguments intact:
@@ -610,6 +668,9 @@ int main(int argc, char **argv) {
             fclose(f);
         const char *model = cfg.model[0] ? cfg.model : selected;
         if (!model[0]) {
+            int offered = first_run(processor, fresh);
+            if (offered)
+                return offered;
             fputs("geistr: which model? geistr chat <model> (see geistr catalog)\n", stderr);
             return USAGE;
         }

@@ -49,6 +49,13 @@ says so and exits. To build from source instead, see
 ## Quick start
 
 ```sh
+geistr chat                    # the first time: suggests a model for this computer,
+                               # downloads and verifies it on Enter, then chats
+```
+
+Or choose yourself:
+
+```sh
 geistr catalog                 # which models fit this computer
 geistr pull qwen3-0.6b         # download and verify one (640 MB)
 geistr chat qwen3-0.6b         # talk to it
