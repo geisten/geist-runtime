@@ -1,0 +1,7 @@
+{"profile":"gemma4","backend":"cpu_x86","mode":1,"fixture":0,"native_ids":true,"direct_bit_identical":true,"model_calls":1}
+{"profile":"gemma4","backend":"cpu_x86","mode":1,"fixture":0,"best_index":0,"logits":[14.88834,2.33545017]}
+{"profile":"gemma4","backend":"cpu_x86","mode":1,"fixture":1,"native_ids":true,"direct_bit_identical":true,"model_calls":1}
+{"profile":"gemma4","backend":"cpu_x86","mode":1,"fixture":1,"best_index":0,"logits":[7.83422565,4.54314518]}
+{"profile":"gemma4","backend":"cpu_x86","mode":1,"fixture":2,"native_ids":true,"direct_bit_identical":true,"model_calls":1}
+{"profile":"gemma4","backend":"cpu_x86","mode":1,"fixture":2,"best_index":3,"logits":[-8.43846607,2.42281961,-3.70795989,13.4565945]}
+{"selected_rows":"unsupported_explicit_error"}
