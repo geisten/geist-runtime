@@ -132,7 +132,10 @@ static void test_abi(void) {
     CHECK(geistr_model_info_get(model, &old) == GEISTR_OK && old.context == 12345 && old.arch &&
               old.size == offsetof(geistr_model_info, context),
           "an older info struct is filled only up to its size");
+    CHECK(!info.vision, "no stub model sees (#92)");
     geistr_chat     *chat = open_chat(model, (geistr_chat_opts) GEISTR_CHAT_OPTS_INIT);
+    CHECK(geistr_chat_image(chat, "\x89PNG", 4) == GEISTR_FORMAT && geistr_chat_image(chat, nullptr, 4) == GEISTR_INVALID,
+          "an image without vision: refused, clearly");
     geistr_message   hi   = {"user", "hi"};
     struct collected got;
     CHECK(geistr_chat_send(chat, 1, &hi) == GEISTR_OK && drain(chat, &got) == GEISTR_OK, "answer");

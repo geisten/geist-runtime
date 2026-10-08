@@ -483,6 +483,13 @@ geistr_status geistr_chat_stats(const geistr_chat *c, geistr_stats *stats) {
     return GEISTR_OK;
 }
 
+/* No stub model sees: as a model without a vision tower (#92). */
+geistr_status geistr_chat_image(geistr_chat *c, const void *data, size_t len) {
+    if (!c || !data || !len)
+        return GEISTR_INVALID;
+    return fail(c, GEISTR_FORMAT, "this model has no vision");
+}
+
 const char *geistr_chat_error(const geistr_chat *c) {
     return c ? c->error : "no chat";
 }
