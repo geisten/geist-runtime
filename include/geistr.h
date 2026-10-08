@@ -135,6 +135,17 @@ typedef struct geistr_model_info {
  * Thread safety: any thread, concurrently with chats on this model. */
 GEISTR_NODISCARD geistr_status geistr_model_info_get(const geistr_model *model, geistr_model_info *info);
 
+/* The pooled, L2-normalised embedding of text by an embedding model (such
+ * as BitNet-embedding, #91), so the dot product of two is their cosine
+ * similarity. *dims gets the dimension; out, if cap >= *dims, the vector
+ * (else GEISTR_INVALID: ask again with room). *tokens, if not nullptr, the
+ * tokens it read. Queries want a one-line task instruction first
+ * ("Instruct: …\nQuery: …"), documents none. GEISTR_FORMAT on a model that
+ * generates text, GEISTR_CONTEXT if text is longer than the window.
+ * Thread safety: any thread; calls on one model take turns. */
+GEISTR_NODISCARD geistr_status geistr_embed(geistr_model *model, const char *text, float *out, size_t cap,
+                                            size_t *dims, uint32_t *tokens);
+
 /* Detail of the last failure caused by this model handle (never nullptr). */
 const char *geistr_model_error(const geistr_model *model);
 

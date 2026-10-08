@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "revision": 10,
+  "revision": 11,
   "models": [
     {
       "id": "bitnet-2b",
@@ -459,6 +459,23 @@
           "engine": "33db79d7764b"
         }
       ]
+    },
+    {
+      "id": "bitnet-embed-0.6b",
+      "name": "BitNet embedding 0.6B",
+      "file": "bitnet-embeddings-0.6b-bf16-i2_s.gguf",
+      "url": "https://huggingface.co/microsoft/bitnet-embedding-0.6b/resolve/16176d108561b62e3d6f2b558587afe1140b413f/bitnet-embeddings-0.6b-bf16-i2_s.gguf",
+      "sha256": "c89c64f05a2d3f83565250a6762640197fc624df866d4a1bd5853f811219af17",
+      "bytes": 427935008,
+      "working_mib": 1024,
+      "recommended_ram_gib": 2,
+      "backends": [
+        "cpu"
+      ],
+      "group_id": "bitnet-embed-0.6b",
+      "group_name": "BitNet embedding 0.6B",
+      "quantization": "I2_S",
+      "kind": "embedding"
     },
     {
       "id": "bonsai2-27b-pq2",

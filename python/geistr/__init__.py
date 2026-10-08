@@ -75,7 +75,8 @@ class _Entry(C.Structure):
                                           "reference")] + \
                [("bytes", C.c_uint64), ("working_mib", C.c_uint32), ("recommended_ram_gib", C.c_uint32),
                 ("backends", C.c_uint32), ("quality_passed", C.c_uint32), ("quality_total", C.c_uint32),
-                ("vision_url", _str), ("vision_sha256", _str), ("vision_bytes", C.c_uint64)]
+                ("vision_url", _str), ("vision_sha256", _str), ("vision_bytes", C.c_uint64),
+                ("embedding", C.c_int)]
 
 
 class _Device(C.Structure):

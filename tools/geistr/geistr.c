@@ -307,10 +307,12 @@ static int catalog(bool installed_only, bool available_only, bool json) {
 }
 
 /* A catalog id → its verified file; a path stays a path. */
-int resolve(const char *model, char *path, size_t cap, geistr_reasoning *reasoning) {
+int resolve(const char *model, char *path, size_t cap, geistr_reasoning *reasoning, bool *embedding) {
     geistr_catalog *c   = load_catalog();
     const char     *base = strrchr(model, '/') ? strrchr(model, '/') + 1 : model;
     *reasoning           = GEISTR_REASONING_NONE;
+    if (embedding)
+        *embedding = false;
     bool is_path         = strchr(model, '/') || strstr(model, ".gguf") || !strncmp(model, "stub:", 5);
     for (size_t i = 0; c && i < geistr_catalog_count(c); i++) {
         const geistr_catalog_entry *m = geistr_catalog_get(c, i);
@@ -318,6 +320,8 @@ int resolve(const char *model, char *path, size_t cap, geistr_reasoning *reasoni
             continue;
         if (m->reasoning_format && !strcmp(m->reasoning_format, "think_tags"))
             *reasoning = GEISTR_REASONING_THINK_TAGS;
+        if (embedding)
+            *embedding = m->embedding;
         if (!is_path) {
             geistr_install state = install_state(m, false);
             if (state != GEISTR_INSTALL_OK) {
@@ -381,7 +385,7 @@ static int bench(int n, const char **ids) {
     const char *all[64];
     if (!n) /* every installed model */
         for (size_t i = 0; i < geistr_catalog_count(c) && n < 64; i++)
-            if (install_state(geistr_catalog_get(c, i), true) == GEISTR_INSTALL_OK)
+            if (!geistr_catalog_get(c, i)->embedding && install_state(geistr_catalog_get(c, i), true) == GEISTR_INSTALL_OK)
                 all[n++] = geistr_catalog_get(c, i)->id;
     const char *const *models = ids ? ids : all;
     struct sigaction   sa     = {.sa_handler = on_interrupt};
@@ -420,7 +424,8 @@ static void on_stop(int signal) {
 
 static int serve(const char *name, const char *processor, const char *socket, const char *http, size_t chats) {
     struct session x;
-    int            rc = session_open(&x, name, processor, 0, true);
+    serving = true; /* an embedding model too (#91) */
+    int rc  = session_open(&x, name, processor, 0, true);
     if (rc != OK)
         return rc;
     geistr_chat_close(x.chat); /* the service opens its own */
@@ -428,7 +433,7 @@ static int serve(const char *name, const char *processor, const char *socket, co
     sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
     struct svc_options o = {.model = x.model, .reasoning = x.reasoning, .name = x.name, .socket = socket,
-                            .http = http, .chats = chats, .stop = &stopping};
+                            .http = http, .chats = chats, .stop = &stopping, .embedding = x.embedding};
     rc = service_run(&o) ? ERROR : OK;
     geistr_model_close(x.model);
     return rc;

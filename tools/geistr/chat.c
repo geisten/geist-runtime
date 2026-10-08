@@ -19,6 +19,7 @@
 #include <time.h>
 
 geistr_chat *volatile running; /* for the Ctrl-C handler */
+bool                  serving;
 volatile sig_atomic_t interrupted;
 
 void on_interrupt(int signal) {
@@ -326,10 +327,18 @@ int session_open(struct session *x, const char *name, const char *processor, dou
                         bool interactive) {
     char             path[4200] = "";
     geistr_reasoning reasoning;
-    int              rc = resolve(name, path, sizeof path, &reasoning);
+    bool             embedding;
+    int              rc = resolve(name, path, sizeof path, &reasoning, &embedding);
     if (rc != OK)
         return rc;
+    if (embedding && !serving) {
+        fprintf(stderr, "geistr: %s is an embedding model: it serves /v1/embeddings (geistr serve %s --http) "
+                        "and geistr index, but does not chat\n", name, name);
+        return ERROR;
+    }
     geistr_model_opts mo = GEISTR_MODEL_OPTS_INIT;
+    if (embedding) /* ponytail: texts to embed are short; a window of 32k would hold GBs of cache */
+        mo.context = 8192;
     mo.processor         = !strcmp(processor, "cpu")   ? GEISTR_PROCESSOR_CPU
                            : !strcmp(processor, "gpu") ? GEISTR_PROCESSOR_GPU
                                                        : GEISTR_PROCESSOR_AUTO;
@@ -339,7 +348,7 @@ int session_open(struct session *x, const char *name, const char *processor, dou
         mo.context = (uint32_t) strtoul(getenv("GEISTR_TEST_CONTEXT"), nullptr, 10);
 #endif
     char error[256];
-    *x = (struct session) {.temperature = temperature, .reasoning = reasoning};
+    *x = (struct session) {.temperature = temperature, .reasoning = reasoning, .embedding = embedding};
     spinner_start(name, path);
     geistr_status opened = geistr_model_open(path, &mo, &x->model, error, sizeof error);
     spinner_stop();
@@ -682,7 +691,7 @@ static int command(struct session *x, struct conversation *said, char *line, con
             snprintf(want_proc, sizeof want_proc, "%s", proc);
             char             path[4200] = "";
             geistr_reasoning reasoning;
-            if (resolve(want, path, sizeof path, &reasoning) != OK) /* a typo keeps the model */
+            if (resolve(want, path, sizeof path, &reasoning, nullptr) != OK) /* a typo keeps the model */
                 return GO_ON;
             const double temperature = x->temperature;
             running                  = nullptr;

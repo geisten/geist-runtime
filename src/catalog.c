@@ -268,7 +268,8 @@ static const char *entry(geistr_catalog *c, const struct json *j, int i, uint64_
                                              "working_mib", "recommended_ram_gib", "backends",
                                              "unsupported_format", "group_id", "group_name",
                                              "quantization", "reasoning_format", "quality",
-                                             "reference",  "vision",       nullptr};
+                                             "reference",  "vision",       "kind",
+                                             nullptr};
     uint64_t                 v;
     if (!keys(j, i, model_keys))
         return "unknown or duplicate key";
@@ -299,6 +300,12 @@ static const char *entry(geistr_catalog *c, const struct json *j, int i, uint64_
         return "bad reference";
     if (get(j, i, "vision") >= 0 && !vision(c, j, get(j, i, "vision"), m))
         return "bad vision";
+    if (get(j, i, "kind") >= 0) { /* "chat" (the default) or "embedding" */
+        const char *kind = string(c, j, i, "kind", 16);
+        if (!kind || (strcmp(kind, "chat") && strcmp(kind, "embedding")))
+            return "bad kind";
+        m->embedding = !strcmp(kind, "embedding");
+    }
     if (schema == 2) {
         m->group_id     = string(c, j, i, "group_id", 63);
         m->group_name   = string(c, j, i, "group_name", 100);

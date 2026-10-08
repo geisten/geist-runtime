@@ -921,6 +921,95 @@ static void ollama_tags(const struct svc_options *o, FILE *out) {
     respond_json(out, 200, &t);
 }
 
+/* ---- embeddings (#91) ---------------------------------------------------------
+ * OpenAI: POST /v1/embeddings {input: a text or a list, encoding_format: float
+ * or base64 (the OpenAI SDK's default)}; Ollama: POST /api/embed {input}. The
+ * texts as given: a query's instruction is the client's ("Instruct: …\nQuery: …"). */
+
+#define EMBED_INPUTS 2048
+#define EMBED_DIMS   8192
+
+/* The vector as base64 of its little-endian float32s, as OpenAI sends it.
+ * ponytail: the host's float order, little-endian on every platform geistr builds for. */
+static void base64_floats(FILE *f, const float *v, size_t n) {
+    static const char abc[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const unsigned char *b = (const unsigned char *) v;
+    size_t               len = n * sizeof *v;
+    fputc('"', f);
+    for (size_t i = 0; i < len; i += 3) {
+        uint32_t x = (uint32_t) b[i] << 16 | (i + 1 < len ? (uint32_t) b[i + 1] << 8 : 0) | (i + 2 < len ? b[i + 2] : 0);
+        fputc(abc[x >> 18 & 63], f), fputc(abc[x >> 12 & 63], f);
+        fputc(i + 1 < len ? abc[x >> 6 & 63] : '=', f), fputc(i + 2 < len ? abc[x & 63] : '=', f);
+    }
+    fputc('"', f);
+}
+
+static void embeddings(const struct svc_options *o, FILE *out, const struct json *j, bool openai) {
+    if (!o->embedding) {
+        error_json(out, 400, openai, "not an embedding model (try geistr serve bitnet-embed-0.6b --http)", nullptr);
+        return;
+    }
+    int   input  = json_field(j, 0, "input");
+    char *one    = json_string(j, input);
+    int   count  = one ? 1 : json_count(j, input);
+    char *format = openai ? json_string(j, json_field(j, 0, "encoding_format")) : nullptr;
+    bool  b64    = format && !strcmp(format, "base64");
+    const char *why = count < 1 || count > EMBED_INPUTS       ? "input: a text or a list of texts (at most 2048)"
+                      : format && !b64 && strcmp(format, "float") ? "encoding_format: float or base64"
+                                                                  : nullptr;
+    free(format);
+    struct text t;
+    FILE       *f      = why ? nullptr : text_open(&t);
+    uint32_t    total  = 0;
+    int         status = 200;
+    static float vec[EMBED_DIMS];
+    if (f) {
+        fputs(openai ? "{\"object\":\"list\",\"model\":" : "{\"model\":", f), json_write(f, o->name);
+        fputs(openai ? ",\"data\":[" : ",\"embeddings\":[", f);
+    }
+    for (int k = 0, item = -1; f && k < count; k++) {
+        item       = one ? input : json_next(j, input, item);
+        char *text = one ? one : json_string(j, item);
+        size_t   dims   = 0;
+        uint32_t tokens = 0;
+        geistr_status s = text ? geistr_embed(o->model, text, vec, EMBED_DIMS, &dims, &tokens) : GEISTR_INVALID;
+        if (text != one)
+            free(text);
+        if (s != GEISTR_OK) {
+            why    = !text                  ? "input: texts only (no token lists)"
+                     : s == GEISTR_CONTEXT  ? "an input is longer than the context window"
+                     : s == GEISTR_INVALID  ? "an input is empty"
+                                            : geistr_model_error(o->model);
+            status = s == GEISTR_CONTEXT || s == GEISTR_INVALID || !text ? 400 : 500;
+            break;
+        }
+        total += tokens;
+        if (openai)
+            fprintf(f, "%s{\"object\":\"embedding\",\"index\":%d,\"embedding\":", k ? "," : "", k);
+        else if (k)
+            fputc(',', f);
+        if (b64)
+            base64_floats(f, vec, dims);
+        else
+            for (size_t i = 0; i < dims; i++)
+                fprintf(f, "%c%.8g", i ? ',' : '[', (double) vec[i]);
+        fputs(b64 ? "" : "]", f);
+        fputs(openai ? "}" : "", f);
+    }
+    free(one);
+    if (why) {
+        if (f)
+            fclose(t.f), free(t.s);
+        error_json(out, status == 200 ? 400 : status, openai, why, nullptr);
+        return;
+    }
+    if (openai)
+        fprintf(f, "],\"usage\":{\"prompt_tokens\":%u,\"total_tokens\":%u}}", total, total);
+    else
+        fprintf(f, "],\"prompt_eval_count\":%u}", total);
+    respond_json(out, 200, &t);
+}
+
 /* ---- routing ----------------------------------------------------------------- */
 
 void http_serve(const struct svc_options *o, struct held *pool, int client, bool loopback) {
@@ -934,6 +1023,7 @@ void http_serve(const struct svc_options *o, struct held *pool, int client, bool
     }
     bool get = !strcmp(r.method, "GET"), post = !strcmp(r.method, "POST"), openai = !strncmp(r.path, "/v1/", 4);
     bool chat = !strcmp(r.path, "/v1/chat/completions") || !strcmp(r.path, "/api/chat");
+    bool embed = !strcmp(r.path, "/v1/embeddings") || !strcmp(r.path, "/api/embed");
     if (status)
         error_json(out, status, openai, reason(status), nullptr);
     else if (loopback && !host_is_loopback(r.host))
@@ -947,16 +1037,18 @@ void http_serve(const struct svc_options *o, struct held *pool, int client, bool
         openai_models(o, out);
     else if (get && !strcmp(r.path, "/api/tags"))
         ollama_tags(o, out);
-    else if (chat && post) {
+    else if ((chat || embed) && post) {
         struct json j = {};
         if (!json_parse(&j, r.body, (size_t) r.length))
             error_json(out, 400, openai, "the body is not a JSON object", nullptr);
+        else if (embed)
+            embeddings(o, out, &j, openai);
         else if (openai)
             openai_chat(o, pool, out, &j);
         else
             ollama_chat(o, pool, out, &j);
         json_free(&j);
-    } else if (chat)
+    } else if (chat || embed)
         error_json(out, 405, openai, "use POST", nullptr);
     else
         error_json(out, 404, openai, "no such endpoint", nullptr);

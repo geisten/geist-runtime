@@ -111,7 +111,9 @@ struct session {
     uint32_t         context;
     geistr_reasoning reasoning; /* the catalog's, for each chat on the model */
     uint32_t         used;      /* context tokens after the last answer (0: unknown, or cleared) */
+    bool             embedding; /* the catalog says so (#91): it serves, it does not chat */
 };
+extern bool serving; /* session_open for geistr serve: embedding models too */
 
 extern geistr_chat *volatile running; /* the answer Ctrl-C stops */
 extern volatile sig_atomic_t interrupted;
@@ -127,4 +129,4 @@ int  chat(const char *name, const char *processor, const char *remote, bool fres
 
 extern const char *models_dir;
 geistr_catalog    *load_catalog(void);
-int                resolve(const char *model, char *path, size_t cap, geistr_reasoning *reasoning);
+int                resolve(const char *model, char *path, size_t cap, geistr_reasoning *reasoning, bool *embedding);

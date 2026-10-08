@@ -66,6 +66,7 @@ typedef struct geistr_catalog_entry {
     const char *vision_url;
     const char *vision_sha256;
     uint64_t    vision_bytes;
+    int         embedding; /* 1: "kind": "embedding" (#91): geistr_embed, no chat; never recommended */
 } geistr_catalog_entry;
 
 /* Parse len bytes of catalog JSON (at most 1 MiB, at most 1024 models).

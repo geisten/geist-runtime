@@ -110,7 +110,7 @@ test: all $(BUILD)/test_decide_driver
 	  { echo "example chat failed: $$out"; exit 1; }
 
 # ---- the real runtime on geistlib (#4) ---------------------------------------
-ENGINE_GOALS := runtime test-real chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python $(BUILD)/test_decision_real
+ENGINE_GOALS := runtime test-real test-embed fetch-embed-model chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python $(BUILD)/test_decision_real
 ifneq (,$(filter $(ENGINE_GOALS),$(MAKECMDGOALS)))
 GEIST_REPO ?= https://github.com/geisten/geistlib.git
 GEIST_REF  ?= 0707c3b1c9e547c909d200331a0750b4ff8e8cbe
@@ -233,6 +233,18 @@ test-geistr:
 	$(MAKE) BUILD=$(BUILD)/geistr-nonet PULL=0 geistr
 	GEISTR_TEST_ONLY=$(ONLY) python3 -u tests/test_geistr.py $(BUILD)/geistr-test/geistr $(BUILD)/geistr-nonet/geistr "$(GEIST_TEST_MODEL)" $(PULL)
 
+$(BUILD)/test_embed: tests/test_embed.c $(RUNTIME) $(ENGINE_LIB)
+	$(CC) $(CFLAGS) -isystem $(GEISTLIB)/include $< $(RUNTIME) $(ENGINE_LINK) $(LDFLAGS) $(LDLIBS) -lm -o $@
+
+# #91: geistr_embed against BitNet-embedding-0.6B (make fetch-embed-model).
+GEIST_TEST_EMBED_MODEL ?= $(GEISTLIB)/gguf_artifacts/bitnet-embeddings-0.6b-bf16-i2_s.gguf
+test-embed: $(BUILD)/test_embed
+	@test -f "$(GEIST_TEST_EMBED_MODEL)" || { echo "no embedding model at $(GEIST_TEST_EMBED_MODEL): make fetch-embed-model"; exit 1; }
+	GEIST_TEST_EMBED_MODEL="$(GEIST_TEST_EMBED_MODEL)" GEIST_TEST_MODEL="$(GEIST_TEST_MODEL)" $(BUILD)/test_embed
+
+fetch-embed-model:
+	sh scripts/fetch-model.sh models/catalog.json bitnet-embed-0.6b $(GEISTLIB)/gguf_artifacts
+
 # An explicit target never skips: a missing model is an error, not a pass.
 test-real: $(BUILD)/test_real
 	@test -f "$(GEIST_TEST_MODEL)" || { echo "no reference model at $(GEIST_TEST_MODEL): make fetch-model"; exit 1; }
@@ -268,4 +280,4 @@ sanitize:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: install uninstall core all test sanitize clean runtime test-real chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python FORCE
+.PHONY: install uninstall core all test sanitize clean runtime test-real test-embed fetch-embed-model chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python FORCE

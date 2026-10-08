@@ -137,6 +137,12 @@ static void test_abi(void) {
     CHECK(geistr_chat_image(chat, "\x89PNG", 4) == GEISTR_FORMAT && geistr_chat_image(chat, nullptr, 4) == GEISTR_INVALID,
           "an image without vision: refused, clearly");
     geistr_message   hi   = {"user", "hi"};
+    float            vec[4];
+    size_t           dims = 1;
+    CHECK(geistr_embed(model, "hi", vec, 4, &dims, nullptr) == GEISTR_FORMAT && dims == 0 &&
+                  geistr_embed(model, nullptr, vec, 4, &dims, nullptr) == GEISTR_INVALID &&
+                  geistr_embed(model, "hi", nullptr, 4, &dims, nullptr) == GEISTR_INVALID,
+          "embeddings: a model that generates text refuses (#91)");
     struct collected got;
     CHECK(geistr_chat_send(chat, 1, &hi) == GEISTR_OK && drain(chat, &got) == GEISTR_OK, "answer");
     geistr_stats stats = {.size = offsetof(geistr_stats, prefill_ms)};
