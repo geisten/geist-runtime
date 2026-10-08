@@ -167,6 +167,16 @@ int main(void) {
     line_is(&e, "a?\r", "a?", "? inside a line is text");
     line_is(&e, "ab\x01\x04\r", "b", "Ctrl-D in a line deletes");
 
+    /* multi-line input by keys: Ctrl-J, Alt-Enter, \ + Enter; Enter sends it all */
+    line_is(&e, "eins\ndrei\r", "eins\ndrei", "Ctrl-J inserts a line break");
+    line_is(&e, "eins\x1b\rzwei\r", "eins\nzwei", "Alt-Enter inserts a line break");
+    line_is(&e, "eins\\\rzwei\r", "eins\nzwei", "\\ + Enter continues the text");
+    line_is(&e, "a\\b\r", "a\\b", "a \\ inside the text stays");
+    line_is(&e, "ab\\\x02\r", "ab\\", "\\ not at the cursor's end: Enter sends");
+    keys(&e, "x\ny", &screen);
+    CHECK(strstr(screen, "x↵y") != nullptr, "a typed line break shows as ↵");
+    free(screen);
+
     /* a line longer than the terminal wraps: the cursor goes back over rows */
     e.width = 20;
     keys(&e, "0123456789012345678901234567890123456789\x01", &screen);
@@ -189,6 +199,6 @@ int main(void) {
         fprintf(stderr, "lineedit: %d failures\n", failures);
         return 1;
     }
-    puts("lineedit: UTF-8 editing, keys, selection list, hint, Esc, Ctrl-C, ?, history, Ctrl-R search, wrapping, paste passed");
+    puts("lineedit: UTF-8 editing, keys, selection list, hint, Esc, Ctrl-C, ?, history, Ctrl-R search, multi-line, wrapping, paste passed");
     return 0;
 }

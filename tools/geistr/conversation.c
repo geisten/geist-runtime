@@ -4,6 +4,7 @@
 #include "cli.h"
 #include "json.h"
 #include <dirent.h>
+#include <stdint.h>
 #include <fcntl.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -16,10 +17,16 @@ void conv_push(struct conversation *c, const char *role, const char *content) {
         if (r)
             c->role = r;
         char **t = r ? realloc(c->content, cap * sizeof *t) : nullptr;
-        if (!t)
+        if (t)
+            c->content = t;
+        unsigned char *m = t ? realloc(c->mark, cap) : nullptr;
+        if (!m)
             return;
-        c->content = t, c->cap = cap;
+        c->mark = m, c->cap = cap;
     }
+    if (!c->n) /* a new conversation: the chat holds what it is sent */
+        c->unsent = SIZE_MAX;
+    c->mark[c->n]    = MARK_NONE;
     c->role[c->n]    = strdup(role);
     c->content[c->n] = strdup(content);
     if (c->role[c->n] && c->content[c->n])
@@ -32,6 +39,7 @@ static void drop(struct conversation *c, size_t i) {
     free(c->role[i]), free(c->content[i]);
     memmove(c->role + i, c->role + i + 1, (c->n - i - 1) * sizeof *c->role);
     memmove(c->content + i, c->content + i + 1, (c->n - i - 1) * sizeof *c->content);
+    memmove(c->mark + i, c->mark + i + 1, c->n - i - 1);
     c->n--;
 }
 
@@ -47,7 +55,7 @@ void conv_clear(struct conversation *c) {
 
 void conv_free(struct conversation *c) {
     conv_clear(c);
-    free(c->role), free(c->content);
+    free(c->role), free(c->content), free(c->mark);
     *c = (struct conversation) {};
 }
 
@@ -64,7 +72,8 @@ bool conv_system(struct conversation *c, const char *text) {
         char *r = c->role[c->n - 1], *t = c->content[c->n - 1];
         memmove(c->role + 1, c->role, (c->n - 1) * sizeof *c->role);
         memmove(c->content + 1, c->content, (c->n - 1) * sizeof *c->content);
-        c->role[0] = r, c->content[0] = t;
+        memmove(c->mark + 1, c->mark, c->n - 1);
+        c->role[0] = r, c->content[0] = t, c->mark[0] = MARK_NONE;
     }
     if (c->n) /* a chat that read the old one reads the conversation anew */
         c->carry = true;
@@ -76,18 +85,96 @@ size_t conv_say(struct conversation *c, const char *text, bool whole) {
     if (!c->n && c->system[0])
         conv_push(c, "system", c->system);
     conv_push(c, "user", text);
-    return c->carry || whole ? 0 : before;
+    return c->carry || whole ? 0 : c->unsent < before ? c->unsent : before;
 }
 
-void conv_answered(struct conversation *c, const char *answer) {
-    c->carry = false;
+size_t conv_budget(const struct conversation *c, size_t bytes) {
+    size_t first = c->n && !strcmp(c->role[0], "system") ? 1 : 0, start = c->n, used = 0;
+    for (size_t i = c->n; i-- > first;) {
+        used += strlen(c->content[i]);
+        if (strcmp(c->role[i], "user"))
+            continue;
+        if (used > bytes && start < c->n) /* this question would not fit: start after it */
+            break;
+        start = i;
+        if (used > bytes) /* the newest question goes even when it alone is too long */
+            break;
+    }
+    return start <= first || start == c->n ? 0 : start;
+}
+
+void conv_answered(struct conversation *c, const char *answer, int mark) {
+    c->carry  = false;
+    c->unsent = SIZE_MAX; /* the chat has it all now */
     conv_push(c, "assistant", answer ? answer : "");
+    if (c->n && !strcmp(c->role[c->n - 1], "assistant"))
+        c->mark[c->n - 1] = (unsigned char) mark;
     conv_store(c);
+}
+
+size_t conv_loop_cut(const char *t) {
+    size_t n = strlen(t);
+    for (size_t p = 1; p <= n / 3 && p <= 4096; p++) { /* the shortest period whose copies end the text */
+        size_t run = 0; /* bytes at the end equal to those p before */
+        while (run < n - p && t[n - 1 - run] == t[n - 1 - run - p])
+            run++;
+        if (run >= 2 * p && run + p >= 24) { /* three copies or more, not a short ornament */
+            size_t keep = n - run;           /* through the first copy … */
+            if (!strchr(" \n\t.,;:!?", t[keep - 1])) /* … ending at a word: a cycle has no natural start */
+                for (size_t k = keep; k > keep - p && k > 1; k--)
+                    if (strchr(" \n\t", t[k - 1])) {
+                        keep = k;
+                        break;
+                    }
+            while (keep < n && ((unsigned char) t[keep] & 0xC0) == 0x80)
+                keep++;
+            while (keep && strchr(" \n\t", t[keep - 1]))
+                keep--;
+            return keep;
+        }
+    }
+    return n;
 }
 
 void conv_refused(struct conversation *c) {
     if (c->n)
         drop(c, c->n - 1);
+}
+
+bool conv_retract(struct conversation *c, char *out, size_t cap) {
+    if (c->n < 2 || strcmp(c->role[c->n - 1], "assistant") || strcmp(c->role[c->n - 2], "user"))
+        return false;
+    snprintf(out, cap, "%s", c->content[c->n - 2]);
+    drop(c, c->n - 1), drop(c, c->n - 1);
+    return true;
+}
+
+const char *conv_last_answer(const struct conversation *c, bool code, size_t *len) {
+    const char *a = c->n && !strcmp(c->role[c->n - 1], "assistant") ? c->content[c->n - 1] : nullptr;
+    if (!a || !code) {
+        *len = a ? strlen(a) : 0;
+        return a;
+    }
+    const char *body = nullptr, *end = nullptr; /* the last ``` … ``` pair, at line starts */
+    for (const char *p = a; (p = strstr(p, "```"));) {
+        bool at_line = p == a || p[-1] == '\n';
+        const char *nl = strchr(p, '\n');
+        if (!at_line) {
+            p += 3;
+            continue;
+        }
+        if (!body || end) { /* an opening fence: the code starts after its line */
+            if (!nl)
+                break;
+            body = nl + 1, end = nullptr;
+        } else /* the closing one */
+            end = p;
+        p = nl ? nl + 1 : p + 3;
+    }
+    if (body && !end) /* unclosed: up to the end */
+        end = a + strlen(a);
+    *len = body ? (size_t) (end - body) : 0;
+    return body;
 }
 
 const char *conv_last_question(const struct conversation *c, int *bytes) {
@@ -129,7 +216,8 @@ void conv_store(struct conversation *c) {
     }
     for (size_t i = 0; i < c->n; i++) {
         fputs("{\"role\":", f), json_write(f, c->role[i]);
-        fputs(",\"content\":", f), json_write(f, c->content[i]), fputs("}\n", f);
+        fputs(",\"content\":", f), json_write(f, c->content[i]);
+        fputs(c->mark[i] == MARK_STOPPED ? ",\"stopped\":true}\n" : c->mark[i] == MARK_CUT ? ",\"cut\":true}\n" : "}\n", f);
     }
     if (fclose(f) == 0 && rename(tmp, c->file) == 0) {
         if (c->resumed_from[0]) /* it lives on in this chat's file */
@@ -170,6 +258,13 @@ void conv_resume(struct conversation *c) {
             json_get(line, "content", content, (size_t) len + 1);
             if (role[0])
                 conv_push(c, role, content);
+            char flag[8];
+            json_get(line, "stopped", flag, sizeof flag);
+            if (c->n && !strcmp(flag, "true"))
+                c->mark[c->n - 1] = MARK_STOPPED;
+            json_get(line, "cut", flag, sizeof flag);
+            if (c->n && !strcmp(flag, "true"))
+                c->mark[c->n - 1] = MARK_CUT;
         }
         free(role), free(content);
     }

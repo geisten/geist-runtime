@@ -71,7 +71,7 @@ def install_models():  # ref as itself, wrong with the right size and wrong byte
             f.write(tiny)
 
 # ---- helpers for the terminal (pty) sections ---------------------------------
-import pty, select
+import pty, select, re
 def until(fd, text, seconds=60):
     seen, deadline = b'', time.time() + seconds
     while text.encode() not in seen and time.time() < deadline:
@@ -80,6 +80,24 @@ def until(fd, text, seconds=60):
             except OSError: break
     assert text.encode() in seen, (text, seen[-400:])
     return seen
+def paste(fd, text):
+    # a long message as a terminal paste (drawn once), in pieces while the chat's output is read:
+    # pty buffers are small on macOS, and a chat that cannot write stops reading
+    data = b'\x1b[200~' + text + b'\x1b[201~\r'
+    for i in range(0, len(data), 256):
+        os.write(fd, data[i:i + 256])
+        while i + 256 < len(data) and select.select([fd], [], [], 0.05)[0]:
+            try: os.read(fd, 65536)
+            except OSError: break
+
+def finish_chat(pid, fd):
+    # Ctrl-D, then read until the chat exits: a full pty (small on macOS) would block it
+    os.write(fd, b'\x04')
+    while not os.waitpid(pid, os.WNOHANG)[0]:
+        try:
+            if select.select([fd], [], [], 0.2)[0]: os.read(fd, 4096)
+        except OSError: pass
+    os.close(fd)
 
 # ---- catalog: available → installed (verified) → mismatch ----------------------
 def section_catalog():
@@ -212,7 +230,26 @@ def section_run():
     _, status = os.waitpid(pid, 0)
     assert os.WEXITSTATUS(status) == 0, status
     os.close(fd)
-    print('geistr run/chat: answers, prompt from stdin, Ctrl-C (130 / stopped answer), exit codes, settings, Tab completion in a terminal passed')
+
+    # the chat's own lines wrap at words to the terminal: none wider than it, at any width
+    import struct, termios, fcntl, unicodedata
+    def shown_width(line):
+        return sum(2 if unicodedata.east_asian_width(c) in 'WF' else 0 if unicodedata.combining(c) else 1 for c in line)
+    for cols in (40, 48, 60, 100):
+        pid, fd = pty.fork()
+        if pid == 0:
+            fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack('HHHH', 30, cols, 0, 0))
+            os.execve(geistr, [geistr, 'chat', 'ref', '--new', *base], {**env, 'TERM': 'xterm'})
+        out = until(fd, 'geistr · ')
+        time.sleep(.5)
+        os.write(fd, b'?'); out += until(fd, 'Ctrl-L clear screen')
+        os.write(fd, b'/help\r'); out += until(fd, 'end (or Ctrl-D)')
+        os.write(fd, b'/info\r'); out += until(fd, 'tokens (')
+        finish_chat(pid, fd)
+        text = re.sub(r'\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b\[[0-9;?]*[A-Za-z]', '', out.decode(errors='replace'))
+        wide = [l for l in re.split(r'[\r\n]', text) if shown_width(l) > cols]
+        assert not wide, (cols, wide)
+    print('geistr run/chat: answers, prompt from stdin, Ctrl-C (130 / stopped answer), exit codes, settings, Tab completion in a terminal, lines within 40–100 columns passed')
 
 # ---- the conversation across runs (in a terminal only) ------------------------
 def section_resume():
@@ -258,12 +295,80 @@ def section_resume():
     history = os.path.join(env['GEISTEN_HOME'], 'history')                # what was typed, across chats
     assert os.stat(history).st_mode & 0o777 == 0o600
     assert [json.loads(l)['line'] for l in open(history)] == ['My name is Ada.', 'What is my name?', 'Hello.']
+    terminal_chat('Line one.\nLine two.\\\rLine three.')                   # Ctrl-J and \ + Enter: one message
+    assert lines(stored()[-1])[-2]['content'] == 'Line one.\nLine two.\nLine three.', lines(stored()[-1])[-2]
     terminal_chat(' Not for the history.')                                # a leading space: not kept
     assert geistr_run('config', 'history', 'off').returncode == 0
     terminal_chat('Nor this.')                                            # history off: not kept
     assert geistr_run('config', 'history', 'on').returncode == 0
-    assert [json.loads(l)['line'] for l in open(history)] == ['My name is Ada.', 'What is my name?', 'Hello.']
-    print('geistr chat: continues the last conversation in a terminal, --new, private files, input history, piped chats keep nothing passed')
+    assert [json.loads(l)['line'] for l in open(history)] == ['My name is Ada.', 'What is my name?', 'Hello.',
+                                                             'Line one.\nLine two.\nLine three.']
+
+    # the context meter: from 50 % the prompt says how full it is; /info always; /clear resets
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execve(geistr, [geistr, 'chat', 'ref', '--new', *base], {**env, 'TERM': 'xterm', 'GEISTR_TEST_CONTEXT': '512'})
+    until(fd, 'Ctrl-C twice exits'); time.sleep(.3)
+    paste(fd, b'Ignore these words: ' + b'word ' * 250 + b'Now say OK.')
+    out = until(fd, '%\x1b[0m > ', 180)                                # the prompt after the answer
+    pct = re.findall(rb'(\d+)%\x1b\[0m > ', out)
+    assert pct and 50 <= int(pct[-1]) <= 100, out[-300:]
+    os.write(fd, b'/info\r'); out = until(fd, 'of 512 tokens')
+    paste(fd, b'And these: ' + b'word ' * 250 + b'Say OK again.')    # no longer fits: the oldest go
+    until(fd, 'oldest message', 180)                                     # and the chat says so
+    until(fd, '%\x1b[0m > ', 60)
+    os.write(fd, b'/clear\r'); out = until(fd, 'a new conversation')
+    os.write(fd, b'/info\r'); out = until(fd, 'of 512 tokens')
+    assert b'context 0 of 512 tokens (0 %)' in out, out[-300:]
+    finish_chat(pid, fd)
+
+    # /retry: the last answer again (at temperature 0 once at 0.7), the old one gone; /copy via OSC 52
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execve(geistr, [geistr, 'chat', 'ref', '--new', *base], {**env, 'TERM': 'xterm', 'TERM_PROGRAM': 'iTerm.app'})
+    until(fd, 'Ctrl-C twice exits'); time.sleep(.3)
+    os.write(fd, b'Name one colour.\r'); until(fd, 'tok/s', 180); time.sleep(.5)
+    os.write(fd, b'/retry\r'); until(fd, 'retry at temperature 0.7'); until(fd, 'tok/s', 180); time.sleep(.5)
+    newest = max(stored(), key=lambda n: os.stat(os.path.join(chats, n)).st_mtime)
+    said = lines(newest)
+    assert [m['role'] for m in said] == ['user', 'assistant'] and said[0]['content'] == 'Name one colour.', said
+    os.write(fd, b'/copy\r'); out = until(fd, 'copied')
+    sent = re.search(rb'\x1b\]52;c;([A-Za-z0-9+/=]*)\x07', out)
+    import base64
+    assert sent and base64.b64decode(sent.group(1)).decode() == said[1]['content'], out[-300:]
+    os.write(fd, b'/copy code\r'); until(fd, 'no code block')
+    finish_chat(pid, fd)
+
+    # a conversation poisoned by the model's own loops: answers no longer grow, loops are kept cut and marked
+    loop = '"Hello, I\'m here to help you with your questions and ideas. ' + "I'm here to help you with your questions and ideas. " * 30
+    with open(os.path.join(chats, '9999999999998-1.jsonl'), 'w') as f:
+        for _ in range(7):
+            f.write(json.dumps({'role': 'user', 'content': 'Say hello in five words.'}) + '\n')
+            f.write(json.dumps({'role': 'assistant', 'content': loop}) + '\n')
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execve(geistr, [geistr, 'chat', 'ref', *base], {**env, 'TERM': 'xterm'})
+    until(fd, 'Ctrl-C twice exits'); time.sleep(.3)
+    for _ in range(5):
+        os.write(fd, b'Say hello in five words.\r'); until(fd, 'tok/s', 180); time.sleep(.5)
+    finish_chat(pid, fd)
+    newest = max(stored(), key=lambda n: os.stat(os.path.join(chats, n)).st_mtime)
+    answers = [m for m in lines(newest) if m['role'] == 'assistant'][7:]
+    sizes = [len(m['content']) for m in answers]
+    assert len(sizes) == 5 and max(sizes) <= 2 * sizes[0] + 40, sizes          # no longer growing
+    assert all(len(m['content']) < len(loop) // 4 for m in answers if m.get('cut')), sizes  # a loop: kept cut
+    os.remove(os.path.join(chats, newest))
+
+    # resuming a long conversation re-reads only its newest messages (the budget)
+    with open(os.path.join(chats, '9999999999999-1.jsonl'), 'w') as f:
+        for i in range(40):
+            f.write(json.dumps({'role': 'user', 'content': f'Question {i}: ' + 'tell me more ' * 15}) + '\n')
+            f.write(json.dumps({'role': 'assistant', 'content': f'Answer {i}: ' + 'here is more ' * 15}) + '\n')
+    started = time.time()
+    out = terminal_chat('Say OK.')
+    assert '↻ 80 · ' in out and 'resumes the last' in out, out[-400:]
+    assert time.time() - started < 60, time.time() - started
+    print('geistr chat: continues the last conversation in a terminal, --new, private files, input history, context meter, drop notice, resume budget, /retry, /copy, loops cut, piped chats keep nothing passed')
 
 # ---- serve and chat --socket --------------------------------------------------
 def section_serve():

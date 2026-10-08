@@ -17,7 +17,7 @@ enum { OK = 0, ERROR = 1, USAGE = 2, CANCELLED = 130 }; /* exit codes */
 
 struct settings {
     char   model[256], processor[8], system[2048];
-    double temperature;
+    double temperature, resume_tokens; /* resume_tokens: what a resumed conversation re-reads at most */
     bool   markdown, stats, intro, resume, history;
 };
 extern struct settings cfg;
@@ -54,9 +54,12 @@ int    speed_compare(int n, const char **refs); /* geistr bench --compare [A [B]
 
 /* ---- conversation.c: what was said in a chat --------------------------------- */
 
+enum { MARK_NONE, MARK_STOPPED, MARK_CUT }; /* an answer stopped by Esc, or cut where it looped */
 struct conversation {
-    size_t n, cap;
-    char **role, **content;
+    size_t         n, cap;
+    char         **role, **content;
+    unsigned char *mark;   /* per message, MARK_… */
+    size_t         unsent; /* from here the chat does not hold the messages (SIZE_MAX: it holds all) */
     char   system[2048]; /* the system prompt for a new conversation */
     bool   carry;        /* the next send carries it all (a new model, prompt or temperature) */
     char   file[4400], resumed_from[4400]; /* "" when not kept */
@@ -71,8 +74,21 @@ bool conv_system(struct conversation *c, const char *text);
 /* The user said text: where the next send starts (0 = all of it; whole for a
  * service, which finds what it holds). */
 size_t conv_say(struct conversation *c, const char *text, bool whole);
-void   conv_answered(struct conversation *c, const char *answer); /* also stores it */
+/* Sending it all again (resumed, another model): where to start so the newest
+ * messages fit about `bytes` — at a user message, the newest question always;
+ * the system prompt goes besides. 0 when everything fits. */
+size_t conv_budget(const struct conversation *c, size_t bytes);
+void   conv_answered(struct conversation *c, const char *answer, int mark); /* also stores it */
+/* An answer that ended looping: the length to keep, through the first copy of
+ * the repeated part (all of it when no repeat is found at its end). */
+size_t conv_loop_cut(const char *answer);
 void   conv_refused(struct conversation *c);                      /* the chat refused the last message */
+/* /retry: the last answer and its question leave; the question into out.
+ * false when the conversation does not end in an answer. */
+bool conv_retract(struct conversation *c, char *out, size_t cap);
+/* The last answer (Markdown), or nullptr; with code, its last fenced code
+ * block's content (*len bytes, without the fences), or nullptr if none. */
+const char *conv_last_answer(const struct conversation *c, bool code, size_t *len);
 /* The last question and its first 60 characters' bytes, for "↻ … „…“". */
 const char *conv_last_question(const struct conversation *c, int *bytes);
 void        conv_file_new(struct conversation *c);
@@ -90,6 +106,7 @@ struct session {
     double           temperature;
     uint32_t         context;
     geistr_reasoning reasoning; /* the catalog's, for each chat on the model */
+    uint32_t         used;      /* context tokens after the last answer (0: unknown, or cleared) */
 };
 
 extern geistr_chat *volatile running; /* the answer Ctrl-C stops */

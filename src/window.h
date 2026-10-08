@@ -33,3 +33,20 @@ static inline uint32_t window_choose(uint64_t trained,
         return (uint32_t) trained;
     return fit < WINDOW_MIN ? 0 : (uint32_t) fit;
 }
+
+#define WINDOW_GPU_HEADROOM (512ull << 20) /* at least this much device memory stays free */
+
+/* The budget on a GPU: the RAM budget, capped at the device memory that is
+ * free less a headroom for the buffers that do not grow with the window
+ * (scratch, staging) and for the display: a tenth of the device, at least
+ * WINDOW_GPU_HEADROOM. Never 0, which window_choose reads as "no limit":
+ * with no device memory to spare it is 1 byte, and nothing fits. */
+static inline uint64_t window_gpu_budget(uint64_t ram_budget, uint64_t device_total, uint64_t device_free) {
+    uint64_t headroom = device_total / 10;
+    if (headroom < WINDOW_GPU_HEADROOM)
+        headroom = WINDOW_GPU_HEADROOM;
+    const uint64_t device = device_free > headroom ? device_free - headroom : 0;
+    if (device == 0)
+        return 1;
+    return ram_budget && ram_budget < device ? ram_budget : device;
+}

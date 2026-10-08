@@ -98,7 +98,8 @@ int main(void) {
     check("  * eingerückt", "  • eingerückt");
     check("> zitiert", "«q»│ zitiert«»");
     check("---", "---");
-    check("```c\nint x = 1; // **nicht fett**\n```\nnach", "«c»int x = 1; // **nicht fett**\n«»nach");
+    check("```c\nint x = 1; // **nicht fett**\n```\nnach", "«c»── c ──\n│ int x = 1; // **nicht fett**\n«»──\nnach");
+    check("```\na\n\nb\n```\n", "«c»──\n│ a\n│ \n│ b\n«»──\n"); /* no language; an empty line keeps the gutter */
     check("1. erstens", "1. erstens");
     /* math */
     check("Euler: $e^{i\\pi} + 1 = 0$.", "Euler: «m»e^(iπ) + 1 = 0«»."); /* no superscript π */
@@ -158,11 +159,79 @@ int main(void) {
     test_width = 16;
     check("Short then Donaudampfschifffahrtsgesellschaftskapitän ends.\n",
           "Short then\nDonaudampfschifffahrtsgesellschaftskapitän\nends.\n");
+    test_width = 20; /* code is not word-wrapped: its lines stay as they are */
+    check("Some prose that is long enough to wrap here.\n```py\nprint('a long line of code that goes on')\n```\n",
+          "Some prose that is\nlong enough to wrap\nhere.\n«c»── py ──\n│ print('a long line of code that goes on')\n«»──\n");
+    check("```\nunclosed", "«c»──\n│ unclosed«»");               /* stopped mid-block */
     test_wrap = false, test_width = 0;
+    /* links: [text](url) as a hyperlink (OSC 8; «link» here), the URL after the
+     * text when it differs; bare http(s) URLs linked; no link: as written */
+    check("See [the docs](https://ex.com/d) now.\n", "See «link https://ex.com/d»«u»the docs«»«/link» (https://ex.com/d) now.\n");
+    check("[https://ex.com](https://ex.com)\n", "«link https://ex.com»«u»https://ex.com«»«/link»\n");
+    check("a [not a link] b\n", "a [not a link] b\n");
+    check("x [y](no url) z\n", "x [y](no url) z\n");
+    check("[**bold** link](https://b.c)\n", "«link https://b.c»«u»«bu»bold«u» link«»«/link» (https://b.c)\n");
+    check("Visit https://ex.com/a, then.\n", "Visit «link https://ex.com/a»«u»https://ex.com/a«»«/link», then.\n");
+    check("(see https://x.org/p).\n", "(see «link https://x.org/p»«u»https://x.org/p«»«/link»).\n");
+    check("http is a protocol, hello there.\n", "http is a protocol, hello there.\n");
+    check("an unclosed [link", "an unclosed [link");
+    {   /* in the terminal: the OSC sequence takes no columns when wrapping */
+        const char *in[] = {"Read [the guide](https://example.com/guide) before you start the engine now.\n"};
+        test_wrap = true, test_width = 30;
+        char *got = run(in, 1, MD_ANSI), shown[512], *o = shown;
+        test_wrap = false, test_width = 0;
+        for (const char *p = got; *p && o < shown + sizeof shown - 1; p++) {
+            if (p[0] == '\033' && p[1] == ']') { /* OSC … ESC \ */
+                p = strstr(p + 2, "\033\\") + 1;
+                continue;
+            }
+            if (p[0] == '\033') { /* CSI … letter */
+                while (*p && !(*p >= '@' && *p <= '~' && *p != '['))
+                    p++;
+                continue;
+            }
+            *o++ = *p;
+        }
+        *o = 0;
+        if (strcmp(shown, "Read the guide\n(https://example.com/guide)\nbefore you start the engine\nnow.\n")) {
+            fprintf(stderr, "links wrap by what shows, got\n%s\n", shown);
+            failures++;
+        }
+        if (!strstr(got, "\033]8;;https://example.com/guide\033\\")) {
+            fprintf(stderr, "no OSC 8 hyperlink in %s\n", got);
+            failures++;
+        }
+        free(got);
+    }
+    {   /* md_say: the chat's own lines at words, under the text after a symbol, or at a set column */
+        struct {
+            const char *in, *want;
+            unsigned    width, hang;
+        } says[] = {
+            {"\033[2m↻ 80 · „Question 39: tell me more“ · resumes the last 38 · /clear new\033[0m\n",
+             "\033[2m↻ 80 · „Question 39: tell me\n  more“ · resumes the last 38\n  · /clear new\033[0m\n", 30, 0},
+            {"  ⟲ it repeated itself: kept up to the repeat · /retry or /clear\n",
+             "  ⟲ it repeated itself: kept\n    up to the repeat · /retry\n    or /clear\n", 30, 0},
+            {"/model     another model, same conversation\n", "/model     another model,\n           same conversation\n", 28, 11},
+            {"short line\n", "short line\n", 80, 0},
+        };
+        for (size_t i = 0; i < sizeof says / sizeof *says; i++) {
+            char  *buf = nullptr;
+            size_t len = 0;
+            FILE  *f   = open_memstream(&buf, &len);
+            md_say(f, says[i].in, says[i].width, says[i].hang);
+            fclose(f);
+            if (strcmp(buf, says[i].want)) {
+                fprintf(stderr, "md_say at %u\n  got  %s\n  want %s\n", says[i].width, buf, says[i].want);
+                failures++;
+            }
+            free(buf);
+        }
+    }
     if (failures) {
         fprintf(stderr, "render: %d failures\n", failures);
         return 1;
     }
-    puts("render: Markdown, tables and math for the terminal, split-invariant, raw mode untouched, word wrap passed");
+    puts("render: Markdown, tables and math for the terminal, split-invariant, raw mode untouched, word wrap, links, code frames, the chat's own lines passed");
     return 0;
 }

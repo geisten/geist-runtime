@@ -25,6 +25,8 @@ static void style(struct md *m) {
         strcat(now, "q");
     if (m->math)
         strcat(now, "m");
+    if (m->underline)
+        strcat(now, "u");
     if (!strcmp(now, m->last))
         return;
     strcpy(m->last, now);
@@ -45,6 +47,8 @@ static void style(struct md *m) {
         fputs("\033[2m", m->out);
     if (m->math)
         fputs("\033[33m", m->out);
+    if (m->underline)
+        fputs("\033[4m", m->out);
 }
 
 void md_init(struct md *m, enum md_mode mode, FILE *out) {
@@ -272,6 +276,12 @@ static unsigned cols(const char *s, size_t n) {
     unsigned  w  = 0;
     mbstate_t st = {};
     for (size_t i = 0; i < n;) {
+        if (s[i] == '\033' && i + 1 < n && s[i + 1] == ']') { /* OSC (a hyperlink): up to BEL or ESC \ */
+            for (i += 2; i < n && s[i] != '\a' && !(s[i] == '\033' && i + 1 < n && s[i + 1] == '\\'); i++) {
+            }
+            i += i < n && s[i] == '\a' ? 1 : 2;
+            continue;
+        }
         if (s[i] == '\033') {
             i++;
             if (i < n && s[i] == '[')
@@ -781,7 +791,137 @@ static void pending_resolve(struct md *m, char c) {
         inline_char(m, c);
 }
 
+/* ---- links ---------------------------------------------------------------- */
+
+/* A hyperlink (OSC 8): the text underlined and clickable where the terminal
+ * supports it; the URL dim after it when it differs, so it stays readable
+ * (and copyable) where it does not. */
+static void link_emit(struct md *m, const char *text, size_t n_text, const char *url) {
+    if (m->mode == MD_TAGS)
+        fprintf(m->out, "«link %s»", url);
+    else
+        fprintf(m->out, "\033]8;;%s\033\\", url);
+    m->underline = true;
+    style(m);
+    bool literal = m->literal;
+    m->literal   = true;
+    for (size_t i = 0; i < n_text; i++) /* the text keeps its inline marks (`code`, **bold**) */
+        inline_char(m, text[i]);
+    if (m->pending)
+        pending_resolve(m, 0);
+    m->literal   = literal;
+    m->underline = false;
+    style(m);
+    fputs(m->mode == MD_TAGS ? "«/link»" : "\033]8;;\033\\", m->out);
+    if (strlen(url) != n_text || strncmp(text, url, n_text)) {
+        bool faint = m->mode == MD_ANSI;
+        fprintf(m->out, " %s(%s)%s", faint ? "\033[2m" : "", url, faint ? "\033[22m" : "");
+    }
+}
+
+/* Not a link after all: what was held, as written. */
+static void link_literal(struct md *m) {
+    int  stage   = m->link;
+    bool literal = m->literal;
+    m->link      = 0;
+    m->literal   = true;
+    text(m, '[');
+    for (size_t i = 0; i < m->n_link_text; i++)
+        inline_char(m, m->link_text[i]);
+    if (stage >= 2)
+        text(m, ']');
+    if (stage == 3) {
+        text(m, '(');
+        for (size_t i = 0; i < m->n_link_url; i++)
+            inline_char(m, m->link_url[i]);
+    }
+    m->literal = literal;
+}
+
+/* Held bare-URL characters that are not one, as written. */
+static void bare_literal(struct md *m, const char *s, size_t n) {
+    bool literal = m->literal;
+    m->literal   = true;
+    for (size_t i = 0; i < n; i++)
+        inline_char(m, s[i]);
+    m->literal = literal;
+}
+
+/* A character while a [text](url) is open; false when it ended the link and
+ * c is still to be handled. */
+static bool link_char(struct md *m, char c) {
+    if (m->link == 1) {
+        if (c == ']')
+            m->link = 2;
+        else if (m->n_link_text + 1 < sizeof m->link_text)
+            m->link_text[m->n_link_text++] = c;
+        else
+            return link_literal(m), false;
+        return true;
+    }
+    if (m->link == 2) {
+        if (c == '(') {
+            m->link = 3;
+            return true;
+        }
+        return link_literal(m), false;
+    }
+    if (c == ')' && m->n_link_url) {
+        m->link_url[m->n_link_url] = 0;
+        m->link                    = 0;
+        link_emit(m, m->link_text, m->n_link_text, m->link_url);
+        return true;
+    }
+    if (c == ' ' || m->n_link_url + 1 >= sizeof m->link_url)
+        return link_literal(m), false;
+    m->link_url[m->n_link_url++] = c;
+    return true;
+}
+
+/* A bare http(s):// URL: held while it can still be one, linked at its end
+ * (trailing punctuation stays outside). */
+static bool bare_possible(const char *s, size_t n) {
+    static const char *const schemes[] = {"https://", "http://"};
+    for (size_t k = 0; k < 2; k++) {
+        size_t len = strlen(schemes[k]);
+        if (!strncmp(s, schemes[k], n < len ? n : len))
+            return true;
+    }
+    return false;
+}
+
+static void bare_end(struct md *m) {
+    size_t n = m->n_bare, scheme = strncmp(m->bare, "https://", 8) ? 7 : 8;
+    m->n_bare = 0;
+    size_t url = n;
+    while (url > scheme && strchr(".,;:!?)\"'", m->bare[url - 1]))
+        url--;
+    if (url > scheme && !strncmp(m->bare, "http", 4) && n >= scheme && m->bare[scheme - 1] == '/') {
+        char link[sizeof m->bare];
+        memcpy(link, m->bare, url), link[url] = 0;
+        link_emit(m, link, url, link);
+    } else
+        url = 0;
+    bare_literal(m, m->bare + url, n - url);
+}
+
 static void inline_char(struct md *m, char c) {
+    char before = m->before;
+    m->before   = c;
+    if (m->link && link_char(m, c))
+        return;
+    if (m->n_bare) {
+        if (c != ' ' && c != '<' && c != '>' && m->n_bare + 1 < sizeof m->bare) {
+            m->bare[m->n_bare++] = c;
+            if (!bare_possible(m->bare, m->n_bare)) { /* not a URL after all: as written */
+                size_t n  = m->n_bare;
+                m->n_bare = 0;
+                bare_literal(m, m->bare, n);
+            }
+            return;
+        }
+        bare_end(m);
+    }
     if (m->pending) {
         pending_resolve(m, c);
         return;
@@ -798,6 +938,15 @@ static void inline_char(struct md *m, char c) {
             text(m, c);
         return;
     }
+    if (c == '[' && !m->literal) {
+        m->link        = 1;
+        m->n_link_text = m->n_link_url = 0;
+        return;
+    }
+    if (c == 'h' && !m->literal && (!before || before == ' ' || before == '(' || before == '\n')) {
+        m->bare[0] = c, m->n_bare = 1;
+        return;
+    }
     if (c == '*' || c == '$' || c == '\\') {
         m->pending = c;
         return;
@@ -808,6 +957,27 @@ static void inline_char(struct md *m, char c) {
         return;
     }
     text(m, c);
+}
+
+/* ---- code blocks: a frame that shows where they start and end ---------------- */
+
+static bool wrapping(const struct md *m);
+
+/* A code line's dim "│ " (part of the block style: the terminal's own wrap of
+ * a long line does not repeat it). */
+static void gutter(struct md *m) {
+    fputs(m->mode == MD_ANSI ? "\033[2m│\033[22m " : "│ ", m->out);
+}
+
+static void fence_rule(struct md *m) {
+    bool faint = m->mode == MD_ANSI;
+    fputs(faint ? "\033[2m" : "", m->out);
+    if (m->block && m->n_lang) /* opening, with a language */
+        fprintf(m->out, "── %.*s ──", (int) m->n_lang, m->lang);
+    else
+        fputs("──", m->out);
+    fputs(faint ? "\033[22m" : "", m->out);
+    text(m, '\n');
 }
 
 enum prefix { P_MORE, P_TEXT, P_HEADING, P_BULLET, P_QUOTE, P_FENCE };
@@ -866,9 +1036,12 @@ static void prefix_release(struct md *m, bool final) {
     if (p != P_TEXT) {
         fwrite(held, 1, indent, m->out);
         from = indent + marker;
-        if (p == P_FENCE) {
+        if (p == P_FENCE) { /* the fence line becomes a rule with the language (at its end) */
             m->block     = !m->block;
-            m->skip_line = true; /* the fence line itself (and its language) is not shown */
+            m->skip_line = true;
+            m->n_lang    = 0;
+            if (wrapping(m)) /* code is not word-wrapped: a mark for the wrap filter */
+                fputc(m->block ? '\001' : '\002', m->out);
             style(m);
             return;
         }
@@ -879,6 +1052,8 @@ static void prefix_release(struct md *m, bool final) {
         style(m);
         fputs(p == P_BULLET ? "• " : p == P_QUOTE ? "│ " : "", m->out);
     }
+    if (m->block)
+        gutter(m);
     for (size_t i = from; i < n; i++)
         if (m->block)
             text(m, held[i]);
@@ -890,6 +1065,10 @@ static void prefix_release(struct md *m, bool final) {
 static void flush_pending(struct md *m) {
     if (m->line_start && m->n_prefix)
         prefix_release(m, true);
+    if (m->link)
+        link_literal(m);
+    if (m->n_bare)
+        bare_end(m);
     if (m->pending)
         pending_resolve(m, 0);
     if (m->closing) {
@@ -904,6 +1083,10 @@ static void newline(struct md *m) {
         math_cancel(m);
     bool skip  = m->skip_line;
     m->skip_line = false;
+    if (skip) /* a fence: "── python ──" opening a block, "──" closing it */
+        fence_rule(m);
+    else if (m->block && m->line_start) /* an empty code line keeps the gutter */
+        gutter(m);
     m->bold = m->italic = m->code = m->heading = m->quote = false;
     style(m);
     if (!skip)
@@ -940,8 +1123,11 @@ static void feed_char(struct md *m, char c) {
         newline(m);
         return;
     }
-    if (m->skip_line)
+    if (m->skip_line) { /* the fence line: its language */
+        if (m->block && c != '`' && c != ' ' && m->n_lang + 1 < sizeof m->lang)
+            m->lang[m->n_lang++] = c;
         return;
+    }
     if (m->line_start) {
         m->prefix[m->n_prefix++] = c;
         prefix_release(m, m->n_prefix == sizeof m->prefix);
@@ -976,6 +1162,13 @@ static void word_flush(struct md *m) {
         bool bar           = strstr(m->word, "•") || strstr(m->word, "│");
         m->hang            = bar && w == 1 ? m->col + 1 : m->lead;
         m->bar             = bar && w == 1 && strstr(m->word, "│");
+        if (m->saying) { /* the chat's own lines: a set indent, or after a symbol like ↻ ⟲ ○ */
+            const char *v = m->word;
+            while (*v == '\033') /* past the style */
+                v = strchr(v, 'm') ? strchr(v, 'm') + 1 : v + 1;
+            bool symbol = (unsigned char) *v >= 0x80 || !isalnum((unsigned char) *v); /* bytes, not the locale's */
+            m->hang     = m->say_hang ? m->say_hang : w <= 2 && symbol ? m->col + 1 : m->lead;
+        }
         m->head            = false;
     }
     m->n_word = 0;
@@ -984,6 +1177,17 @@ static void word_flush(struct md *m) {
 static void wrap_put(struct md *m, const char *s, size_t n) {
     for (size_t i = 0; i < n; i++) {
         char c = s[i];
+        if (c == '\001' || c == '\002') { /* a code block begins or ends: no word wrap inside */
+            word_flush(m);
+            m->nowrap = c == '\001';
+            continue;
+        }
+        if (m->nowrap) {
+            fputc(c, m->sink);
+            if (c == '\n')
+                m->col = m->lead = m->hang = 0, m->bar = false, m->head = true;
+            continue;
+        }
         if (c == '\n' || c == '\r') {
             word_flush(m);
             m->spaces = 0; /* none at a line's end */
@@ -1025,6 +1229,15 @@ static void through_wrap(struct md *m, const char *s, void (*fn)(struct md *, co
     m->out = m->sink;
     wrap_put(m, buf, len);
     free(buf);
+}
+
+void md_say(FILE *out, const char *text, unsigned width, unsigned hang) {
+    struct md m;
+    md_init(&m, MD_ANSI, out);
+    m.width = width, m.wrap = true, m.saying = true, m.say_hang = hang;
+    wrap_put(&m, text, strlen(text));
+    word_flush(&m);
+    fflush(out);
 }
 
 static void feed_all(struct md *m, const char *s) {

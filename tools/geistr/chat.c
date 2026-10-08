@@ -8,6 +8,7 @@
 #include "render.h"
 #include "service.h"
 #include <poll.h>
+#include <stdarg.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <string.h>
@@ -194,6 +195,7 @@ static void watch_start(struct le *editor) {
         return;
     struct termios raw = keys_watch.cooked;
     raw.c_lflag &= (tcflag_t) ~(ECHO | ICANON); /* Ctrl-C is a key here too (keys_only) */
+    raw.c_iflag &= (tcflag_t) ~ICRNL;           /* Enter stays \r: \n is Ctrl-J, a new line */
     raw.c_cc[VMIN]  = 1;
     raw.c_cc[VTIME] = 0;
     tcsetattr(STDIN_FILENO, TCSANOW, &raw);
@@ -241,6 +243,7 @@ static void keys_only(bool on) {
     struct termios t = original_term;
     t.c_lflag &= (tcflag_t) ~(ISIG | ECHO | ICANON); /* keys typed while a command runs: not echoed in
                                                       * between, the editor shows them when it reads */
+    t.c_iflag &= (tcflag_t) ~ICRNL; /* typed ahead, Enter stays \r (sends): \n is Ctrl-J (a new line) */
     t.c_cc[VMIN]  = 1;
     t.c_cc[VTIME] = 0;
     term_changed = tcsetattr(STDIN_FILENO, TCSANOW, &t) == 0;
@@ -249,22 +252,56 @@ static void keys_only(bool on) {
     sigaction(SIGHUP, &sa, nullptr);
 }
 
+/* The terminal's columns; 0 when output is not a terminal. */
+static unsigned columns(void) {
+    struct winsize ws;
+    return isatty(STDOUT_FILENO) && ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 ? ws.ws_col : 0;
+}
+
+/* A line of the chat's own (styles included), wrapped at words to the
+ * terminal: continuation lines under the text after a leading symbol, or at
+ * hang. Piped: as it is. */
+static void say_at(unsigned hang, const char *fmt, ...) {
+    char    text[8192];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(text, sizeof text, fmt, ap);
+    va_end(ap);
+    unsigned w = columns();
+    if (w)
+        md_say(stdout, text, w, hang);
+    else
+        fputs(text, stdout);
+}
+#define say(...) say_at(0, __VA_ARGS__)
+
 static void shortcuts(void) {
-    bool faint = tty_out();
-    printf("%sEnter send · Esc stop the answer · Ctrl-C clear the line, twice: exit · Ctrl-D exit\n"
-           "/ commands (↑↓ choose · Tab take · Esc close) · ↑↓ earlier lines · → take the hint\n"
-           "Ctrl-R search earlier lines · Ctrl-A/E start/end · Ctrl-U/K delete to start/end · Ctrl-W a word · Ctrl-L clear screen%s\n",
-           dim(faint), normal(faint));
+    bool       faint = tty_out();
+    const char *keys[] = {"Enter send", "Ctrl-J or \\ + Enter a new line", "Esc stop the answer",
+                          "Ctrl-C clear the line, twice: exit", "Ctrl-D exit",
+                          "/ commands (↑↓ choose · Tab take · Esc close)", "↑↓ earlier lines", "→ take the hint",
+                          "Ctrl-R search earlier lines", "Ctrl-A/E start/end", "Ctrl-U/K delete to start/end",
+                          "Ctrl-W a word", "Ctrl-L clear screen"};
+    unsigned    w      = columns();
+    bool        narrow = w && w < 60; /* one per line */
+    char        text[1024] = "";
+    for (size_t i = 0; i < sizeof keys / sizeof *keys; i++) {
+        bool row_end = i == 4 || i == 7; /* three groups in a wide terminal */
+        strcat(text, keys[i]);
+        strcat(text, i + 1 == sizeof keys / sizeof *keys ? "" : narrow || row_end ? "\n" : " · ");
+    }
+    say("%s%s%s\n", dim(faint), text, normal(faint));
 }
 
 static void intro(const char *name, const char *backend, bool gpu) {
     if (!cfg.intro || !tty_out())
         return;
-    printf("\033[2mgeistr · %s on %s %s   (⚙ CPU · ⚡ GPU)\n"
-           "/ commands · ? shortcuts · Esc stops an answer · Ctrl-C twice exits · geistr config intro off\033[0m\n",
-           name, gpu ? "⚡" : "⚙", backend);
+    say("\033[2mgeistr · %s on %s %s   (⚙ CPU · ⚡ GPU)\033[0m\n", name, gpu ? "⚡" : "⚙", backend);
+    unsigned w = columns();
+    if (!w || w >= 60) /* narrower: ? shows the keys */
+        say("\033[2m/ commands · ? shortcuts · Esc stops an answer · Ctrl-C twice exits · geistr config intro "
+            "off\033[0m\n");
 }
-
 
 void session_close(struct session *x) {
     geistr_chat_close(x->chat);
@@ -296,6 +333,10 @@ int session_open(struct session *x, const char *name, const char *processor, dou
     mo.processor         = !strcmp(processor, "cpu")   ? GEISTR_PROCESSOR_CPU
                            : !strcmp(processor, "gpu") ? GEISTR_PROCESSOR_GPU
                                                        : GEISTR_PROCESSOR_AUTO;
+#ifdef GEISTR_TESTING
+    if (getenv("GEISTR_TEST_CONTEXT")) /* a small window: the tests fill it quickly */
+        mo.context = (uint32_t) strtoul(getenv("GEISTR_TEST_CONTEXT"), nullptr, 10);
+#endif
     char error[256];
     *x = (struct session) {.temperature = temperature, .reasoning = reasoning};
     spinner_start(name, path);
@@ -338,6 +379,8 @@ static const struct le_candidate commands[] = {
         {"/system ", "system prompt (off: none)"},
         {"/info", "what runs now"},
         {"/save", "keep these settings for the next chat"},
+        {"/retry", "the last answer again (at temperature 0: once at 0.7)"},
+        {"/copy", "the last answer to the clipboard (/copy code: its last code block)"},
         {"/clear", "a new conversation"},
         {"/help", "the commands"},
         {"/exit", "end (or Ctrl-D)"},
@@ -443,19 +486,49 @@ static size_t complete_line(void *ctx, const char *line, struct le_candidate *ou
 
 static void chat_help(void) {
     for (size_t i = 0; i < sizeof commands / sizeof *commands; i++)
-        printf("%-10s %s\n", commands[i].line, commands[i].help);
+        say_at(11, "%-10s %s\n", commands[i].line, commands[i].help);
     shortcuts();
 }
 
 /* A dim line: how to use a command, what it shows. */
 static void usage(const char *text) {
     bool faint = tty_out();
-    printf("%s%s%s\n", dim(faint), text, normal(faint));
+    say("%s%s%s\n", dim(faint), text, normal(faint));
+}
+
+/* What a resumed conversation (or the first send on another model) re-reads
+ * at most: a quarter of the context, or resume_tokens if less, in bytes.
+ * ponytail: about 4 bytes a token, no tokenizer here; the runtime still
+ * drops more if the estimate falls short. */
+static size_t resume_bytes(const struct session *x) {
+    double tokens = x->context ? x->context / 4.0 : cfg.resume_tokens;
+    return (size_t) (4 * (cfg.resume_tokens < tokens ? cfg.resume_tokens : tokens));
+}
+
+/* How full the context is after the last answer, in percent. */
+static unsigned fill(const struct session *x) {
+    return x->context ? (unsigned) ((uint64_t) x->used * 100 / x->context) : 0;
+}
+
+/* The prompt: the processor, and from 50 % how full the context is (yellow
+ * from 80, red from 95). */
+static void prompt_text(const struct session *x, char *out, size_t cap) {
+    const char *symbol = on_gpu(x) ? "⚡" : "⚙";
+    unsigned    pct    = fill(x);
+    if (!tty_out()) {
+        pct >= 50 ? snprintf(out, cap, "%s %u%% > ", symbol, pct) : snprintf(out, cap, "%s > ", symbol);
+        return;
+    }
+    const char *color = pct >= 95 ? "\033[31m" : pct >= 80 ? "\033[33m" : "\033[2m";
+    if (pct >= 50)
+        snprintf(out, cap, "\033[2m%s\033[0m %s%u%%\033[0m > ", symbol, color, pct);
+    else
+        snprintf(out, cap, "\033[2m%s\033[0m > ", symbol);
 }
 
 static void status_line(const struct session *x, const char *what) {
     bool faint = tty_out();
-    printf("%s%s %s · %s%s%s\n", dim(faint), on_gpu(x) ? "⚡" : "⚙", x->backend, x->name, what,
+    say("%s%s %s · %s%s%s\n", dim(faint), on_gpu(x) ? "⚡" : "⚙", x->backend, x->name, what,
            normal(faint));
 }
 
@@ -516,6 +589,43 @@ static bool reopen(struct session *x, struct conversation *said) {
 enum { GO_ON, LEAVE };
 
 /* A slash command (line is changed: the argument is cut off). */
+/* text to the system clipboard: OSC 52 in a terminal known to take it (it
+ * works over SSH too), else pbcopy, wl-copy or xclip. What did it, or nullptr. */
+static const char *clipboard(const char *text, size_t len) {
+    const char *program = getenv("TERM_PROGRAM"), *term = getenv("TERM");
+    bool        osc52   = (program && (strstr(program, "iTerm") || !strcmp(program, "WezTerm") ||
+                                     !strcmp(program, "ghostty"))) ||
+                   getenv("KITTY_WINDOW_ID") || getenv("WT_SESSION") || getenv("TMUX") ||
+                   (term && (strstr(term, "kitty") || strstr(term, "alacritty") || strstr(term, "foot")));
+    if (osc52 && isatty(STDOUT_FILENO)) {
+        static const char b64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        fputs("\033]52;c;", stdout);
+        for (size_t i = 0; i < len; i += 3) {
+            unsigned v = (unsigned char) text[i] << 16 | (i + 1 < len ? (unsigned char) text[i + 1] << 8 : 0) |
+                         (i + 2 < len ? (unsigned char) text[i + 2] : 0);
+            putchar(b64[v >> 18 & 63]), putchar(b64[v >> 12 & 63]);
+            putchar(i + 1 < len ? b64[v >> 6 & 63] : '='), putchar(i + 2 < len ? b64[v & 63] : '=');
+        }
+        fputs("\a", stdout);
+        fflush(stdout);
+        return "OSC 52";
+    }
+    static const struct {
+        const char *command, *needs; /* needs: an environment variable that must be set */
+    } tools[] = {{"pbcopy", nullptr}, {"wl-copy", "WAYLAND_DISPLAY"}, {"xclip -selection clipboard", "DISPLAY"}};
+    for (size_t i = 0; i < sizeof tools / sizeof *tools; i++) {
+        char command[96];
+        snprintf(command, sizeof command, "%s 2>/dev/null", tools[i].command);
+        FILE *p = tools[i].needs && !getenv(tools[i].needs) ? nullptr : popen(command, "w");
+        if (!p)
+            continue;
+        bool written = fwrite(text, 1, len, p) == len;
+        if (pclose(p) == 0 && written) /* a missing tool exits 127 */
+            return tools[i].command;
+    }
+    return nullptr;
+}
+
 static int command(struct session *x, struct conversation *said, char *line, const char *remote) {
     char *arg = strchr(line, ' ');
     if (arg)
@@ -551,13 +661,43 @@ static int command(struct session *x, struct conversation *said, char *line, con
         return GO_ON;
     }
     if (processor_now || (!strcmp(line, "/model") && *arg)) {
-        /* Open the new session first: a failure keeps the current one. */
+        const char    *name = processor_now ? x->name : arg;
+        const char    *proc = processor_now ? processor_now : x->processor;
         struct session next;
-        if (session_open(&next, processor_now ? x->name : arg, processor_now ? processor_now : x->processor,
-                         x->temperature, true) != OK)
-            return GO_ON;
-        running = nullptr;
-        session_close(x);
+        if (on_gpu(x) && strcmp(proc, "cpu") != 0) {
+            /* Both may be on the GPU, and two models rarely fit its memory
+             * together: the current one goes first. The conversation is kept
+             * here (said); a failure reopens the previous model. */
+            char prev_name[sizeof x->name], prev_proc[sizeof x->processor];
+            char want[sizeof x->name], want_proc[sizeof x->processor];
+            snprintf(prev_name, sizeof prev_name, "%s", x->name);
+            snprintf(prev_proc, sizeof prev_proc, "%s", x->processor);
+            snprintf(want, sizeof want, "%s", name); /* name and proc may point into *x */
+            snprintf(want_proc, sizeof want_proc, "%s", proc);
+            char             path[4200] = "";
+            geistr_reasoning reasoning;
+            if (resolve(want, path, sizeof path, &reasoning) != OK) /* a typo keeps the model */
+                return GO_ON;
+            const double temperature = x->temperature;
+            running                  = nullptr;
+            session_close(x);
+            if (session_open(&next, want, want_proc, temperature, true) != OK) {
+                if (session_open(x, prev_name, prev_proc, temperature, true) != OK) {
+                    fprintf(stderr, "geistr: cannot reopen %s either\n", prev_name);
+                    return LEAVE;
+                }
+                running     = x->chat;
+                said->carry = said->n > 0;
+                status_line(x, " · back on the previous model");
+                return GO_ON;
+            }
+        } else {
+            /* Open the new session first: a failure keeps the current one. */
+            if (session_open(&next, name, proc, x->temperature, true) != OK)
+                return GO_ON;
+            running = nullptr;
+            session_close(x);
+        }
         *x          = next;
         running     = x->chat;
         said->carry = said->n > 0;
@@ -589,8 +729,21 @@ static int command(struct session *x, struct conversation *said, char *line, con
         puts(said->system[0] ? "system prompt set" : "no system prompt");
     } else if (!strcmp(line, "/info")) {
         status_line(x, remote ? " · service" : "");
-        printf("chat format %s · context %u · temperature %g%s%s\n", x->format, x->context, x->temperature,
-               said->system[0] ? " · system: " : "", said->system);
+        say("chat format %s · context %u of %u tokens (%u %%) · temperature %g%s%s\n", x->format, x->used,
+               x->context, fill(x), x->temperature, said->system[0] ? " · system: " : "", said->system);
+    } else if (!strcmp(line, "/copy")) {
+        size_t      len;
+        bool        code = !strcmp(arg, "code");
+        const char *text = conv_last_answer(said, code, &len);
+        if (!text) {
+            usage(code ? "/copy code: the last answer has no code block" : "/copy: no answer yet");
+            return GO_ON;
+        }
+        const char *how = clipboard(text, len);
+        if (how)
+            say("%s⧉ copied %.1f kB%s%s\n", dim(tty_out()), (double) len / 1000, code ? " of code" : "", normal(tty_out()));
+        else
+            puts("/copy: no clipboard here (a terminal with OSC 52, or pbcopy, wl-copy, xclip)");
     } else if (!strcmp(line, "/save")) {
         if (!remote) { /* a service's model is not this chat's choice */
             snprintf(cfg.model, sizeof cfg.model, "%s", x->name);
@@ -603,8 +756,9 @@ static int command(struct session *x, struct conversation *said, char *line, con
         if (x->chat)
             (void) geistr_chat_rewind(x->chat, 0);
         conv_clear(said);
+        x->used = 0;
         bool faint = tty_out(); /* what goes on: the system prompt stays */
-        printf("%s○ a new conversation%s%s%s\n", dim(faint), said->system[0] ? " · system: " : "",
+        say("%s○ a new conversation%s%s%s\n", dim(faint), said->system[0] ? " · system: " : "",
                said->system, normal(faint));
     } else
         chat_help();
@@ -661,13 +815,22 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
     if (said.n) { /* where it was: its size, the last question */
         int         bytes;
         const char *last = conv_last_question(&said, &bytes);
-        printf("\033[2m↻ %zu · „%.*s%s“ · /clear new\033[0m\n", said.n, bytes, last, last[bytes] ? "…" : "");
+        size_t      skip = remote ? 0 : conv_budget(&said, resume_bytes(&x));
+        char        part[96] = "";
+        if (skip) /* the rest stays in the file, but is not read again */
+            snprintf(part, sizeof part, " · resumes the last %zu", said.n - skip);
+        unsigned char mark = said.mark[said.n - 1];
+        if (mark != MARK_NONE) /* how the last answer ended */
+            snprintf(part + strlen(part), sizeof part - strlen(part), " · %s",
+                     mark == MARK_STOPPED ? "its last answer was stopped" : "its last answer looped (cut)");
+        say("\033[2m↻ %zu · „%.*s%s“%s · /clear new\033[0m\n", said.n, bytes, last, last[bytes] ? "…" : "",
+               part);
     }
     for (;;) {
         if (!edit) /* the editor takes a Ctrl-C that came between two reads */
             interrupted = 0;
-        char prompt[64];
-        snprintf(prompt, sizeof prompt, tty_out() ? "\033[2m%s\033[0m > " : "%s > ", on_gpu(&x) ? "⚡" : "⚙");
+        char prompt[96];
+        prompt_text(&x, prompt, sizeof prompt);
         if (edit) {
             enum le_event ev = le_read(&editor, prompt);
             if (ev == LE_EOF)
@@ -702,19 +865,43 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
             line[strcspn(line, "\n")] = 0;
         if (!line[0])
             continue;
-        if (line[0] == '/') {
+        bool warmer = false; /* /retry at temperature 0: this one answer at 0.7 */
+        if (!strcmp(line, "/retry")) {
+            if (!conv_retract(&said, line, sizeof line)) {
+                usage("/retry: no answer to retry yet");
+                continue;
+            }
+            warmer = x.temperature == 0;
+            if (warmer) { /* a new chat samples; it reads the conversation anew */
+                x.temperature = 0.7;
+                if (!remote && !reopen(&x, &said))
+                    break;
+            } else if (!remote) { /* the same chat, back to before the question */
+                size_t length = geistr_chat_length(x.chat);
+                if (length < 2 || geistr_chat_rewind(x.chat, length - 2) != GEISTR_OK)
+                    (void) geistr_chat_rewind(x.chat, 0), said.carry = said.n > 0;
+            }
+            say("%s↻ retry%s%s\n", dim(tty_out()), warmer ? " at temperature 0.7" : "", normal(tty_out()));
+        } else if (line[0] == '/') {
             if (command(&x, &said, line, remote) == LEAVE)
                 break;
             continue;
         }
         /* Normally only the new message; after a switch, the conversation once. */
-        size_t          from  = conv_say(&said, line, remote != nullptr);
-        size_t          count = said.n - from;
-        geistr_message *turn  = calloc(count, sizeof *turn);
+        size_t from = conv_say(&said, line, remote != nullptr);
+        /* All of it again (resumed, another model): only the newest within the
+         * budget, and the system prompt; a service matches the whole. */
+        size_t          skip   = !from && !remote ? conv_budget(&said, resume_bytes(&x)) : 0;
+        bool            system = skip && !strcmp(said.role[0], "system");
+        size_t          count  = (skip ? said.n - skip : said.n - from) + system;
+        geistr_message *turn   = calloc(count, sizeof *turn);
         if (!turn)
             break;
-        for (size_t i = 0; i < count; i++)
-            turn[i] = (geistr_message) {said.role[from + i], said.content[from + i]};
+        if (system)
+            turn[0] = (geistr_message) {said.role[0], said.content[0]};
+        for (size_t i = system; i < count; i++)
+            turn[i] = (geistr_message) {said.role[(skip ? skip : from) + i - system],
+                                        said.content[(skip ? skip : from) + i - system]};
         view_begin(&shown);
         if (edit)
             watch_start(&editor);
@@ -731,13 +918,31 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
         md_finish(&shown.view);
         free(turn);
         puts(s == GEISTR_CANCELLED ? " [stopped]" : "");
-        geistr_stats done = {.size = sizeof done};
-        if (remote ? !strcmp(rs.finish, "repetition")
-                   : geistr_chat_stats(x.chat, &done) == GEISTR_OK && done.finish == GEISTR_FINISH_REPETITION)
-            printf("%s  ⟲ it repeated itself: stopped there · /clear for a fresh conversation%s\n",
-                   dim(tty_out()), normal(tty_out()));
+        geistr_stats done  = {.size = sizeof done};
+        bool         known = !remote && geistr_chat_stats(x.chat, &done) == GEISTR_OK;
+        if (s == GEISTR_OK || s == GEISTR_CANCELLED)
+            x.used = remote ? rs.context_tokens : known ? done.context_tokens : x.used;
+        bool looped = remote ? !strcmp(rs.finish, "repetition") : known && done.finish == GEISTR_FINISH_REPETITION;
+        if (looped)
+            say("%s  ⟲ it repeated itself: kept up to the repeat · /retry or /clear%s\n", dim(tty_out()),
+                   normal(tty_out()));
+        if (known && done.dropped_messages) /* the model forgets the start: say so */
+            say("%s  ↥ %u oldest message%s left out to fit the context (%u tokens) · /clear starts fresh%s\n",
+                   dim(tty_out()), done.dropped_messages, done.dropped_messages == 1 ? "" : "s", x.context,
+                   normal(tty_out()));
         if (s == GEISTR_OK || s == GEISTR_CANCELLED) {
-            conv_answered(&said, shown.text);
+            /* A loop does not go back to the model as it was: it copies its own
+             * repeats. Kept up to the repeat, and the chat gets that version. */
+            if (looped && shown.text)
+                shown.text[conv_loop_cut(shown.text)] = 0;
+            conv_answered(&said, shown.text, s == GEISTR_CANCELLED ? MARK_STOPPED : looped ? MARK_CUT : MARK_NONE);
+            if (looped && !remote) { /* the chat drops its looping answer; the cut one goes with the next send */
+                size_t length = geistr_chat_length(x.chat);
+                if (length && geistr_chat_rewind(x.chat, length - 1) == GEISTR_OK)
+                    said.unsent = said.n - 1;
+                else
+                    (void) geistr_chat_rewind(x.chat, 0), said.carry = said.n > 0;
+            }
             if (s == GEISTR_OK && remote) {
                 speed_line(rs.output_tokens, rs.generation_ms, rs.total_ms, stdout);
                 speed_record(x.name, x.backend, rs.output_tokens, rs.generation_ms, rs.prefill_ms, "answer");
@@ -746,6 +951,11 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
         } else {
             conv_refused(&said); /* not part of the conversation: the chat refused it */
             report(s, remote ? why : geistr_chat_error(x.chat));
+        }
+        if (warmer) { /* back to temperature 0: a new chat, it reads the conversation anew */
+            x.temperature = 0;
+            if (!remote && !reopen(&x, &said))
+                break;
         }
     }
     if (edit) {

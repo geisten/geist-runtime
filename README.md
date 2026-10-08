@@ -84,22 +84,27 @@ Any other `.gguf` file works too: `geistr chat path/to/model.gguf`.
 
 ## Chat
 
-In a terminal, `geistr chat` renders Markdown, tables and math, shows the
+In a terminal, `geistr chat` renders Markdown, tables, math and clickable
+links, shows the
 speed after each answer and continues your last conversation (see below).
-Type `/` for the commands:
+Once the context is half full, the prompt says how full (`⚙ 62% >`, yellow
+from 80 %, red from 95 %); `/info` always shows it. Type `/` for the commands:
 
 ```
 /model gemma4-e2b    switch the model, keep the conversation (best fit first)
 /gpu /cpu /auto      switch the processor (Metal on macOS, Vulkan on Linux)
 /temp 0.7            sampling temperature
 /system Be brief.    system prompt (/system off removes it)
-/info                what runs now
+/info                what runs now, and how full the context is
+/retry               the last answer again (at temperature 0: once at 0.7)
+/copy  /copy code    the last answer, or its last code block, to the clipboard
 /save                keep model, processor, temperature and system prompt
 /clear  /exit
 ```
 
 | key | does |
 |---|---|
+| Ctrl-J, Alt-Enter, `\` + Enter | a new line in the message (Enter sends) |
 | Esc | stop the answer |
 | Ctrl-C | clear the line; twice on an empty line: exit |
 | ↑ ↓ | earlier lines, also from earlier chats; → takes the hint |
@@ -122,6 +127,12 @@ switch to a bigger model mid-conversation without explaining everything
 again. It is also private by design: each conversation is a plain file on
 your computer (readable only by you, one JSON message per line), never sent
 anywhere.
+
+A long conversation stays fast to resume: the model re-reads only the
+newest part (about 2000 tokens, `geistr config resume_tokens`), and the
+`↻` line says how much. The whole conversation stays in the file. When a
+conversation outgrows the model's context, the oldest messages are left
+out, and the chat says so (`↥ 12 oldest messages left out …`).
 
 - `/clear` starts a new conversation and keeps the old file.
 - `geistr chat --new` starts fresh once; `geistr config resume off` always.

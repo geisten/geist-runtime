@@ -170,16 +170,32 @@ static int32_t token_lookup(void *m, const char *text) {
 }
 
 /* The window (D8, window.h) with three quarters of physical memory as the
- * budget. */
+ * budget; on a GPU no more than its free device memory less a headroom
+ * (window_gpu_budget): weights and KV cache live there, and 3/4 of RAM gave
+ * Gemma 4 E2B a 131072-token window, 5.7 GB of an 11 GiB card. CPU backends
+ * report no device memory and keep the RAM budget. */
 static geistr_status choose_window(const struct geist_model_plan *plan,
+                                   struct geist_backend          *be,
                                    uint32_t                       wanted,
                                    uint32_t                      *out,
                                    char                          *error,
                                    size_t                         cap) {
-    const uint64_t per = (uint64_t) plan->kv_bytes_per_token + plan->model_bytes_per_token;
-    *out = window_choose(plan->context_length, wanted, plan->weight_bytes, per, physical_memory() / 4 * 3);
+    const uint64_t per    = (uint64_t) plan->kv_bytes_per_token + plan->model_bytes_per_token;
+    uint64_t       budget = physical_memory() / 4 * 3;
+    bool           device = false;
+#ifdef GEIST_HAS_BACKEND_MEMORY_INFO /* geistlib with geist_backend_memory_info */
+    struct geist_backend_memory mem = {};
+    if (geist_backend_memory_info(be, &mem) == GEIST_OK && mem.total_bytes > 0) {
+        budget = window_gpu_budget(budget, mem.total_bytes, mem.free_bytes);
+        device = true;
+    }
+#else
+    (void) be;
+#endif
+    *out = window_choose(plan->context_length, wanted, plan->weight_bytes, per, budget);
     if (*out == 0) {
-        put_error(error, cap, "the model does not fit into memory with a %u-token window", WINDOW_MIN);
+        put_error(error, cap, "the model does not fit into %smemory with a %u-token window", device ? "the GPU's " : "",
+                  WINDOW_MIN);
         return GEISTR_NO_MEMORY;
     }
     return GEISTR_OK;
@@ -307,7 +323,7 @@ static geistr_status model_open(const char              *path,
         return from_engine(s);
     }
     uint32_t      window = 0;
-    geistr_status gs     = choose_window(&plan, o.context, &window, error, cap);
+    geistr_status gs     = choose_window(&plan, be, o.context, &window, error, cap);
     if (gs != GEISTR_OK) {
         geist_backend_destroy(be);
         return gs;

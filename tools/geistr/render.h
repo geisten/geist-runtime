@@ -32,7 +32,7 @@ enum md_mode {
 struct md {
     enum md_mode mode;
     FILE        *out;
-    bool         bold, italic, code, block, heading, quote, skip_line;
+    bool         bold, italic, code, block, heading, quote, skip_line, underline;
     int          math;      /* 0, or the opener: '$', 'D' ($$), '(' or '[' */
     bool         closing;   /* a '$' that closes unless a digit follows (Pandoc's rule) */
     bool         line_start;
@@ -42,6 +42,15 @@ struct md {
     char         math_buf[2048];
     size_t       n_math;
     char         last[8]; /* the style last emitted */
+    /* links: [text](url) held until it closes (stage 1 text, 2 after ']', 3 url);
+     * a bare http(s):// URL held until its end */
+    int          link;
+    char         link_text[256], link_url[512], bare[512];
+    size_t       n_link_text, n_link_url, n_bare;
+    char         before;  /* the input character before this one: a bare URL starts a word */
+    bool         literal; /* replaying held text, or a link's own: no new link starts */
+    char         lang[32]; /* a code fence's language, shown on its line */
+    size_t       n_lang;
     unsigned     width;   /* terminal columns for tables (0: 80) */
     char        *table;   /* the table's lines so far, raw */
     size_t       n_table, cap_table, table_rows;
@@ -55,6 +64,9 @@ struct md {
     unsigned spaces;          /* held until the next word: dropped at a line's end */
     bool     head;            /* no word on this line yet */
     bool     bar;             /* a quote: its continuation lines repeat the │ */
+    bool     nowrap;          /* inside a code block: lines as they are */
+    unsigned say_hang;        /* md_say: the continuation indent (0: after a leading symbol) */
+    bool     saying;          /* md_say: the program's own text, not an answer */
     char     word[512];       /* the word being written (escapes included) */
     size_t   n_word;
 };
@@ -62,6 +74,11 @@ struct md {
 void md_init(struct md *m, enum md_mode mode, FILE *out);
 void md_feed(struct md *m, const char *text);
 void md_finish(struct md *m); /* flushes what is held (a table: drawn), resets the style */
+
+/* The program's own text (escapes included) word-wrapped to width:
+ * continuation lines indented by hang, or with hang 0 under the text after
+ * a leading symbol ("↻ …", "  ⟲ …"), else under the line's leading spaces. */
+void md_say(FILE *out, const char *text, unsigned width, unsigned hang);
 
 /* LaTeX → Unicode into out[0..cap) (always NUL-terminated). */
 void md_math(const char *tex, char *out, size_t cap);
