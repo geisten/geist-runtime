@@ -11,6 +11,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <time.h>
 #include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
@@ -216,6 +217,7 @@ void svc_chat(const struct svc_options *o, struct held *pool, const struct svc_r
         opts.reasoning        = o->reasoning;
         opts.temperature      = (float) r->temperature;
         opts.overflow         = GEISTR_OVERFLOW_DROP_OLDEST;
+        opts.thinking         = 1; /* its pieces keep a stream alive */
         opts.stop             = r->stop;
         opts.n_stop           = r->n_stop;
         if (geistr_chat_open(o->model, &opts, &c->chat) != GEISTR_OK) {
@@ -247,18 +249,21 @@ void svc_chat(const struct svc_options *o, struct held *pool, const struct svc_r
     size_t       text_len = 0;
     FILE        *answer   = open_memstream(&text, &text_len);
     geistr_piece p        = {.size = sizeof p};
-    bool         gone     = false;
-    while ((s = geistr_chat_next(c->chat, &p)) == GEISTR_OK && p.part != GEISTR_PART_END) {
-        if (p.part != GEISTR_PART_ANSWER)
-            continue;
-        if (answer)
-            fwrite(p.text, 1, p.len, answer);
-        if (!out->part(out->ctx, p.text, p.len)) {
-            gone = true;
-            geistr_chat_cancel(c->chat);
-            while (geistr_chat_next(c->chat, &p) == GEISTR_OK && p.part != GEISTR_PART_END) {
-            }
-            break;
+    bool         gone     = out->alive && !out->alive(out->ctx); /* accepted: a stream's headers go now */
+    time_t       beat     = time(nullptr);
+    while (!gone && (s = geistr_chat_next(c->chat, &p)) == GEISTR_OK && p.part != GEISTR_PART_END) {
+        if (p.part == GEISTR_PART_THINKING) { /* hidden reasoning: a sign of life about once a second */
+            if (out->alive && time(nullptr) != beat)
+                beat = time(nullptr), gone = !out->alive(out->ctx);
+        } else if (p.part == GEISTR_PART_ANSWER) {
+            if (answer)
+                fwrite(p.text, 1, p.len, answer);
+            gone = !out->part(out->ctx, p.text, p.len);
+        }
+    }
+    if (gone) {
+        geistr_chat_cancel(c->chat);
+        while (geistr_chat_next(c->chat, &p) == GEISTR_OK && p.part != GEISTR_PART_END) {
         }
     }
     if (answer)
@@ -315,7 +320,7 @@ static void chat_request(const struct svc_options *o, struct held *pool, FILE *o
         ok                    = r.messages[k].role && r.messages[k].content;
     }
     if (ok)
-        svc_chat(o, pool, &r, &(struct svc_sink) {out, line_part, line_done, line_error});
+        svc_chat(o, pool, &r, &(struct svc_sink) {out, line_part, line_done, line_error, nullptr});
     else
         reply_error(out, "invalid", "messages: a list of messages, each with role and content");
     svc_free_request(&r);

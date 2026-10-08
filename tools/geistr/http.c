@@ -322,6 +322,17 @@ static bool openai_part(void *ctx, const char *text, size_t len) {
     return fflush(a->out) != EOF;
 }
 
+/* Accepted, or still reasoning: the headers and role first, then an SSE comment. */
+static bool openai_alive(void *ctx) {
+    struct openai *a = ctx;
+    if (!a->stream)
+        return true;
+    if (a->started)
+        fputs(": thinking\n\n", a->out);
+    openai_start(a);
+    return fflush(a->out) != EOF;
+}
+
 /* Both APIs: why the answer ended, and what the prompt took of the context. */
 static const char *finish_reason(const geistr_stats *st) {
     return st->finish == GEISTR_FINISH_LENGTH || st->finish == GEISTR_FINISH_CONTEXT ? "length" : "stop";
@@ -398,7 +409,7 @@ static void openai_chat(const struct svc_options *o, struct held *pool, FILE *ou
                              .stream  = json_bool(j, json_field(j, 0, "stream"), false),
                              .usage   = json_bool(j, json_field(j, options, "include_usage"), false)};
     snprintf(a.id, sizeof a.id, "chatcmpl-%x%x", (unsigned) a.created, ++serial);
-    svc_chat(o, pool, &r, &(struct svc_sink) {&a, openai_part, openai_done, openai_error});
+    svc_chat(o, pool, &r, &(struct svc_sink) {&a, openai_part, openai_done, openai_error, openai_alive});
     svc_free_request(&r);
 }
 
@@ -438,6 +449,14 @@ static bool ollama_part(void *ctx, const char *text, size_t len) {
     ollama_head(a, a->out);
     fputs(",\"message\":{\"role\":\"assistant\",\"content\":", a->out), json_write(a->out, text);
     fputs("},\"done\":false}\n", a->out);
+    return fflush(a->out) != EOF;
+}
+
+/* Accepted: the headers (NDJSON has no comments for later signs of life). */
+static bool ollama_alive(void *ctx) {
+    struct ollama *a = ctx;
+    if (a->stream && !a->started)
+        a->started = true, stream_begin(a->out, "application/x-ndjson");
     return fflush(a->out) != EOF;
 }
 
@@ -485,7 +504,7 @@ static void ollama_chat(const struct svc_options *o, struct held *pool, FILE *ou
     r.max          = predict > 0 ? (unsigned) predict : 0; /* -1: unlimited */
     read_stop(j, json_field(j, options, "stop"), &r);
     struct ollama a = {.out = out, .model = o->name, .stream = json_bool(j, json_field(j, 0, "stream"), true)};
-    svc_chat(o, pool, &r, &(struct svc_sink) {&a, ollama_part, ollama_done, ollama_error});
+    svc_chat(o, pool, &r, &(struct svc_sink) {&a, ollama_part, ollama_done, ollama_error, ollama_alive});
     svc_free_request(&r);
 }
 
