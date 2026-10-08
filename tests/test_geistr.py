@@ -318,8 +318,9 @@ def section_resume():
     assert pct and 50 <= int(pct[-1]) <= 100, out[-300:]
     os.write(fd, b'/info\r'); out = until(fd, 'of 512 tokens')
     paste(fd, b'And these: ' + b'word ' * 250 + b'Say OK again.')    # no longer fits: the oldest go
-    until(fd, 'oldest message', 180)                                     # and the chat says so
-    until(fd, '%\x1b[0m > ', 60)
+    out = until(fd, 'oldest message', 180)                               # and the chat says so
+    if b'%\x1b[0m > ' not in out.split(b'oldest message')[-1]:            # the prompt, unless it came along
+        until(fd, '%\x1b[0m > ', 60)
     os.write(fd, b'/clear\r'); out = until(fd, 'a new conversation')
     os.write(fd, b'/info\r'); out = until(fd, 'of 512 tokens')
     assert b'context 0 of 512 tokens (0 %)' in out, out[-300:]
@@ -339,7 +340,13 @@ def section_resume():
     sent = re.search(rb'\x1b\]52;c;([A-Za-z0-9+/=]*)\x07', out)
     import base64
     assert sent and base64.b64decode(sent.group(1)).decode() == said[1]['content'], out[-300:]
-    os.write(fd, b'/copy code\r'); until(fd, 'no code block')
+    os.write(fd, b'/copy code\r')                       # at 0.7 the answer may hold code, or not
+    want, other = (b'kB of code', b'no code block') if '```' in said[1]['content'] else (b'no code block', b'kB of code')
+    out, deadline = b'', time.time() + 60
+    while want not in out and other not in out and time.time() < deadline:
+        if select.select([fd], [], [], 1)[0]:
+            out += os.read(fd, 4096)
+    assert want in out, out[-300:]
     finish_chat(pid, fd)
 
     # a conversation poisoned by the model's own loops: answers no longer grow, loops are kept cut and marked
@@ -714,6 +721,55 @@ def section_install_sh():
     server.shutdown()
     print('install.sh: the archive for this computer, SHA256SUMS checked, a mismatch installs nothing passed')
 
+# ---- the GPU (#112): only with GEISTR_TEST_GPU_MODELS, a folder holding the
+# catalog's qwen3-0.6b and gemma4-e2b (scripts/test-gpu.sh fetches them) ------
+def section_gpu():
+    folder = os.environ['GEISTR_TEST_GPU_MODELS']
+    gpu = ['--models', folder]  # the built-in catalog: real models, real sizes
+    def run_gpu(*args):
+        return subprocess.run([geistr, *args, *gpu], capture_output=True, text=True, env=env, timeout=600)
+    # one answer on the GPU: the window is chosen from the device's free memory
+    r = run_gpu('run', 'gemma4-e2b', '--gpu', 'Say only: hi')
+    assert r.returncode == 0 and r.stdout.strip(), (r.returncode, r.stderr[-400:])
+    # a chat on the GPU: /info names the GPU, /model switches both ways without
+    # running out of device memory (the current model goes first), the
+    # conversation moves along
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execve(geistr, [geistr, 'chat', 'gemma4-e2b', '--gpu', '--new', *gpu], {**env, 'TERM': 'xterm'})
+    until(fd, 'Ctrl-C twice exits', 180); time.sleep(.3)
+    os.write(fd, b'My favourite colour is teal. Just say OK.\r'); until(fd, 'tok/s', 180)
+    os.write(fd, b'/info\r'); out = until(fd, 'tokens (')
+    assert b'vulkan' in out or b'metal' in out, out[-300:]
+    os.write(fd, b'/model qwen3-0.6b\r'); out = until(fd, 'moves along', 180)
+    os.write(fd, b'/model gemma4-e2b\r'); out += until(fd, 'moves along', 180)
+    assert b'out of device memory' not in out and b'cannot' not in out, out[-400:]
+    os.write(fd, b'What is my favourite colour? One word.\r'); out = until(fd, 'tok/s', 180)
+    assert b'eal' in out, out[-300:]  # Teal: the conversation came along both switches
+    finish_chat(pid, fd)
+    # the service on the GPU: one OpenAI request
+    import socket as net, urllib.request
+    with net.socket() as s:
+        s.bind(('127.0.0.1', 0)); port = s.getsockname()[1]
+    sock = f'/tmp/geistr-gpu-{os.getpid()}.sock'
+    service = subprocess.Popen([geistr, 'serve', 'gemma4-e2b', '--gpu', f'--http=127.0.0.1:{port}', '--socket=' + sock, *gpu],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, env=env)
+    try:
+        deadline = time.time() + 180
+        while time.time() < deadline:
+            try:
+                urllib.request.urlopen(f'http://127.0.0.1:{port}/', timeout=2); break
+            except OSError:
+                time.sleep(.5)
+        request = urllib.request.Request(f'http://127.0.0.1:{port}/v1/chat/completions', method='POST',
+                                         data=json.dumps({'messages': [{'role': 'user', 'content': 'Say only: hi'}]}).encode())
+        with urllib.request.urlopen(request, timeout=180) as reply:
+            answer = json.loads(reply.read())
+        assert answer['choices'][0]['message']['content'].strip(), answer
+    finally:
+        service.terminate(); service.wait(60)
+    print('geistr on the GPU: run, chat (/info, /model both ways, the conversation along), serve --http passed')
+
 # ---- run: every section, or those in GEISTR_TEST_ONLY (comma separated) -------
 # Each gets its own GEISTEN_HOME (settings, chats, speed.tsv); they share the
 # model folder. ponytail: one after another, not in parallel: parallel model
@@ -721,7 +777,10 @@ def section_install_sh():
 SECTIONS = {name[len('section_'):]: f for name, f in list(globals().items()) if name.startswith('section_')}
 only = [s for s in os.environ.get('GEISTR_TEST_ONLY', '').split(',') if s]
 assert all(s in SECTIONS for s in only), f'GEISTR_TEST_ONLY: unknown section in {only}; known: {", ".join(SECTIONS)}'
+assert 'gpu' not in only or os.environ.get('GEISTR_TEST_GPU_MODELS'), 'gpu: set GEISTR_TEST_GPU_MODELS'
 for name, section in SECTIONS.items():
+    if name == 'gpu' and not os.environ.get('GEISTR_TEST_GPU_MODELS'):
+        continue  # no GPU models here (#112)
     if not only or name in only:
         env['GEISTEN_HOME'] = os.path.join(tmp, 'home-' + name)
         if name != 'catalog':  # it starts from an empty model folder
