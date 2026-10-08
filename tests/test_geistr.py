@@ -91,10 +91,13 @@ def paste(fd, text):
             except OSError: break
 
 def finish_chat(pid, fd):
-    # Ctrl-D, then read until the chat exits: a full pty (small on macOS) would block it
-    os.write(fd, b'\x04')
+    # Ctrl-D, then read until the chat exits: a full pty (small on macOS) would block it.
+    # Again every 2 s: one sent before the line editor reads is lost (a slow CI).
+    sent = 0
     while not os.waitpid(pid, os.WNOHANG)[0]:
         try:
+            if time.time() - sent > 2:
+                os.write(fd, b'\x04'); sent = time.time()
             if select.select([fd], [], [], 0.2)[0]: os.read(fd, 4096)
         except OSError: pass
     os.close(fd)
