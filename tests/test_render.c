@@ -100,6 +100,7 @@ int main(void) {
     check("---", "---");
     check("```c\nint x = 1; // **nicht fett**\n```\nnach", "«c»── c ──\n│ int x = 1; // **nicht fett**\n«»──\nnach");
     check("```\na\n\nb\n```\n", "«c»──\n│ a\n│ \n│ b\n«»──\n"); /* no language; an empty line keeps the gutter */
+    check("```c\nx\n```", "«c»── c ──\n│ x\n«»──\n"); /* the closing fence is the answer's last line (#97) */
     check("1. erstens", "1. erstens");
     /* math */
     check("Euler: $e^{i\\pi} + 1 = 0$.", "Euler: «m»e^(iπ) + 1 = 0«»."); /* no superscript π */
