@@ -156,12 +156,22 @@ int main(void) {
     CHECK(!conv_retract(&r, question, sizeof question) && r.n == 1);
     conv_free(&r);
 
+    /* The engine's threads: the setting when given, else one per physical core
+     * where SMT doubles them (#93), else the engine's default (0). */
+    cfg.threads = 6;
+    CHECK(engine_threads() == 6);
+    cfg.threads = 0;
+    geistr_device dev = {.size = sizeof dev};
+    CHECK(geistr_device_probe(nullptr, &dev) == GEISTR_OK);
+    uint32_t chosen = engine_threads();
+    CHECK(chosen == 0 || (chosen == dev.cores && dev.cores < dev.logical_cpus));
+
     conv_free(&c), conv_free(&next), conv_free(&empty);
     char cmd[64];
     snprintf(cmd, sizeof cmd, "rm -rf %s", tmp);
     CHECK(system(cmd) == 0);
     if (failures)
         return 1;
-    puts("chat conversation: what each send carries, system prompt, /clear, store and resume, resume budget, retry and copy, looping and stopped answers passed");
+    puts("chat conversation: what each send carries, system prompt, /clear, store and resume, resume budget, retry and copy, looping and stopped answers, engine threads passed");
     return 0;
 }

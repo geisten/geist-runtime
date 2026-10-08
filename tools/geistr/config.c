@@ -32,6 +32,7 @@ static const struct setting {
         {.key = "resume", .kind = SWITCH, .at = &cfg.resume},
         {.key = "history", .kind = SWITCH, .at = &cfg.history},
         {.key = "resume_tokens", .kind = NUMBER, .at = &cfg.resume_tokens, .max = 1e6},
+        {.key = "threads", .kind = NUMBER, .at = &cfg.threads, .max = 1024},
 };
 enum { N_SETTINGS = sizeof settings / sizeof *settings };
 
@@ -216,3 +217,25 @@ int config(int n, const char **args) {
     return OK;
 }
 
+
+uint32_t engine_threads(void) {
+    if (cfg.threads >= 1)
+        return (uint32_t) cfg.threads;
+#ifdef __APPLE__
+    return 0; /* the engine's default */
+#else
+    /* One thread per physical core, not per SMT thread: the engine's OpenMP
+     * threads spin while they wait, and with every logical CPU in use they
+     * collapse when another program takes cores (#93: 19-32 s instead of
+     * 3-4 s for a 1500-token prefill on a loaded 16-core Ryzen). */
+    static uint32_t chosen;
+    static bool     probed;
+    if (!probed) {
+        geistr_device d = {.size = sizeof d};
+        probed          = true;
+        if (geistr_device_probe(nullptr, &d) == GEISTR_OK && d.cores && d.cores < d.logical_cpus)
+            chosen = d.cores;
+    }
+    return chosen; /* 0 (no SMT): the engine's default */
+#endif
+}
