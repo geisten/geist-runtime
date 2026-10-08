@@ -169,7 +169,8 @@ int main(void) {
     stop_strings();
 
     check("<think>SECRET Grüß 🌿</think>Answer", "Answer", true, "think_tags");
-    check(" \n<think></think>\n<think>SECRET</think> Grüß 🌿", " Grüß 🌿", true, "think_tags");
+    check(" \n<think></think>\n<think>SECRET</think> Grüß 🌿", "Grüß 🌿", true, "think_tags");
+    check("<think>\n\n</think>\n\nParis", "Paris", true, "think_tags");
     check("<think>SECRET </thin", "", true, "think_tags");
     check("<think><think>SECRET</think>SECRET</think>Answer", "Answer", true, "think_tags");
     check("<thi", "", false, "think_tags");
