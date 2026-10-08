@@ -75,7 +75,8 @@ class _Entry(C.Structure):
                                           "reference")] + \
                [("bytes", C.c_uint64), ("working_mib", C.c_uint32), ("recommended_ram_gib", C.c_uint32),
                 ("backends", C.c_uint32), ("quality_passed", C.c_uint32), ("quality_total", C.c_uint32),
-                ("vision_url", _str), ("vision_sha256", _str), ("vision_bytes", C.c_uint64)]
+                ("vision_url", _str), ("vision_sha256", _str), ("vision_bytes", C.c_uint64),
+                ("embedding", C.c_int)]
 
 
 class _Device(C.Structure):
@@ -102,6 +103,9 @@ _status_text = _fn("geistr_status_text", _str, _status)
 _model_open = _fn("geistr_model_open", _status, _str, C.POINTER(_ModelOpts), C.POINTER(_p), C.c_char_p, C.c_size_t)
 _model_close = _fn("geistr_model_close", None, _p)
 _model_info = _fn("geistr_model_info_get", _status, _p, C.POINTER(_ModelInfo))
+_model_error = _fn("geistr_model_error", _str, _p)
+_embed = _fn("geistr_embed", _status, _p, C.c_char_p, C.POINTER(C.c_float), C.c_size_t, C.POINTER(C.c_size_t),
+             C.POINTER(C.c_uint32))
 _chat_open = _fn("geistr_chat_open", _status, _p, C.POINTER(_ChatOpts), C.POINTER(_p))
 _chat_close = _fn("geistr_chat_close", None, _p)
 _chat_send = _fn("geistr_chat_send", _status, _p, C.c_size_t, C.POINTER(_Message))
@@ -291,6 +295,15 @@ class Model:
             _check(_model_info(self._handle(), C.byref(i)))
         return {"arch": _s(i.arch), "chat_format": _s(i.chat_format), "backend": _s(i.backend), "context": i.context,
                 "vision": bool(i.vision)}
+
+    def embed(self, text: str) -> list[float]:
+        """The text's unit-length embedding, by an embedding model (BitNet-embedding, #91). A query
+        wants a one-line task first: "Instruct: …\\nQuery: …"; a document none."""
+        out, dims = (C.c_float * 8192)(), C.c_size_t()
+        with self._guard:
+            status = _embed(self._handle(), text.encode(), out, 8192, C.byref(dims), None)
+            _check(status, _s(_model_error(self._handle())))
+        return list(out[:dims.value])
 
     @property
     def decision_capability(self) -> dict:

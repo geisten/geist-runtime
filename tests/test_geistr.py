@@ -607,12 +607,116 @@ def section_http():
     for images, why in (([picture], 'no vision'), (['!!!'], 'not base64'), ([picture, picture], 'one image')):
         status, _, body = call('POST', '/api/chat', {'messages': [{'role': 'user', 'content': 'What is this?', 'images': images}]})
         assert status == 400 and why in body, (status, body)
+    status, _, body = call('POST', '/v1/embeddings', {'input': 'hi'})  # #91: a chat model does not embed
+    assert status == 400 and 'not an embedding model' in body, (status, body)
     earlier = [{'role': 'user', 'content': 'Hi', 'images': [picture]}, {'role': 'assistant', 'content': 'Hello.'},
                {'role': 'user', 'content': 'Bye'}]  # only the last message's image counts
     assert call('POST', '/api/chat', {'messages': earlier, 'stream': False, 'options': {'num_predict': 2}})[0] == 200
     service.send_signal(signal.SIGTERM)
     assert service.wait(30) == 0
     print('geistr serve --http: OpenAI (one answer, stream, usage, stop, length) and Ollama APIs, shared cache, Host check, 403/404/405/411/413, context, disconnect, tools and images refused passed')
+
+# ---- embeddings (#91): only with GEISTR_TEST_EMBED_MODEL, BitNet-embedding 0.6B --
+def section_embed():
+    import base64, http.client, socket as unix, struct
+    path = os.path.abspath(os.environ['GEISTR_TEST_EMBED_MODEL'])
+    r = subprocess.run([geistr, 'run', path, 'hi', '--models', models], capture_output=True, text=True, env=env, timeout=300)
+    # an embedding model does not chat, and says what it does
+    assert r.returncode == 1 and 'embedding model' in r.stderr and '/v1/embeddings' in r.stderr, r.stderr
+    probe = unix.socket(); probe.bind(('127.0.0.1', 0)); port = probe.getsockname()[1]; probe.close()
+    sock = f'/tmp/geistr-embed-{os.getpid()}.sock'
+    # the built-in catalog (not the test's): it knows the file is an embedding model
+    service = subprocess.Popen([geistr, 'serve', path, f'--socket={sock}', f'--http=127.0.0.1:{port}', '--cpu', '--models', models],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, env=env)
+    def call(route, body):
+        c = http.client.HTTPConnection('127.0.0.1', port, timeout=300)
+        c.request('POST', route, body=json.dumps(body))
+        r = c.getresponse(); data = r.read().decode(); c.close()
+        return r.status, json.loads(data)
+    deadline = time.time() + 120
+    while True:
+        try:
+            c = http.client.HTTPConnection('127.0.0.1', port, timeout=5); c.request('GET', '/'); c.getresponse(); c.close(); break
+        except OSError:
+            assert time.time() < deadline and service.poll() is None, service.stderr.read()
+            time.sleep(.5)
+    try:
+        query = 'Instruct: Given a question, retrieve passages that answer the question\nQuery: Where does the cat sleep?'
+        docs = ['The cat sleeps on the red sofa.', 'Die Katze schläft auf dem Sofa.', 'Revenue grew by twelve percent.']
+        # OpenAI: a list, floats; the vectors are unit length, in order, with usage
+        status, out = call('/v1/embeddings', {'model': 'x', 'input': [query] + docs, 'encoding_format': 'float'})
+        assert status == 200 and out['object'] == 'list' and [d['index'] for d in out['data']] == [0, 1, 2, 3], out
+        vectors = [d['embedding'] for d in out['data']]
+        assert all(len(v) == 1024 and abs(sum(x * x for x in v) - 1) < 1e-3 for v in vectors)
+        assert out['usage']['prompt_tokens'] == out['usage']['total_tokens'] > 20, out['usage']
+        score = [sum(a * b for a, b in zip(vectors[0], v)) for v in vectors[1:]]
+        assert min(score[:2]) > score[2] + 0.05, score  # the cat, English and German, before revenue
+        # base64 (the OpenAI SDK's default): little-endian float32, the same vector
+        status, out = call('/v1/embeddings', {'input': docs[0], 'encoding_format': 'base64'})
+        packed = struct.unpack('<1024f', base64.b64decode(out['data'][0]['embedding']))
+        assert status == 200 and max(abs(a - b) for a, b in zip(packed, vectors[1])) < 1e-6
+        # Ollama: /api/embed, a text or a list
+        status, out = call('/api/embed', {'model': 'x', 'input': docs[0]})
+        assert status == 200 and len(out['embeddings']) == 1 and max(abs(a - b) for a, b in zip(out['embeddings'][0], vectors[1])) < 1e-6, out
+        status, out = call('/api/embed', {'input': docs})
+        assert status == 200 and len(out['embeddings']) == 3 and out['prompt_eval_count'] > 0, out
+        # refused, clearly (400): chats, token lists, other formats, no input, too long
+        for route, body, why in (('/v1/chat/completions', {'messages': [{'role': 'user', 'content': 'hi'}]}, 'does not chat'),
+                                 ('/api/chat', {'messages': [{'role': 'user', 'content': 'hi'}]}, 'does not chat'),
+                                 ('/v1/embeddings', {'input': [[1, 2, 3]]}, 'texts only'),
+                                 ('/v1/embeddings', {'input': 'x', 'encoding_format': 'int8'}, 'float or base64'),
+                                 ('/v1/embeddings', {}, 'input'), ('/api/embed', {'input': []}, 'input'),
+                                 ('/v1/embeddings', {'input': 'word ' * 20000}, 'context window')):
+            status, out = call(route, body)
+            text = json.dumps(out)
+            assert status == 400 and why in text, (route, status, text)
+        status, out = call('/v1/embeddings', {'input': 'still here'})
+        assert status == 200, out
+    finally:
+        service.send_signal(signal.SIGTERM)
+        assert service.wait(30) == 0
+    print('geistr embeddings: OpenAI (list, float, base64, usage) and Ollama /api/embed, retrieval order, chat and bad input refused (400), run refused passed')
+
+def section_files():
+    """geistr index and --files (#91): a fact only in a file is answered, with the file named."""
+    embed_dir = os.path.dirname(os.path.abspath(os.environ['GEISTR_TEST_EMBED_MODEL']))
+    notes = os.path.join(tmp, 'notes')
+    os.makedirs(os.path.join(notes, 'garden')); os.makedirs(os.path.join(notes, '.hidden'))
+    def write(name, text):
+        with open(os.path.join(notes, name), 'w') as f:
+            f.write(text)
+    write('garden/shed.md', '# Garden\n\nThe lock on the garden shed opens with the code 4711.\n\nThe roses need water twice a week.\n')
+    write('work.txt', 'Meeting notes: the budget for 2027 is 40,000 euros.\nNext meeting on Friday.\n')
+    write('rezept.md', 'Rezept: Pfannkuchen mit 3 Eiern und 250 g Mehl.\n')
+    write('.hidden/secret.md', 'hidden 9999\n')  # hidden: left out
+    write('photo.png', 'not text')  # not text: left out
+    # the built-in catalog: it names the embedding model, installed where the test's copy is
+    def geistr_files(*args, **kw):
+        return subprocess.run([geistr, *args, '--models', embed_dir], capture_output=True, text=True, env=env, timeout=900, **kw)
+    r = geistr_files('index', notes)
+    assert r.returncode == 0 and '3 files, 3 chunks (3 new)' in r.stderr, r.stderr
+    index_dir = os.path.join(env['GEISTEN_HOME'], 'index')
+    [index] = os.listdir(index_dir)
+    assert os.stat(index_dir).st_mode & 0o777 == 0o700 and os.stat(os.path.join(index_dir, index)).st_mode & 0o777 == 0o600
+    assert b'9999' not in open(os.path.join(index_dir, index), 'rb').read()
+    r = geistr_files('index', notes)  # nothing changed: nothing embedded
+    assert r.returncode == 0 and '(0 new)' in r.stderr, r.stderr
+    write('work.txt', 'Meeting notes: the budget for 2027 is 45,000 euros.\n')
+    os.unlink(os.path.join(notes, 'rezept.md'))
+    r = geistr_files('index', notes)  # a changed file again, a removed one gone
+    assert r.returncode == 0 and '2 files, 2 chunks (1 new)' in r.stderr, r.stderr
+    # run --files: the fact from the file, its file first among the sources
+    r = geistr_files('run', '--files', notes, model_path, 'What is the code for the garden shed?')
+    assert r.returncode == 0 and '4711' in r.stdout and 'sources: garden/shed.md' in r.stderr, (r.stdout, r.stderr)
+    # chat --files, then /files off: the next question goes without
+    r = geistr_files('chat', '--files', notes, model_path, input='What is the budget for 2027?\n/files off\nHi\n')
+    assert r.returncode == 0 and '45,000' in r.stdout and 'sources: work.txt' in r.stdout, (r.stdout, r.stderr)
+    assert 'no files' in r.stdout and r.stdout.count('sources:') == 1, r.stdout
+    # without an embedding model: what to install
+    r = subprocess.run([geistr, 'index', notes, '--models', models], capture_output=True, text=True, env=env, timeout=60)
+    assert r.returncode == 1 and 'geistr pull bitnet-embed-0.6b' in r.stderr, r.stderr
+    print('geistr index and --files: index (hidden and non-text left out, 0600), incremental by hash, run and chat answer '
+          'from a file and name it, /files off, no embedding model passed')
 
 # ---- tools (#92): only with GEISTR_TEST_TOOLS_MODEL, a Qwen3 GGUF -------------
 def section_tools():
@@ -968,11 +1072,14 @@ only = [s for s in os.environ.get('GEISTR_TEST_ONLY', '').split(',') if s]
 assert all(s in SECTIONS for s in only), f'GEISTR_TEST_ONLY: unknown section in {only}; known: {", ".join(SECTIONS)}'
 assert 'gpu' not in only or os.environ.get('GEISTR_TEST_GPU_MODELS'), 'gpu: set GEISTR_TEST_GPU_MODELS'
 assert 'tools' not in only or os.environ.get('GEISTR_TEST_TOOLS_MODEL'), 'tools: set GEISTR_TEST_TOOLS_MODEL'
+assert not {'embed', 'files'} & set(only) or os.environ.get('GEISTR_TEST_EMBED_MODEL'), 'embed, files: set GEISTR_TEST_EMBED_MODEL'
 for name, section in SECTIONS.items():
     if name == 'gpu' and not os.environ.get('GEISTR_TEST_GPU_MODELS'):
         continue  # no GPU models here (#112)
     if name == 'tools' and not os.environ.get('GEISTR_TEST_TOOLS_MODEL'):
         continue  # no tool-capable model here (#92)
+    if name in ('embed', 'files') and not os.environ.get('GEISTR_TEST_EMBED_MODEL'):
+        continue  # no embedding model here (#91)
     if not only or name in only:
         env['GEISTEN_HOME'] = os.path.join(tmp, 'home-' + name)
         if name != 'catalog':  # it starts from an empty model folder

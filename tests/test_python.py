@@ -74,9 +74,24 @@ with geistr.chat("ref", folder=folder, catalog_file=catalog_file, system="Answer
     assert len(chat) == 3 and "Rome" in chat.ask("And of Italy?")
 print("python: streaming, stateful turns, stats, rewind")
 
+embedder = os.environ.get("GEIST_TEST_EMBED_MODEL")
+if embedder and os.path.isfile(embedder):  # #91: Model.embed, unit length, nearest the right text
+    with geistr.open(embedder, context=512) as e:
+        q = e.embed("Instruct: Given a question, retrieve passages that answer the question\nQuery: Where does the cat sleep?")
+        cat, money = e.embed("The cat sleeps on the sofa."), e.embed("Revenue grew by twelve percent.")
+        dot = lambda a, b: sum(x * y for x, y in zip(a, b))
+        assert len(q) == 1024 and abs(dot(q, q) - 1) < 1e-3 and dot(q, cat) > dot(q, money), (dot(q, cat), dot(q, money))
+    print("python: Model.embed")
+
 with geistr.open(model) as m:
     info = m.info
     assert info["context"] > 0 and info["backend"] in ("cpu", "metal", "vulkan"), info
+    assert info["vision"] is False, info
+    try:  # #91: a model that generates text does not embed, and says so
+        m.embed("hi")
+        assert False, "a chat model embedded"
+    except geistr.GeistrError as e:
+        assert e.status == "format" and "not an embedding model" in str(e), e
     # cancel from another thread, then the chat goes on
     chat = m.chat(system="You are a storyteller.")
     stream = chat.send("Write a very long story about a lighthouse keeper, at least 2000 words.")

@@ -40,6 +40,7 @@ struct svc_options {
     const char      *http;   /* ADDR:PORT for the HTTP API, or nullptr */
     size_t           chats;  /* conversations kept, ≥ 1 */
     volatile sig_atomic_t *stop;
+    bool             embedding; /* an embedding model (#91): /v1/embeddings, no chats */
 };
 
 /* Serve until *stop is set. Returns a geistr exit code (0 ok, 1 error). */

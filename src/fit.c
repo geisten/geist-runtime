@@ -399,7 +399,7 @@ geistr_status geistr_rank(const geistr_catalog *catalog, const geistr_device *de
         while (at > 0 && better(fit, ranked[at - 1]))
             ranked[at] = ranked[at - 1], r->order[at] = r->order[at - 1], --at;
         ranked[at] = fit, r->order[at] = i;
-        if (f->verdict != GEISTR_VERDICT_NOT_RECOMMENDED && (!r->best || better(candidate, best)))
+        if (f->verdict != GEISTR_VERDICT_NOT_RECOMMENDED && !f->entry->embedding && (!r->best || better(candidate, best)))
             r->best = f, best = candidate;
     }
     r->count = n;

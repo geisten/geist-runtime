@@ -110,7 +110,7 @@ test: all $(BUILD)/test_decide_driver
 	  { echo "example chat failed: $$out"; exit 1; }
 
 # ---- the real runtime on geistlib (#4) ---------------------------------------
-ENGINE_GOALS := runtime test-real chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python $(BUILD)/test_decision_real
+ENGINE_GOALS := runtime test-real test-embed fetch-embed-model chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python $(BUILD)/test_decision_real
 ifneq (,$(filter $(ENGINE_GOALS),$(MAKECMDGOALS)))
 GEIST_REPO ?= https://github.com/geisten/geistlib.git
 GEIST_REF  ?= 0707c3b1c9e547c909d200331a0750b4ff8e8cbe
@@ -192,7 +192,7 @@ test-python: wheel $(BUILD)/abi_sizes
 	rm -rf $(BUILD)/venv && python3 -m venv $(BUILD)/venv
 	$(BUILD)/venv/bin/pip install -q $(BUILD)/wheel/geistr-*.whl
 	cd $(BUILD) && venv/bin/python ../examples/chat.py "$(abspath $(GEIST_TEST_MODEL))" < /dev/null
-	$(BUILD)/venv/bin/python tests/test_python.py "$(abspath $(GEIST_TEST_MODEL))" $(BUILD)/abi_sizes
+	GEIST_TEST_EMBED_MODEL="$(abspath $(GEIST_TEST_EMBED_MODEL))" $(BUILD)/venv/bin/python tests/test_python.py "$(abspath $(GEIST_TEST_MODEL))" $(BUILD)/abi_sizes
 
 # ---- the geistr CLI (#11) -------------------------------------------------------
 # PULL=1 adds the download module (libcurl); PULL=0 builds without network code.
@@ -207,8 +207,8 @@ endif
 $(BUILD)/catalog_json.h: models/catalog.json | $(BUILD)
 	python3 -c 'import sys; d = open(sys.argv[1], "rb").read(); print("static const unsigned char embedded_catalog[] = {" + ",".join(map(str, d)) + "};")' $< > $@
 
-$(BUILD)/geistr: tools/geistr/geistr.c tools/geistr/decide.c tools/geistr/decide.h tools/geistr/render.c tools/geistr/render.h tools/geistr/lineedit.c tools/geistr/lineedit.h tools/geistr/service.c tools/geistr/service.h tools/geistr/json.c tools/geistr/json.h tools/geistr/config.c tools/geistr/speed.c tools/geistr/conversation.c tools/geistr/chat.c tools/geistr/http.c tools/geistr/cli.h $(GEISTR_PULL) tools/geistr/pull.h $(BUILD)/catalog_json.h $(RUNTIME) $(ENGINE_LIB)
-	$(CC) $(CFLAGS) $(GEISTR_CFLAGS) -DGEISTR_ENGINE='"$(GEIST_REF)"' -I$(BUILD) -Itools/geistr -Isrc tools/geistr/geistr.c tools/geistr/decide.c tools/geistr/render.c tools/geistr/lineedit.c tools/geistr/service.c tools/geistr/json.c tools/geistr/config.c tools/geistr/speed.c tools/geistr/conversation.c tools/geistr/chat.c tools/geistr/http.c $(GEISTR_PULL) $(RUNTIME) \
+$(BUILD)/geistr: tools/geistr/geistr.c tools/geistr/decide.c tools/geistr/decide.h tools/geistr/render.c tools/geistr/render.h tools/geistr/lineedit.c tools/geistr/lineedit.h tools/geistr/service.c tools/geistr/service.h tools/geistr/json.c tools/geistr/json.h tools/geistr/config.c tools/geistr/speed.c tools/geistr/conversation.c tools/geistr/chat.c tools/geistr/http.c tools/geistr/files.c tools/geistr/files.h tools/geistr/cli.h $(GEISTR_PULL) tools/geistr/pull.h $(BUILD)/catalog_json.h $(RUNTIME) $(ENGINE_LIB)
+	$(CC) $(CFLAGS) $(GEISTR_CFLAGS) -DGEISTR_ENGINE='"$(GEIST_REF)"' -I$(BUILD) -Itools/geistr -Isrc tools/geistr/geistr.c tools/geistr/decide.c tools/geistr/render.c tools/geistr/lineedit.c tools/geistr/service.c tools/geistr/json.c tools/geistr/config.c tools/geistr/speed.c tools/geistr/conversation.c tools/geistr/chat.c tools/geistr/http.c tools/geistr/files.c $(GEISTR_PULL) $(RUNTIME) \
 		$(ENGINE_LINK) $(GEISTR_LIBS) $(LDFLAGS) $(LDLIBS) -o $@
 
 geistr: $(BUILD)/geistr
@@ -232,6 +232,18 @@ test-geistr:
 	$(MAKE) BUILD=$(BUILD)/geistr-test GEISTR_CFLAGS=-DGEISTR_TESTING geistr
 	$(MAKE) BUILD=$(BUILD)/geistr-nonet PULL=0 geistr
 	GEISTR_TEST_ONLY=$(ONLY) python3 -u tests/test_geistr.py $(BUILD)/geistr-test/geistr $(BUILD)/geistr-nonet/geistr "$(GEIST_TEST_MODEL)" $(PULL)
+
+$(BUILD)/test_embed: tests/test_embed.c $(RUNTIME) $(ENGINE_LIB)
+	$(CC) $(CFLAGS) -isystem $(GEISTLIB)/include $< $(RUNTIME) $(ENGINE_LINK) $(LDFLAGS) $(LDLIBS) -lm -o $@
+
+# #91: geistr_embed against BitNet-embedding-0.6B (make fetch-embed-model).
+GEIST_TEST_EMBED_MODEL ?= $(GEISTLIB)/gguf_artifacts/bitnet-embeddings-0.6b-bf16-i2_s.gguf
+test-embed: $(BUILD)/test_embed
+	@test -f "$(GEIST_TEST_EMBED_MODEL)" || { echo "no embedding model at $(GEIST_TEST_EMBED_MODEL): make fetch-embed-model"; exit 1; }
+	GEIST_TEST_EMBED_MODEL="$(GEIST_TEST_EMBED_MODEL)" GEIST_TEST_MODEL="$(GEIST_TEST_MODEL)" $(BUILD)/test_embed
+
+fetch-embed-model:
+	sh scripts/fetch-model.sh models/catalog.json bitnet-embed-0.6b $(GEISTLIB)/gguf_artifacts
 
 # An explicit target never skips: a missing model is an error, not a pass.
 test-real: $(BUILD)/test_real
@@ -268,4 +280,4 @@ sanitize:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: install uninstall core all test sanitize clean runtime test-real chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python FORCE
+.PHONY: install uninstall core all test sanitize clean runtime test-real test-embed fetch-embed-model chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python FORCE

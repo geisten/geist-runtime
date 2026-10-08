@@ -215,6 +215,12 @@ static void ranking(void) {
     CHECK(geistr_rank(c, &d, local, nullptr, &r) == GEISTR_OK);
     CHECK(!strcmp(geistr_ranking_best(r)->entry->id, "m1") && !strcmp(geistr_ranking_get(r, 0)->entry->id, "m2"));
     geistr_ranking_free(r);
+    /* An embedding model is never the chat recommendation (#91); it keeps its place in the order. */
+    ((geistr_catalog_entry *) geistr_catalog_find(c, "m1"))->embedding = 1;
+    CHECK(geistr_rank(c, &d, local, nullptr, &r) == GEISTR_OK);
+    CHECK(!strcmp(geistr_ranking_best(r)->entry->id, "m2") && geistr_ranking_count(r) == 4);
+    geistr_ranking_free(r);
+    ((geistr_catalog_entry *) geistr_catalog_find(c, "m1"))->embedding = 0;
     /* Only not-recommended models: no recommendation. */
     d.supported = false;
     CHECK(geistr_rank(c, &d, local, nullptr, &r) == GEISTR_OK && !geistr_ranking_best(r));

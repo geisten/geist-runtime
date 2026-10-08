@@ -53,6 +53,11 @@ for change in [{'url': pinned.replace('/resolve/' + pinned.split('/resolve/')[1]
 for value in ['https://huggingface.co/a/b/resolve/main/m.safetensors', [], None]:
     bad = copy.deepcopy(good); bad['models'][0]['vision'] = value; invalid.append(bad)
 bad = copy.deepcopy(good); del bad['models'][0]; bad['models'][0]['vision'] = {k: v for k, v in vision.items() if k != 'sha256'}; invalid.append(bad)
+# kind (#91): "chat" or "embedding", nothing else
+for value in ['embeddings', '', None, 1]:
+    bad = copy.deepcopy(good); bad['models'][0]['kind'] = value; invalid.append(bad)
+kinds = copy.deepcopy(good); kinds['models'][0]['kind'] = 'chat'
+assert accepts(kinds), 'kind chat refused'
 # Schema 1 carries no grouping metadata.
 bad = copy.deepcopy(good); bad['schema'] = 1; invalid.append(bad)
 legacy = copy.deepcopy(good); legacy['schema'] = 1

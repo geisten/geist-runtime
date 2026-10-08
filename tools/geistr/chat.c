@@ -3,6 +3,7 @@
  * the line editor), the slash commands and the service mode. What was said
  * lives in conversation.c. */
 #include "cli.h"
+#include "files.h"
 #include "json.h"
 #include "lineedit.h"
 #include "render.h"
@@ -19,6 +20,9 @@
 #include <time.h>
 
 geistr_chat *volatile running; /* for the Ctrl-C handler */
+bool                  serving;
+const char           *files_option;
+static struct files  *files; /* --files, /files: answers from your files (#91) */
 volatile sig_atomic_t interrupted;
 
 void on_interrupt(int signal) {
@@ -326,10 +330,18 @@ int session_open(struct session *x, const char *name, const char *processor, dou
                         bool interactive) {
     char             path[4200] = "";
     geistr_reasoning reasoning;
-    int              rc = resolve(name, path, sizeof path, &reasoning);
+    bool             embedding;
+    int              rc = resolve(name, path, sizeof path, &reasoning, &embedding);
     if (rc != OK)
         return rc;
+    if (embedding && !serving) {
+        fprintf(stderr, "geistr: %s is an embedding model: it serves /v1/embeddings (geistr serve %s --http) "
+                        "and geistr index, but does not chat\n", name, name);
+        return ERROR;
+    }
     geistr_model_opts mo = GEISTR_MODEL_OPTS_INIT;
+    if (embedding) /* ponytail: texts to embed are short; a window of 32k would hold GBs of cache */
+        mo.context = 8192;
     mo.processor         = !strcmp(processor, "cpu")   ? GEISTR_PROCESSOR_CPU
                            : !strcmp(processor, "gpu") ? GEISTR_PROCESSOR_GPU
                                                        : GEISTR_PROCESSOR_AUTO;
@@ -339,7 +351,7 @@ int session_open(struct session *x, const char *name, const char *processor, dou
         mo.context = (uint32_t) strtoul(getenv("GEISTR_TEST_CONTEXT"), nullptr, 10);
 #endif
     char error[256];
-    *x = (struct session) {.temperature = temperature, .reasoning = reasoning};
+    *x = (struct session) {.temperature = temperature, .reasoning = reasoning, .embedding = embedding};
     spinner_start(name, path);
     geistr_status opened = geistr_model_open(path, &mo, &x->model, error, sizeof error);
     spinner_stop();
@@ -379,6 +391,7 @@ static const struct le_candidate commands[] = {
         {"/temp ", "sampling temperature, 0 to 2"},
         {"/system ", "system prompt (off: none)"},
         {"/info", "what runs now"},
+        {"/files ", "answers from a folder of your files (off: none)"},
         {"/save", "keep these settings for the next chat"},
         {"/retry", "the last answer again (at temperature 0: once at 0.7)"},
         {"/copy", "the last answer to the clipboard (/copy code: its last code block)"},
@@ -551,13 +564,27 @@ int answer_once(const char *name, const char *prompt, const char *processor) {
     size_t         n = 0;
     if (cfg.system[0])
         turn[n++] = (geistr_message) {"system", cfg.system};
-    turn[n++]        = (geistr_message) {"user", prompt};
+    char  sources[1024] = "";
+    char *asked = nullptr;
+    if (files_option) {
+        struct files *f = files_open(files_option, true);
+        asked           = f ? files_ask(f, prompt, sources, sizeof sources) : nullptr;
+        files_close(f);
+        if (!asked) {
+            session_close(&x);
+            return ERROR;
+        }
+    }
+    turn[n++]        = (geistr_message) {"user", asked ? asked : prompt};
     struct shown out = {};
     view_begin(&out);
     geistr_status s = geistr_chat_run(x.chat, n, turn, run_piece, &out);
     md_finish(&out.view);
     putchar('\n');
     speed(x.chat, x.name, x.backend, s == GEISTR_OK, "answer", stderr);
+    if (sources[0])
+        fprintf(stderr, "sources: %s\n", sources);
+    free(asked);
     geistr_stats done = {.size = sizeof done};
     if (geistr_chat_stats(x.chat, &done) == GEISTR_OK && done.finish == GEISTR_FINISH_REPETITION)
         fputs("geistr: the answer repeated itself; stopped there\n", stderr);
@@ -682,7 +709,7 @@ static int command(struct session *x, struct conversation *said, char *line, con
             snprintf(want_proc, sizeof want_proc, "%s", proc);
             char             path[4200] = "";
             geistr_reasoning reasoning;
-            if (resolve(want, path, sizeof path, &reasoning) != OK) /* a typo keeps the model */
+            if (resolve(want, path, sizeof path, &reasoning, nullptr) != OK) /* a typo keeps the model */
                 return GO_ON;
             const double temperature = x->temperature;
             running                  = nullptr;
@@ -733,6 +760,17 @@ static int command(struct session *x, struct conversation *said, char *line, con
         if (conv_system(said, strcmp(arg, "off") ? arg : "") && !remote && !reopen(x, said))
             return LEAVE;
         puts(said->system[0] ? "system prompt set" : "no system prompt");
+    } else if (!strcmp(line, "/files")) {
+        if (!*arg || !strcmp(arg, "off")) {
+            files_close(files), files = nullptr;
+            puts("no files");
+            return GO_ON;
+        }
+        struct files *f = files_open(arg, false);
+        if (f) {
+            files_close(files), files = f;
+            say("answers from %s\n", files_dir(f));
+        }
     } else if (!strcmp(line, "/info")) {
         status_line(x, remote ? " · service" : "");
         char threads[32] = ""; /* the CPU's share: what the engine runs on (#93) */
@@ -796,6 +834,11 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
             snprintf(cfg.model, sizeof cfg.model, "%s", name);
             (void) config_save();
         }
+    }
+    if (files_option && !(files = files_open(files_option, false))) {
+        if (!remote)
+            session_close(&x);
+        return ERROR;
     }
     struct sigaction sa = {.sa_handler = on_interrupt};
     sigaction(SIGINT, &sa, nullptr); /* no SA_RESTART: Ctrl-C at the prompt ends fgets */
@@ -875,7 +918,8 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
         if (!line[0])
             continue;
         bool warmer = false; /* /retry at temperature 0: this one answer at 0.7 */
-        if (!strcmp(line, "/retry")) {
+        bool retrying = !strcmp(line, "/retry");
+        if (retrying) {
             if (!conv_retract(&said, line, sizeof line)) {
                 usage("/retry: no answer to retry yet");
                 continue;
@@ -896,8 +940,15 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
                 break;
             continue;
         }
+        /* --files: the nearest excerpts of your files before the question; not
+         * again on /retry, whose question has them already */
+        char  sources[1024] = "";
+        char *asked         = files && !retrying ? files_ask(files, line, sources, sizeof sources) : nullptr;
+        if (files && !retrying && !asked)
+            say("%s  (the files could not be searched: asked without them)%s\n", dim(tty_out()), normal(tty_out()));
         /* Normally only the new message; after a switch, the conversation once. */
-        size_t from = conv_say(&said, line, remote != nullptr);
+        size_t from = conv_say(&said, asked ? asked : line, remote != nullptr);
+        free(asked);
         /* All of it again (resumed, another model): only the newest within the
          * budget, and the system prompt; a service matches the whole. */
         size_t          skip   = !from && !remote ? conv_budget(&said, resume_bytes(&x)) : 0;
@@ -927,6 +978,8 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
         md_finish(&shown.view);
         free(turn);
         puts(s == GEISTR_CANCELLED ? " [stopped]" : "");
+        if (sources[0] && (s == GEISTR_OK || s == GEISTR_CANCELLED))
+            say("%s  sources: %s%s\n", dim(tty_out()), sources, normal(tty_out()));
         geistr_stats done  = {.size = sizeof done};
         bool         known = !remote && geistr_chat_stats(x.chat, &done) == GEISTR_OK;
         if (s == GEISTR_OK || s == GEISTR_CANCELLED)
@@ -974,6 +1027,7 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
         putchar('\n');
     running = nullptr;
     session_close(&x);
+    files_close(files), files = nullptr;
     conv_free(&said);
     free(shown.text);
     return OK;

@@ -120,6 +120,8 @@ struct geistr_model {
     pthread_rwlock_t setup;
     bool            borrowed; /* geistr_model_wrap: the caller owns m and be */
     bool            vision;   /* a vision tower is loaded (#92) */
+    pthread_mutex_t embed_lock; /* geistr_embed's session, made on its first call (#91) */
+    struct geist_session *embed;
     char            error[256];
 };
 
@@ -228,8 +230,14 @@ static geistr_status model_describe(geistr_model *m, struct geist_model *gm, str
         put_error(error, cap, "model synchronization setup failed");
         return GEISTR_BACKEND;
     }
+    if (pthread_mutex_init(&m->embed_lock, nullptr) != 0) {
+        pthread_mutex_destroy(&m->engine);
+        put_error(error, cap, "model synchronization setup failed");
+        return GEISTR_BACKEND;
+    }
     if (decision->enabled && pthread_rwlock_init(&m->setup, nullptr) != 0) {
         pthread_mutex_destroy(&m->engine);
+        pthread_mutex_destroy(&m->embed_lock);
         put_error(error, cap, "decision synchronization setup failed");
         return GEISTR_BACKEND;
     }
@@ -440,6 +448,8 @@ geistr_status geistr_model_wrap(struct geist_model     *gm,
 
 static void model_release(geistr_model *m) {
     if (m && atomic_fetch_sub(&m->refs, 1) == 1) {
+        geist_session_destroy(m->embed);
+        pthread_mutex_destroy(&m->embed_lock);
         if (!m->borrowed) {
             geist_model_destroy(m->m);
             geist_backend_destroy(m->be);
@@ -472,6 +482,70 @@ geistr_status geistr_model_info_get(const geistr_model *m, geistr_model_info *in
     memcpy(info, &full, size);
     info->size = size;
     return GEISTR_OK;
+}
+
+geistr_status geistr_embed(geistr_model *m, const char *text, float *out, size_t cap, size_t *dims,
+                           uint32_t *tokens) {
+    if (!m || !text || !dims || (cap && !out))
+        return GEISTR_INVALID;
+    *dims = 0;
+    if (tokens)
+        *tokens = 0;
+    pthread_mutex_lock(&m->embed_lock);
+    geistr_status     s  = GEISTR_OK;
+    enum geist_status es = GEIST_OK;
+    geist_token_t    *v  = nullptr;
+    size_t            n = 0, room = strlen(text) + 3; /* a token is at least one byte; BOS and EOS */
+    engine_lock(m);
+    if (!m->embed) {
+        struct geist_session_opts so = {.max_seq_len = m->context, .top_p = 1.0f};
+        es                           = geist_session_create(m->m, m->be, &so, &m->embed);
+    }
+    if (es == GEIST_OK)
+        es = geist_session_truncate(m->embed, 0); /* the pooling spans all that was prefilled */
+    if (es == GEIST_OK && !(v = malloc(room * sizeof *v)))
+        s = GEISTR_NO_MEMORY;
+    /* wrapped as the model was trained: geistlib's verified card vector (#91) */
+    const geist_token_t bos = geist_model_bos_token(m->m), eos = geist_model_eos_token(m->m);
+    if (s == GEISTR_OK && es == GEIST_OK && geist_model_add_bos(m->m) && bos >= 0)
+        v[n++] = bos;
+    size_t got = 0;
+    if (s == GEISTR_OK && es == GEIST_OK)
+        es = geist_session_tokenize(m->embed, text, room - n - 1, v + n, &got);
+    n += got;
+    if (s == GEISTR_OK && es == GEIST_OK && geist_model_add_eos(m->m) && eos >= 0)
+        v[n++] = eos;
+    if (s == GEISTR_OK && es == GEIST_OK && n + 1 > m->context)
+        s = GEISTR_CONTEXT;
+    if (s == GEISTR_OK && es == GEIST_OK && n)
+        es = geist_session_prefill_tokens(m->embed, n, v);
+    size_t       d   = 0;
+    const float *vec = s == GEISTR_OK && es == GEIST_OK && n ? geist_session_peek_embedding(&d, m->embed) : nullptr;
+    if (s == GEISTR_OK && es != GEIST_OK)
+        s = from_engine(es);
+    else if (s == GEISTR_OK && !vec)
+        s = n ? GEISTR_FORMAT : GEISTR_INVALID;
+    if (s == GEISTR_OK) {
+        *dims = d;
+        if (tokens)
+            *tokens = (uint32_t) n;
+        if (cap < d)
+            s = GEISTR_INVALID;
+        else
+            memcpy(out, vec, d * sizeof *vec);
+    }
+    engine_unlock(m);
+    snprintf(m->error, sizeof m->error, "%s",
+             s == GEISTR_OK                     ? ""
+             : s == GEISTR_FORMAT               ? "not an embedding model (it generates text)"
+             : s == GEISTR_CONTEXT              ? "the text is longer than the context window"
+             : s == GEISTR_INVALID && !n        ? "nothing to embed"
+             : s == GEISTR_INVALID              ? "out has no room for the vector: see dims"
+             : m->embed                         ? geist_session_errmsg(m->embed)
+                                                : geist_backend_errmsg(m->be));
+    pthread_mutex_unlock(&m->embed_lock);
+    free(v);
+    return s;
 }
 
 const char *geistr_model_error(const geistr_model *m) {

@@ -187,6 +187,10 @@ void svc_chat(const struct svc_options *o, struct held *pool, const struct svc_r
         out->error(out->ctx, GEISTR_INVALID, "at least one message; temperature 0 to 2");
         return;
     }
+    if (o->embedding) {
+        out->error(out->ctx, GEISTR_INVALID, "an embedding model does not chat: POST /v1/embeddings or /api/embed");
+        return;
+    }
     char *stop = stop_key(r);
     /* The conversation that holds the most of this one (same options); else
      * a free slot, else the least recently used. */

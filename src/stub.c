@@ -148,6 +148,17 @@ static void model_release(geistr_model *m) {
         free(m);
 }
 
+/* No stub model embeds: as a model that generates text (#91). */
+geistr_status geistr_embed(geistr_model *m, const char *text, float *out, size_t cap, size_t *dims,
+                           uint32_t *tokens) {
+    if (!m || !text || !dims || (cap && !out))
+        return GEISTR_INVALID;
+    *dims = 0;
+    if (tokens)
+        *tokens = 0;
+    return GEISTR_FORMAT;
+}
+
 void geistr_model_close(geistr_model *m) {
     model_release(m);
 }

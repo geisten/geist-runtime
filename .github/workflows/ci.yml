@@ -107,12 +107,23 @@ jobs:
         env:
           GEIST_TEST_MODEL_THINKING: geistlib/gguf_artifacts/Qwen3-0.6B-Q8_0.gguf
         run: make test-real 2>&1 | tee build/logs/test-real.log
+      - name: cache embedding model (BitNet-embedding 0.6B)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: geistlib/gguf_artifacts/bitnet-embeddings-0.6b-bf16-i2_s.gguf
+          key: geist-model-bitnet-embed-0.6b-c89c64f05a2d
+      - name: fetch embedding model (from the catalog, SHA-verified)
+        run: make fetch-embed-model
+      # #91: geistr_embed: the model card's vector, retrieval, threads
+      - name: embeddings
+        run: make test-embed 2>&1 | tee build/logs/test-embed.log
       - name: real runtime tests (ASan, UBSan; leaks on Linux)
         run: make BUILD=build/san CFLAGS="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all" LDFLAGS="-fsanitize=address,undefined" test-real 2>&1 | tee build/logs/test-real-asan.log
       # #11: the CLI against the reference model, with and without the download module.
       - name: geistr CLI
         env:
           GEISTR_TEST_TOOLS_MODEL: geistlib/gguf_artifacts/Qwen3-0.6B-Q8_0.gguf  # #92: tool calls
+          GEISTR_TEST_EMBED_MODEL: geistlib/gguf_artifacts/bitnet-embeddings-0.6b-bf16-i2_s.gguf  # #91: embeddings
         run: make test-geistr PULL=1 2>&1 | tee build/logs/test-geistr.log
       # #9: the Python package. pip install the wheel into a fresh venv; the
       # 10-line example and the tests. Linux: auditwheel makes it manylinux
