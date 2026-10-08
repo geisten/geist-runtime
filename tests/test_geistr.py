@@ -596,10 +596,26 @@ def section_pull():
             f.write(tiny)
         r = geistr_run('pull', 'wrong')  # served bytes do not match the catalog
         assert r.returncode == 1 and 'does not match' in r.stderr and not os.path.exists(os.path.join(models, 'wrong.gguf')), r.stderr
+        # an update that fails verification keeps the previous file (#98)
+        target, served = os.path.join(models, 'wrong.gguf'), os.path.join(tmp, 'www', 'x', 'y', 'resolve', 'main', 'wrong.gguf')
+        previous = b'p' * len(tiny)
+        with open(target, 'wb') as f:
+            f.write(previous)
+        r = geistr_run('pull', 'wrong')
+        assert r.returncode == 1 and 'the previous file stays' in r.stderr and open(target, 'rb').read() == previous, r.stderr
+        assert not os.path.exists(target + '.part') and not os.path.exists(target + '.old')
+        # a file of another size than the catalog's: said so, nothing left to resume
+        for body, word in ((tiny[:-5], 'smaller'), (tiny + b'more', 'larger')):
+            with open(served, 'wb') as f:
+                f.write(body)
+            r = geistr_run('pull', 'wrong')
+            assert r.returncode == 1 and word in r.stderr and 'No error' not in r.stderr, r.stderr
+            assert not os.path.exists(target + '.part') and open(target, 'rb').read() == previous, r.stderr
+        os.unlink(target)
         r = geistr_run('pull')  # nothing left to update
         assert r.returncode == 0 and 'installed models are current' in r.stdout, (r.stdout, r.stderr)
         server.shutdown()
-        print('geistr pull: download, restart after an ignored range, verify, refuse a mismatch; PULL=0 has no network code passed')
+        print('geistr pull: download, restart after an ignored range, verify, refuse a mismatch, keep the previous file, size mismatch; PULL=0 has no network code passed')
     else:
         print('geistr pull: PULL=0 has no network code passed (no libcurl: download not tested)')
 
