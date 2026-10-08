@@ -48,6 +48,26 @@ static bool cpu_supported(void) {
 }
 #endif
 
+#ifndef __APPLE__
+/* Physical cores: the CPUs that are the first thread of their core (SMT
+ * siblings share one); the logical count where the topology is unreadable. */
+static uint32_t physical_cores(uint32_t logical) {
+    uint32_t n = 0;
+    for (uint32_t cpu = 0; cpu < logical; cpu++) {
+        char path[96], list[64] = "";
+        snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu%u/topology/thread_siblings_list", cpu);
+        FILE *f  = fopen(path, "r");
+        bool  ok = f && fgets(list, sizeof list, f);
+        if (f)
+            fclose(f);
+        if (!ok)
+            return logical;
+        n += strtoul(list, nullptr, 10) == cpu;
+    }
+    return n ? n : logical;
+}
+#endif
+
 geistr_status geistr_device_probe(const char *models_dir, geistr_device *out) {
     if (!out)
         return GEISTR_INVALID;
@@ -98,6 +118,7 @@ geistr_status geistr_device_probe(const char *models_dir, geistr_device *out) {
     mach_port_deallocate(mach_task_self(), host);
 #else
     h->supported = cpu_supported();
+    h->cores     = physical_cores(h->logical_cpus);
     FILE *f      = fopen("/proc/meminfo", "r");
     if (f) {
         char               line[256];

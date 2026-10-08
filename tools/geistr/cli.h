@@ -18,6 +18,7 @@ enum { OK = 0, ERROR = 1, USAGE = 2, CANCELLED = 130 }; /* exit codes */
 struct settings {
     char   model[256], processor[8], system[2048];
     double temperature, resume_tokens; /* resume_tokens: what a resumed conversation re-reads at most */
+    double threads;                    /* CPU threads for the engine; 0: geistr chooses (engine_threads) */
     bool   markdown, stats, intro, resume, history;
 };
 extern struct settings cfg;
@@ -29,6 +30,9 @@ bool config_save(void);
 int  config(int n, const char **args); /* geistr config [key [value]] */
 
 bool make_dirs(const char *path, unsigned mode); /* mkdir -p */
+/* The engine's CPU threads for this computer: the threads setting (or
+ * --threads), else geistr's choice. */
+uint32_t engine_threads(void);
 
 /* Styled output: a terminal, and NO_COLOR not set. */
 static inline bool tty_out(void) {

@@ -93,7 +93,7 @@ static int usage(void) {
           "       geistr catalog [--installed | --available] [--json]\n"
           "       geistr pull [id]               a model, or: update the installed ones to this catalog\n"
           "       geistr config [key [value]]   keys: model processor temperature system markdown stats\n"
-          "                                     intro resume history resume_tokens\n"
+          "                                     intro resume history resume_tokens threads\n"
           "       geistr bench [model…]          tokens/s on ⚙ CPU and ⚡ GPU, shown in geistr catalog\n"
           "       geistr bench --compare [A [B]] two geistlib commits' bench speeds and the change in %\n"
           "       geistr serve <model> [--socket=PATH] [--chats N] [--http[=ADDR:PORT]]\n"
@@ -103,7 +103,7 @@ static int usage(void) {
           "decision: --question-file FILE|-  --context TEXT  --processor auto|cpu|gpu\n"
           "          --mode dense|selected_rows  --profile NAME\n"
           "catalog: --decision-config FILE (permission only; does not load a model)\n"
-          "options: --models DIR  --catalog FILE  --cpu  --gpu  --new (chat)\n"
+          "options: --models DIR  --catalog FILE  --cpu  --gpu  --threads N  --new (chat)\n"
           "<model> is a catalog id or a path to a .gguf file\n",
           stderr);
     return USAGE;
@@ -566,6 +566,7 @@ int main(int argc, char **argv) {
     const char *processor = nullptr, *socket = nullptr, *http = nullptr;
     bool        fresh     = false; /* chat --new */
     long        chats = 2;
+    long        threads_opt = 0; /* --threads N: this run's engine threads, over the setting */
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--models") && i + 1 < argc)
             models_dir = argv[++i];
@@ -583,7 +584,12 @@ int main(int argc, char **argv) {
             http = argv[i][6] ? argv[i] + 7 : "127.0.0.1:11434";
         else if (!strcmp(argv[i], "--socket") || !strncmp(argv[i], "--socket=", 9))
             socket = argv[i][8] ? argv[i] + 9 : "";
-        else if (!strcmp(argv[i], "--chats") && i + 1 < argc) {
+        else if (!strcmp(argv[i], "--threads") && i + 1 < argc) {
+            char *end;
+            threads_opt = strtol(argv[++i], &end, 10);
+            if (*end || threads_opt < 1 || threads_opt > 1024)
+                return usage();
+        } else if (!strcmp(argv[i], "--chats") && i + 1 < argc) {
             char *end;
             chats = strtol(argv[++i], &end, 10);
             if (*end || chats < 1 || chats > 64)
@@ -621,6 +627,8 @@ int main(int argc, char **argv) {
     }
     if (data_folder())
         config_load();
+    if (threads_opt)
+        cfg.threads = (double) threads_opt;
     const char *command = args[0];
     if (!strcmp(command, "config"))
         return processor ? usage() : config(n, args);

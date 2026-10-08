@@ -195,6 +195,18 @@ def section_run():
     r = geistr_run('chat', 'ref', input='What is the capital of Italy?\n/clear\n/help\n/exit\n')
     assert r.returncode == 0 and 'Rome' in r.stdout and 'tok/s' not in r.stdout and '/clear' in r.stdout, r.stdout
     assert geistr_run('config', 'stats', 'on').returncode == 0 and geistr_run('config', 'system', '').returncode == 0
+    # engine threads (#93): --threads for one run, the setting for every run, both shown by /info
+    r = geistr_run('--threads', '2', 'run', 'ref', 'What is the capital of France? Answer in one word.')
+    assert r.returncode == 0 and 'Paris' in r.stdout, (r.stdout, r.stderr)
+    assert geistr_run('--threads', '0', 'run', 'ref', 'hi').returncode == 2
+    assert geistr_run('--threads', 'x', 'run', 'ref', 'hi').returncode == 2
+    assert geistr_run('config', 'threads', '5000').returncode == 2
+    assert geistr_run('config', 'threads', '3').returncode == 0
+    r = geistr_run('chat', 'ref', '--cpu', input='/info\n/exit\n')
+    assert r.returncode == 0 and '· 3 threads' in r.stdout, r.stdout
+    r = geistr_run('--threads', '5', 'chat', 'ref', '--cpu', input='/info\n/exit\n')
+    assert r.returncode == 0 and '· 5 threads' in r.stdout, r.stdout  # the option wins over the setting
+    assert geistr_run('config', 'threads', '0').returncode == 0
     # runtime switches: the session changes, the conversation moves along
     script = ('Remember the word lighthouse.\n/cpu\n/info\n/temp 9\n/temp 0.3\n/model nope\n'
               f'/model {model_path}\n/system Answer briefly.\nWhich word did I ask you to remember?\n/save\n/exit\n')

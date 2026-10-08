@@ -226,6 +226,7 @@ static void api(const geistr_catalog *c) {
     geistr_device   d = {};
     geistr_ranking *r = nullptr;
     CHECK(geistr_device_probe(".", &d) == GEISTR_OK && d.size == sizeof d && d.ram > 0 && d.cores > 0 && d.disk_known);
+    CHECK(d.cores <= d.logical_cpus || !d.logical_cpus); /* physical (or performance) cores: never more than logical */
 #if defined(__APPLE__) && defined(__aarch64__)
     CHECK(d.kind == GEISTR_DEVICE_APPLE_SILICON && d.gpu == GEISTR_BACKEND_METAL && d.supported);
 #endif

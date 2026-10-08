@@ -212,10 +212,11 @@ geistr config markdown off                 # plain text
 geistr config stats off                    # no speed line
 geistr config resume off                   # always start new, keep nothing
 geistr config history off                  # don't keep typed lines between chats
+geistr config threads 8                    # CPU threads (default: one per physical core)
 ```
 
-`--cpu` / `--gpu` choose the processor for one run, `--models DIR` another
-model folder.
+`--cpu` / `--gpu` choose the processor for one run, `--threads N` the CPU
+threads, `--models DIR` another model folder.
 
 <details>
 <summary>All commands</summary>

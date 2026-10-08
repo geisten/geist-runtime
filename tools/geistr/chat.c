@@ -333,6 +333,7 @@ int session_open(struct session *x, const char *name, const char *processor, dou
     mo.processor         = !strcmp(processor, "cpu")   ? GEISTR_PROCESSOR_CPU
                            : !strcmp(processor, "gpu") ? GEISTR_PROCESSOR_GPU
                                                        : GEISTR_PROCESSOR_AUTO;
+    mo.threads           = engine_threads();
 #ifdef GEISTR_TESTING
     if (getenv("GEISTR_TEST_CONTEXT")) /* a small window: the tests fill it quickly */
         mo.context = (uint32_t) strtoul(getenv("GEISTR_TEST_CONTEXT"), nullptr, 10);
@@ -734,8 +735,11 @@ static int command(struct session *x, struct conversation *said, char *line, con
         puts(said->system[0] ? "system prompt set" : "no system prompt");
     } else if (!strcmp(line, "/info")) {
         status_line(x, remote ? " · service" : "");
-        say("chat format %s · context %u of %u tokens (%u %%) · temperature %g%s%s\n", x->format, x->used,
-               x->context, fill(x), x->temperature, said->system[0] ? " · system: " : "", said->system);
+        char threads[32] = ""; /* the CPU's share: what the engine runs on (#93) */
+        if (!remote && !on_gpu(x) && engine_threads())
+            snprintf(threads, sizeof threads, " · %u threads", engine_threads());
+        say("chat format %s · context %u of %u tokens (%u %%) · temperature %g%s%s%s\n", x->format, x->used,
+               x->context, fill(x), x->temperature, threads, said->system[0] ? " · system: " : "", said->system);
     } else if (!strcmp(line, "/copy")) {
         size_t      len;
         bool        code = !strcmp(arg, "code");
