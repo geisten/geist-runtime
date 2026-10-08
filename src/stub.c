@@ -15,6 +15,7 @@
  */
 #include "geistr.h"
 #include "common.h"
+#include "geistr_decision.h"
 #include "stream.h"
 #include "template.h"
 
@@ -23,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <limits.h>
 
 #define DEFAULT_CONTEXT 256u
 #define TOKEN_BYTES 3u
@@ -43,6 +45,7 @@ static void put_error(char *error, size_t cap, const char *text) {
 struct geistr_model {
     atomic_int        refs;
     geistr_model_opts opts;
+    geistr_decision_policy decision;
     bool              slow, raw, has_format;
     const char       *format; /* a static family name */
     uint32_t          context;
@@ -55,9 +58,23 @@ static geistr_status model_new(const char              *name,
                                char                    *error,
                                size_t                   cap) {
     geistr_model_opts o = GEISTR_MODEL_OPTS_INIT;
-    if (!opts_copy(&o, opts, sizeof o)) {
+    if (!opts_copy(&o, opts, sizeof o) ||
+        (opts && opts->size > offsetof(geistr_model_opts, decision) && opts->size < sizeof o)) {
         put_error(error, cap, "model options: unknown size");
         return GEISTR_INVALID;
+    }
+    if (o.decision && geistr_decision_policy_validate(o.decision) != GEISTR_OK) {
+        put_error(error, cap, "invalid decision policy");
+        return GEISTR_INVALID;
+    }
+    if ((o.processor != GEISTR_PROCESSOR_AUTO && o.processor != GEISTR_PROCESSOR_CPU &&
+         o.processor != GEISTR_PROCESSOR_GPU) || o.threads > INT_MAX) {
+        put_error(error, cap, "invalid processor or thread count");
+        return GEISTR_INVALID;
+    }
+    if (o.decision && o.decision->enabled) {
+        put_error(error, cap, "the stub cannot verify a pretrained decision artifact");
+        return GEISTR_FORMAT;
     }
     bool echo = !strcmp(name, "stub:echo"), slow = !strcmp(name, "stub:slow"),
          noformat = !strcmp(name, "stub:noformat"), raw = !strcmp(name, "stub:raw");
@@ -74,6 +91,10 @@ static geistr_status model_new(const char              *name,
         return GEISTR_NO_MEMORY;
     atomic_init(&m->refs, 1);
     m->opts       = o;
+    if (o.decision) {
+        m->decision = *o.decision;
+        m->opts.decision = &m->decision;
+    }
     m->slow       = slow;
     m->raw        = raw;
     m->has_format = !noformat || o.chat_format;
@@ -464,4 +485,56 @@ geistr_status geistr_chat_stats(const geistr_chat *c, geistr_stats *stats) {
 
 const char *geistr_chat_error(const geistr_chat *c) {
     return c ? c->error : "no chat";
+}
+
+/* Honest feature-off surface: no synthetic model claims pretrained scoring. */
+bool geistr_decision_available(void) { return false; }
+geistr_status geistr_decision_capability_get(const geistr_model *m, geistr_decision_capability *out) {
+    if (!out || out->size != sizeof *out)
+        return GEISTR_INVALID;
+    *out = (geistr_decision_capability){.size = sizeof *out};
+    if (!m)
+        return GEISTR_INVALID;
+    out->configured = m->decision.enabled;
+    out->profile = m->decision.profile;
+    out->backend = "stub";
+    return GEISTR_OK;
+}
+geistr_status geistr_decision_resources_get(const geistr_model *m, geistr_decision_resources *out) {
+    if (!out || out->size != sizeof *out)
+        return GEISTR_INVALID;
+    *out = (geistr_decision_resources){.size = sizeof *out};
+    return m ? GEISTR_OK : GEISTR_INVALID;
+}
+geistr_status geistr_decision_open(geistr_model *m, size_t error_cap, const geistr_decision_opts *opts,
+                                   geistr_decision **out, char *error) {
+    (void)opts;
+    if (out)
+        *out = nullptr;
+    if (error && error_cap)
+        snprintf(error, error_cap, "decision engine is disabled");
+    return m && out ? GEISTR_FORMAT : GEISTR_INVALID;
+}
+void geistr_decision_close(geistr_decision *d) { (void)d; }
+geistr_status geistr_decision_score(geistr_decision *d, const geistr_decision_request *r,
+                                    geistr_decision_result *out) {
+    (void)d;
+    (void)r;
+    if (!out || out->size != sizeof *out)
+        return GEISTR_INVALID;
+    *out = (geistr_decision_result){.size = sizeof *out, .best_index = SIZE_MAX};
+    return d ? GEISTR_FORMAT : GEISTR_INVALID;
+}
+geistr_status geistr_decision_reset(geistr_decision *d) { return d ? GEISTR_FORMAT : GEISTR_INVALID; }
+geistr_status geistr_decision_cancel(geistr_decision *d) { return d ? GEISTR_FORMAT : GEISTR_INVALID; }
+const char *geistr_decision_error(const geistr_decision *d) {
+    (void)d;
+    return "decision unavailable in stub";
+}
+geistr_status geistr_decision_plan_get(const geistr_decision *d, geistr_decision_plan *out) {
+    (void)d;
+    if (!out || out->size != sizeof *out)
+        return GEISTR_INVALID;
+    *out = (geistr_decision_plan){.size = sizeof *out};
+    return GEISTR_FORMAT;
 }

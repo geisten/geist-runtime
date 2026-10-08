@@ -1,5 +1,9 @@
 # geist-runtime API (#1)
 
+The optional EXPERIMENTAL fixed-option decision contract (#13) is in
+[`DECISIONS.md`](DECISIONS.md) and `include/geistr_decision.h`. Model permission
+is copied at open and defaults to disabled; it never changes ordinary chat.
+
 `include/geistr.h` is the C interface every embedder uses: apps, the `geistr`
 CLI (#11), the Python package (#9) and geist-serve itself (geist-serve#148).
 It sits on geistlib and turns tokens into a conversation:

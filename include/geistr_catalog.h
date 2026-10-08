@@ -218,6 +218,11 @@ const geistr_fit *geistr_ranking_get(const geistr_ranking *ranking, size_t index
  * recommended. */
 const geistr_fit *geistr_ranking_best(const geistr_ranking *ranking);
 
+/* Hash borrowed memory, including an empty input (nullptr only for len 0).
+ * out must hold 65 bytes and is empty on failure. Same hash as file checking;
+ * used when an embedder enables decisions on a model opened from memory. */
+[[nodiscard]] geistr_status geistr_sha256_memory(size_t len, const void *data, char *out);
+
 #ifdef __cplusplus
 }
 #endif

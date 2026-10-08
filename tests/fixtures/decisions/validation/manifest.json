@@ -1,0 +1,81 @@
+{
+  "schema": 1,
+  "engine_revision": "5dd7e1747df86092a320e638c66993afd409e3b6",
+  "binary_sha256": "841a8ef251aa0ce8578fe332f73013603d2aa3321ccc0dea652cc4767eab9b9a",
+  "source_sha256": {
+    "src/runtime.c": "6c56beaf2796412fd75528effe4ce9e207b46515697a3e5edd917b3602323b82",
+    "src/decision_config.c": "1731d2e3989df22feffc5694dbb3f84f859697d1a8ebe72344024aee3f8c6032",
+    "src/decision_profile.c": "063bb0b6eeb760a03a91c730c776a135c109c369f146f19c3d7122dd637e70b2",
+    "src/decision_profile.h": "29853976e4ea8b737c1c588665c50dc0a1aed564a486300d033c9ea11f7220a9",
+    "src/file_identity.h": "788cc771484f53fe2bf56b3640057fe650400da07e8faddc736dcb2f8471f75d",
+    "tests/test_decision_real.c": "b865c3e12a3811ff12c1927981e2846f43a383cca3ae7a0ce2a46d7d708c1e77",
+    "tests/native_cases.h": "542141a998c2f733795e637f6851a32aeb15f691ec14b919cc893253dbf10f89",
+    "include/geistr_catalog.h": "d2946aa63af39a814a5d5d9ad61ac5c2fd0f10c6afc161ec83659406fb126c15",
+    "include/geistr.h": "6587818b19b0319d3b21c1cef2cd23c61bc9459a9ae10149a60bba13d2fa490d",
+    "include/geistr_decision.h": "3f7e7574af8ab7b2df80c2b2ff5abcedb343197ff6a221e2ae643b00677d5493",
+    "tests/fixtures/decisions/gemma4.h": "58db537421ab26c782dda8c28d499a51b0e61b245ca2db1114b8f1df0929ee6f",
+    "tests/fixtures/decisions/bonsai2.h": "1c1c571e7f7f8af6cf12df9496969518e23793b6efaca725479f9c18d1e1bcad"
+  },
+  "scope": "final wrapper/native-token controls; no latency/quality verdict",
+  "hardware": "Apple M1 Max, 64 GiB",
+  "threads": 6,
+  "context": 512,
+  "processor": "explicit cpu/gpu",
+  "mode": "DENSE and SELECTED_ROWS when supported; unsupported requested mode is an explicit error",
+  "source_commit": "d6c53261bc092374f8515592a19bdf279008c1b0",
+  "records": {
+    "bonsai2-cpu.jsonl": {
+      "sha256": "2b73dd4fe0966120db84c32ed3cc4ccdf67a36be7973691b27d52e773faff77e",
+      "verdict": "PASS",
+      "scope": "native IDs and same-engine bit identity, error/cancel/recovery/chat/cleanup; not independent numerical eligibility"
+    },
+    "bonsai2-metal.jsonl": {
+      "sha256": "1783d8e8d9ba99658dfd15b42282024686a3f16924080a345963425a8709621b",
+      "verdict": "PASS",
+      "scope": "native IDs and same-engine bit identity, error/cancel/recovery/chat/cleanup; not independent numerical eligibility"
+    },
+    "gemma4-cpu.jsonl": {
+      "sha256": "7f3f55c8737154493df7fcedfdeeacc72b3db26e88e4abed1ebcf55a6b66878b",
+      "verdict": "PASS",
+      "scope": "native IDs and same-engine bit identity, error/cancel/recovery/chat/cleanup; not independent numerical eligibility"
+    },
+    "gemma4-metal.jsonl": {
+      "sha256": "682acb4d49e52a43e8ee68df20dbdf0145ea96ab709dff4df41ad3dee956209d",
+      "verdict": "PASS",
+      "scope": "native IDs and same-engine bit identity, error/cancel/recovery/chat/cleanup; not independent numerical eligibility"
+    },
+    "bonsai2-cli-metal.jsonl": {
+      "sha256": "969b0046f7c2999762152b163d9a45eb8083e8e8dac0398301f7616081c9753b",
+      "verdict": "PASS",
+      "scope": "product CLI or installed-wheel integration; no quality/timing gate"
+    },
+    "bonsai2-python-metal.jsonl": {
+      "sha256": "e92e891aca27b1a9f44749f6dad9d2eabe1352420a747968be0ef7811433eca9",
+      "verdict": "PASS",
+      "scope": "product CLI or installed-wheel integration; no quality/timing gate"
+    },
+    "gemma4-cli-cpu.jsonl": {
+      "sha256": "5144fe7a88a80885fe7ab68d28b9fa236eb865758f704ce14fca8ab0c854e152",
+      "verdict": "PASS",
+      "scope": "product CLI or installed-wheel integration; no quality/timing gate"
+    },
+    "gemma4-python-cpu.jsonl": {
+      "sha256": "d35794f6d208573279b775e2bb3f6cd5cc87c04ae631fda99dc16e49b6b7d9e4",
+      "verdict": "PASS",
+      "scope": "product CLI or installed-wheel integration; no quality/timing gate"
+    }
+  },
+  "independent_gemma_numeric_verdict": "FAIL",
+  "quality_eligible": false,
+  "overhead_gate": "NOT_MEASURED",
+  "full_lifecycle_gate": "NOT_MEASURED",
+  "cli_binary_sha256": "2c2b5b2e0fab7ea17b311c87e80c714a4d6946db76925dbc2b532c9d0e0951cb",
+  "shared_library_sha256": "b031433ab71f0bf75791a5b0cfa74c4b1bca6289f8f6635399bf7f882787d6a2",
+  "python_binding_sha256": {
+    "python/geistr/__init__.py": "d6fdcb7f82b5afafe7ce4761934cd5dbf6a9480104f17062083628e41fc1549e",
+    "python/geistr/decision.py": "828f58d96c7d919444bc718239772802723c000e72e9d3f32c0a47a3e36aea23"
+  },
+  "ci_run": "https://github.com/geisten/geist-runtime/actions/runs/37361369174",
+  "ci_revision": "757a5fea4614544ac0374106ae1f865a42a20842",
+  "ci_scope": "same product C/Python sources, release/sanitizers/parity and real gcc14/clang engine feature-off/on builds; subsequent evidence-only commit not yet run"
+}

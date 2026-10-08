@@ -548,6 +548,26 @@ static void sha256_final(sha256_ctx *s, unsigned char digest[32]) {
 }
 #endif
 
+geistr_status geistr_sha256_memory(size_t len, const void *data, char *out) {
+    if (out) out[0] = 0;
+    if (!out || (!data && len) || len > UINT64_MAX / 8)
+        return GEISTR_INVALID;
+    sha256_ctx s;
+    sha256_init(&s);
+    const unsigned char *p = data;
+    while (len) {
+        const size_t chunk = len < (1u << 20) ? len : (1u << 20);
+        sha256_update(&s, p, chunk);
+        p += chunk;
+        len -= chunk;
+    }
+    unsigned char digest[32];
+    sha256_final(&s, digest);
+    for (size_t i = 0; i < 32; ++i)
+        snprintf(out + 2 * i, 3, "%02x", digest[i]);
+    return GEISTR_OK;
+}
+
 geistr_status geistr_sha256_file(const char *path, char out[65]) {
     if (!path || !out)
         return GEISTR_INVALID;

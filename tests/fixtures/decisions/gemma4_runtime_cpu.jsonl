@@ -1,0 +1,7 @@
+{"profile":"gemma4","backend":"cpu_neon","mode":1,"fixture":0,"native_ids":true,"direct_bit_identical":true,"model_calls":1}
+{"profile":"gemma4","backend":"cpu_neon","mode":1,"fixture":0,"best_index":0,"logits":[17.0570831,6.80047798]}
+{"profile":"gemma4","backend":"cpu_neon","mode":1,"fixture":1,"native_ids":true,"direct_bit_identical":true,"model_calls":1}
+{"profile":"gemma4","backend":"cpu_neon","mode":1,"fixture":1,"best_index":1,"logits":[7.55574417,8.69741821]}
+{"profile":"gemma4","backend":"cpu_neon","mode":1,"fixture":2,"native_ids":true,"direct_bit_identical":true,"model_calls":1}
+{"profile":"gemma4","backend":"cpu_neon","mode":1,"fixture":2,"best_index":3,"logits":[-4.89911985,8.51646519,-1.46662605,11.5871334]}
+{"selected_rows":"unsupported_explicit_error"}

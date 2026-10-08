@@ -25,6 +25,7 @@ info = f"geistr-{version}.dist-info"
 
 files = {
     "geistr/__init__.py": (root / "python/geistr/__init__.py").read_bytes(),
+    "geistr/decision.py": (root / "python/geistr/decision.py").read_bytes(),
     "geistr/catalog.json": (root / "models/catalog.json").read_bytes(),
     f"geistr/{lib.name}": lib.read_bytes(),
     f"{info}/METADATA": f"""Metadata-Version: 2.1

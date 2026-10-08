@@ -79,6 +79,8 @@ typedef enum geistr_processor {
     GEISTR_PROCESSOR_GPU, /* Metal or Vulkan; GEISTR_BACKEND if none is available */
 } geistr_processor;
 
+typedef struct geistr_decision_policy geistr_decision_policy;
+
 typedef struct geistr_model_opts {
     size_t           size;      /* sizeof(geistr_model_opts) */
     geistr_processor processor; /* default AUTO */
@@ -88,9 +90,12 @@ typedef struct geistr_model_opts {
     const char      *chat_format; /* override the detected template: "gemma3", "gemma4",
                                      "chatml", "llama3", "bitnet"; nullptr = detect from
                                      the model file. An unknown name is GEISTR_INVALID. */
+    const geistr_decision_policy *decision; /* optional immutable policy from geistr_decision.h;
+                                              copied at open; nullptr = decision disabled.
+                                              Enabling requires the exact verified artifact. */
 } geistr_model_opts;
 
-#define GEISTR_MODEL_OPTS_INIT {sizeof(geistr_model_opts), GEISTR_PROCESSOR_AUTO, 0, 0, nullptr}
+#define GEISTR_MODEL_OPTS_INIT {sizeof(geistr_model_opts), GEISTR_PROCESSOR_AUTO, 0, 0, nullptr, nullptr}
 
 typedef struct geistr_model geistr_model;
 

@@ -1,0 +1,69 @@
+{
+  "schema": 1,
+  "scope": "independent Gemma same-artifact CPU development oracle",
+  "artifact_sha256": "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
+  "reference_revision": "01ae597e3f7d4742909e1e831abb12fe3d24b2cf",
+  "source_sha256": "790f8e7d05b5d5905d7ea9c10f76eb8e30306a6db24c5ed020dde95e711eda93",
+  "binary_sha256": "7b517acfe7b426567de308328126de51e66c5c2c623f5034823090e7587f5c3e",
+  "library_sha256": {
+    "libggml-base.0.21.0.dylib": "4063fafe8d23498c48ef7c08d2fa4ce98856c11cffc2bc84b449735dbee3cbb2",
+    "libggml-blas.0.21.0.dylib": "e876dc081a97c159536dd306ccb17d5c057065791ae44673fcaf89893835c1c5",
+    "libggml-cpu.0.21.0.dylib": "1cdd51b7024820c211601db7c02d7ab490c3849dc84e8b315ab66a7a0fc4d5b0",
+    "libggml-metal.0.21.0.dylib": "332f323b4c1458247dd494daa138ec58079d5797ed20ba1922b21e48485edac0",
+    "libggml.0.21.0.dylib": "b1a2bcf3f435d9bd4fa2184e202b938a0bb304eec00aa405800fdeb46bf107fb",
+    "libllama-bench-impl.dylib": "6dbad7c50e5a57d8fefbea2433e2415d14d3ff275038f4172ba86ab68b2ff742",
+    "libllama-cli-impl.dylib": "f4b1344460bff38ed5e8d72f8df8530fb391c800108bf1254b86e122416a5bcb",
+    "libllama-common.0.2.0.dylib": "b535d6b36c35636f920581ac72904ca41a0c12b1a67f1bf6a1190cf47b264b0a",
+    "libllama-server-impl.dylib": "cae25ef9646481f82cbcedde66d96fa0784fe1e390e4ebc91ef83eb39747dbd0",
+    "libllama.0.2.0.dylib": "8c4f14333786e7f95b48cd5ec641fb4139617ef8b5d3f75e74e02d5a01f7de8e",
+    "libmtmd.0.2.0.dylib": "b17ccc80e680b51ee24bcf89260ca5c1511a9599890a9857168ddda5cdb7b836"
+  },
+  "plan_sha256": "5910f6e47e9640264b070d8a1237300f68e1420af9da5193ebb86a922de4e4ca",
+  "token_fixture_sha256": "ecf29659383ca2d7531c34c575c55171b1f45c3839a659e04f7747f7239f4e35",
+  "input_sha256": "8eb1547bc8de0a8a024f67e35cd129411425677655399c1bba6e6aecf48899d0",
+  "outputs": [
+    {
+      "best_index": 0,
+      "logits": [
+        13.8509893,
+        0.307011753
+      ]
+    },
+    {
+      "best_index": 0,
+      "logits": [
+        11.0760889,
+        7.9553647
+      ]
+    },
+    {
+      "best_index": 1,
+      "logits": [
+        -10.297286,
+        8.02680683,
+        -6.12897968,
+        4.45482063
+      ]
+    }
+  ],
+  "actual_sha256": "7f3f55c8737154493df7fcedfdeeacc72b3db26e88e4abed1ebcf55a6b66878b",
+  "actual_binary_sha256": "841a8ef251aa0ce8578fe332f73013603d2aa3321ccc0dea652cc4767eab9b9a",
+  "reference_command": "reference_score <exact Gemma GGUF> < canonical integer prompt/candidate input",
+  "execution": "CPU only (empty offload-device list, n_gpu_layers=0, offload_kqv=false, op_offload=false), F32 KV, flash attention disabled, six threads, last prompt logits only",
+  "limitations": "not a quality baseline; other modes/backends require their own numeric policy",
+  "actual_source_sha256": {
+    "src/runtime.c": "6c56beaf2796412fd75528effe4ce9e207b46515697a3e5edd917b3602323b82",
+    "src/decision_config.c": "1731d2e3989df22feffc5694dbb3f84f859697d1a8ebe72344024aee3f8c6032",
+    "src/decision_profile.c": "063bb0b6eeb760a03a91c730c776a135c109c369f146f19c3d7122dd637e70b2",
+    "src/decision_profile.h": "29853976e4ea8b737c1c588665c50dc0a1aed564a486300d033c9ea11f7220a9",
+    "src/file_identity.h": "788cc771484f53fe2bf56b3640057fe650400da07e8faddc736dcb2f8471f75d",
+    "tests/test_decision_real.c": "b865c3e12a3811ff12c1927981e2846f43a383cca3ae7a0ce2a46d7d708c1e77",
+    "tests/native_cases.h": "542141a998c2f733795e637f6851a32aeb15f691ec14b919cc893253dbf10f89",
+    "include/geistr_catalog.h": "d2946aa63af39a814a5d5d9ad61ac5c2fd0f10c6afc161ec83659406fb126c15",
+    "include/geistr.h": "6587818b19b0319d3b21c1cef2cd23c61bc9459a9ae10149a60bba13d2fa490d",
+    "include/geistr_decision.h": "3f7e7574af8ab7b2df80c2b2ff5abcedb343197ff6a221e2ae643b00677d5493",
+    "tests/fixtures/decisions/gemma4.h": "58db537421ab26c782dda8c28d499a51b0e61b245ca2db1114b8f1df0929ee6f",
+    "tests/fixtures/decisions/bonsai2.h": "1c1c571e7f7f8af6cf12df9496969518e23793b6efaca725479f9c18d1e1bcad"
+  },
+  "reference_build_version": "0.2.0-dev, build 10724, commit 01ae597e3, AppleClang 21.0.0.21000334, Darwin arm64"
+}

@@ -83,6 +83,10 @@ jobs:
       # The engine checkout first: the model cache restores into it.
       - name: engine and runtime
         run: mkdir -p build/logs && make runtime 2>&1 | tee build/logs/runtime.log
+      - name: compile optional decision bridge (on)
+        run: make runtime DECISION=1 2>&1 | tee build/logs/decision-on.log
+      - name: restore feature-off engine for ordinary regression tests
+        run: make runtime DECISION=0 2>&1 | tee build/logs/decision-off.log
       - name: cache reference model
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

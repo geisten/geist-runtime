@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "scope": "development integration; no held-out MMLU quality or Jev speed claim",
+  "frozen_before_numerical_reference": "2026-10-05",
+  "independent_numeric": {
+    "profile": "gemma4-e2b-q4-v1",
+    "artifact_sha256": "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
+    "reference_revision": "01ae597e3f7d4742909e1e831abb12fe3d24b2cf",
+    "cases": ["plain", "unicode", "order"],
+    "ids": "tests/fixtures/decisions/gemma4.json",
+    "reference_backend": "CPU, n_gpu_layers=0, threads=6, F32 KV, flash attention disabled",
+    "final_position": "last prompt token; logits=true, no generated answer token",
+    "absolute_tolerance": 0.10,
+    "relative_tolerance": 0.01,
+    "formula": "abs(actual-reference) <= atol + rtol * abs(reference) for every candidate",
+    "tie_tolerance": 0.000001,
+    "near_tie": "reference top-two margin <= twice maximum candidate allowance: selection verdict INCONCLUSIVE",
+    "selection": "first maximum; identity must match outside near-tie region",
+    "reruns": "no tolerance widening or best-repeat selection"
+  },
+  "performance": {
+    "status": "not measured; gate in issue 17 remains pending",
+    "warmup_pairs": 5,
+    "measured_pairs": 30,
+    "order": "AB on even pair indices, BA on odd indices",
+    "phase": "synchronous scoring dispatch through copied result; direct engine candidate output copied equivalently",
+    "estimator": "ratio of paired means; two-sided 95% paired bootstrap, 10000 resamples, seed 14917",
+    "resampling_unit": "complete pair within one model/backend/mode combination",
+    "gate": "PASS upper<=1.02; FAIL lower>1.02; otherwise INCONCLUSIVE",
+    "exclusions": "none; errors reported separately, required combination cannot pass with failures",
+    "thermal_policy": "single process/model, no simultaneous inference jobs; record host and power state",
+    "decode_phase": "not applicable; decisions perform no generation"
+  },
+  "quality": {
+    "eligibility": false,
+    "owner_bonsai": "geisten/geistlib#587",
+    "gemma": "held-out, short generation baseline and all four cyclic MMLU rotations not run",
+    "procedure": "reuse existing paired 95% gains/losses conservative joint-coverage and 2pp non-inferiority; never use toy fixtures as quality population"
+  },
+  "memory": {
+    "status": "bounded wrapper observations available; 100-request/three-model-cycle campaign pending",
+    "wrapper": "exactly four live allocations per decision: handle, fixed prompt buffer, two (max_prompt_tokens+1)*sizeof(int32_t) buffers; zero after all decisions destroyed",
+    "provider": "scoped MTLDevice.currentAllocatedSize, never added to process RSS",
+    "missing_evidence": "cannot yield PASS"
+  }
+}

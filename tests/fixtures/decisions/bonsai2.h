@@ -1,0 +1,15 @@
+/* Generated ONLY from the independent native oracle JSON. */
+static const int32_t bonsai2_0_ids[] = {248045,8678,198,3270,6681,799,16713,2904,13,21134,1132,440,1141,1328,13,3054,524,10033,13,248046,198,248045,846,198,14162,25,198,22365,2904,16327,220,19,30,198,3670,25,198,32,498,32897,5491,220,19,198,33,498,50897,5491,220,20,198,23298,799,1328,13,248046,198,248045,74455,198,248068,271,248069,271};
+static const int32_t bonsai2_0_candidates[] = {32,33};
+static const char bonsai2_0_prompt[] = "<|im_start|>system\012Select exactly one supplied option. Answer only with its key. Do not explain.<|im_end|>\012<|im_start|>user\012Question:\012Which option equals 4?\012Options:\012A [four]: 4\012B [five]: 5\012Choose one key.<|im_end|>\012<|im_start|>assistant\012<think>\012\012</think>\012\012";
+static const int32_t bonsai2_1_ids[] = {248045,8678,198,3270,6681,799,16713,2904,13,21134,1132,440,1141,1328,13,3054,524,10033,13,248046,198,248045,846,198,1905,25,198,57455,448,220,16,198,57455,448,220,17,198,14162,25,198,220,184973,177683,30,198,169171,2228,3670,25,198,32,498,81,42756,5491,220,5571,2228,33,498,1956,2770,5491,242880,198,54210,198,23298,799,1328,13,248046,198,248045,74455,198,248068,271,248069,271};
+static const int32_t bonsai2_1_candidates[] = {32,33};
+static const char bonsai2_1_prompt[] = "<|im_start|>system\012Select exactly one supplied option. Answer only with its key. Do not explain.<|im_end|>\012<|im_start|>user\012Context:\012Zeile 1\012Zeile 2\012Question:\012  Welche Farbe?\012\360\237\231\202  \012Options:\012A [r\303\266t]:  rot  \012B [blau]: blau\012hell\012Choose one key.<|im_end|>\012<|im_start|>assistant\012<think>\012\012</think>\012\012";
+static const int32_t bonsai2_2_ids[] = {248045,8678,198,3270,6681,799,16713,2904,13,21134,1132,440,1141,1328,13,3054,524,10033,13,248046,198,248045,846,198,14162,25,198,23298,279,1442,1324,13,198,3670,25,198,32,498,50897,5491,220,20,198,33,498,19186,5491,220,17,198,34,498,26952,5491,220,18,198,35,498,32897,5491,220,19,198,23298,799,1328,13,248046,198,248045,74455,198,248068,271,248069,271};
+static const int32_t bonsai2_2_candidates[] = {32,33,34,35};
+static const char bonsai2_2_prompt[] = "<|im_start|>system\012Select exactly one supplied option. Answer only with its key. Do not explain.<|im_end|>\012<|im_start|>user\012Question:\012Choose the even number.\012Options:\012A [five]: 5\012B [two]: 2\012C [three]: 3\012D [four]: 4\012Choose one key.<|im_end|>\012<|im_start|>assistant\012<think>\012\012</think>\012\012";
+static const struct native_case bonsai2_cases[] = {
+{"Which option equals 4?","",2,{{"four","4"},{"five","5"}},bonsai2_0_prompt,bonsai2_0_ids,sizeof bonsai2_0_ids / sizeof bonsai2_0_ids[0],bonsai2_0_candidates},
+{"  Welche Farbe?\012\360\237\231\202  ","Zeile 1\012Zeile 2",2,{{"r\303\266t"," rot  "},{"blau","blau\012hell"}},bonsai2_1_prompt,bonsai2_1_ids,sizeof bonsai2_1_ids / sizeof bonsai2_1_ids[0],bonsai2_1_candidates},
+{"Choose the even number.","",4,{{"five","5"},{"two","2"},{"three","3"},{"four","4"}},bonsai2_2_prompt,bonsai2_2_ids,sizeof bonsai2_2_ids / sizeof bonsai2_2_ids[0],bonsai2_2_candidates},
+};

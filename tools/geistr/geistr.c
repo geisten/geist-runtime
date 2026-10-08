@@ -13,6 +13,10 @@
  *   geistr serve <model> [--socket=PATH] [--chats N] [--http[=ADDR:PORT]]
  *                                    the model as a service on a Unix socket (service.h)
  *   geistr chat --socket[=PATH]      chat with that service
+ *   geistr decide <model> --config FILE --question TEXT --option ID DESC…
+ *                                    fixed-option scoring (EXPERIMENTAL, default-off; docs/DECISIONS.md)
+ *   geistr catalog --decision-config FILE
+ *                                    also show each model's decision permission (no model is loaded)
  *
  * <model> is a catalog id or a path to a GGUF; chat without one continues with
  * the last model (or the geisten app's). In a terminal the chat continues the
@@ -34,6 +38,7 @@
 #include "service.h"
 #include "json.h"
 #include "cli.h"
+#include "decide.h"
 
 #include <time.h>
 #include <locale.h>
@@ -80,6 +85,7 @@
 const char        *models_dir;
 static const char *catalog_file;
 static char        default_models[4096];
+static const char *decision_config_file;
 
 static int usage(void) {
     fputs("usage: geistr run <model> [prompt…]\n"
@@ -92,6 +98,10 @@ static int usage(void) {
           "       geistr serve <model> [--socket=PATH] [--chats N] [--http[=ADDR:PORT]]\n"
           "                                       (--http: OpenAI and Ollama APIs, default 127.0.0.1:11434)\n"
           "       geistr chat --socket[=PATH]\n"
+          "       geistr decide <model> --config FILE --question TEXT --option ID DESC [--option ID DESC…]\n"
+          "decision: --question-file FILE|-  --context TEXT  --processor auto|cpu|gpu\n"
+          "          --mode dense|selected_rows  --profile NAME\n"
+          "catalog: --decision-config FILE (permission only; does not load a model)\n"
           "options: --models DIR  --catalog FILE  --cpu  --gpu  --new (chat)\n"
           "<model> is a catalog id or a path to a .gguf file\n",
           stderr);
@@ -139,6 +149,13 @@ geistr_catalog *load_catalog(void) {
     return c;
 }
 
+/* geistr decide's catalog: the same policy as every other command (its
+ * arguments are this file's --models and --catalog). */
+static geistr_catalog *decide_catalog(const char *directory, const char *file) {
+    (void) directory, (void) file;
+    return load_catalog();
+}
+
 /* Installed state; hashes once per new or changed file (then a receipt). */
 static geistr_install install_state(const geistr_catalog_entry *m, bool quiet) {
     geistr_install state = GEISTR_INSTALL_MISSING;
@@ -174,6 +191,13 @@ static int catalog(bool installed_only, bool available_only, bool json) {
     geistr_catalog *c = load_catalog();
     if (!c)
         return ERROR;
+    geistr_decision_config *permissions = nullptr;
+    if (decision_config_file) {
+        char error[256];
+        if (geistr_decide_config_read(sizeof error, decision_config_file, &permissions, error) != GEISTR_OK) {
+            fprintf(stderr, "geistr: %s\n", error); geistr_catalog_free(c); return ERROR;
+        }
+    }
     size_t         n = geistr_catalog_count(c);
     geistr_install state[1024];
     geistr_local  *local = calloc(n ? n : 1, sizeof *local);
@@ -190,6 +214,7 @@ static int catalog(bool installed_only, bool available_only, bool json) {
         fprintf(stderr, "geistr: cannot read this computer's memory\n");
         free(local);
         geistr_catalog_free(c);
+        geistr_decision_config_free(permissions);
         return ERROR;
     }
     /* The bars share one scale; their width is what the terminal leaves. */
@@ -212,6 +237,7 @@ static int catalog(bool installed_only, bool available_only, bool json) {
     for (int pass = 0; pass < 2; pass++)
         for (size_t i = 0; i < n; i++) {
             const geistr_catalog_entry *m         = geistr_catalog_get(c, i);
+            const geistr_decision_policy *permission = geistr_decision_config_find(m->sha256, permissions);
             bool                        installed = state[i] == GEISTR_INSTALL_OK;
             const geistr_fit           *f         = nullptr;
             for (size_t k = 0; k < geistr_ranking_count(r); k++)
@@ -238,7 +264,14 @@ static int catalog(bool installed_only, bool available_only, bool json) {
                 local[i].cpu.rate > 0 ? (void) printf("%.1f", local[i].cpu.rate) : (void) printf("null");
                 printf(",\"gpu\":");
                 local[i].gpu.rate > 0 ? (void) printf("%.1f", local[i].gpu.rate) : (void) printf("null");
-                printf("}}");
+                printf("}");
+                if (decision_config_file) {
+                    printf(",\"decision\":{\"configured\":%s,\"profile\":", permission && permission->enabled ? "true" : "false");
+                    if (permission && permission->profile) json_write(stdout, geistr_decision_profile_name(permission->profile));
+                    else printf("null");
+                    printf(",\"support\":\"not_loaded\",\"verified\":false}");
+                }
+                printf("}");
             } else {
                 char        size[16];
                 const char *mark = installed                             ? "✓"
@@ -255,6 +288,8 @@ static int catalog(bool installed_only, bool available_only, bool json) {
                 else if (f->resource != GEISTR_RESOURCE_FITS)
                     printf("  %s %s", f->resource == GEISTR_RESOURCE_UNAVAILABLE ? "✗" : "⚠",
                            limit_text(f->resource_reason));
+                if (permission && permission->enabled)
+                    printf("  decision configured (%s; support not loaded)", geistr_decision_profile_name(permission->profile));
                 putchar('\n');
             }
             first = false;
@@ -264,6 +299,7 @@ static int catalog(bool installed_only, bool available_only, bool json) {
     else if (tty)
         puts("\033[2m⚙ CPU · ⚡ GPU: tokens/s measured here (geistr bench), dim: the catalog's reference\033[0m");
     geistr_ranking_free(r);
+    geistr_decision_config_free(permissions);
     geistr_catalog_free(c);
     free(local);
     return OK;
@@ -302,6 +338,27 @@ int resolve(const char *model, char *path, size_t cap, geistr_reasoning *reasoni
     if (is_path)
         snprintf(path, cap, "%s", model);
     return OK;
+}
+
+static geistr_decision *volatile running_decision;
+
+/* geistr decide's Ctrl-C: cancels the scoring (an atomic store). */
+static void on_decide_interrupt(int signal) {
+    (void) signal;
+    interrupted = 1;
+    if (running_decision)
+        (void) geistr_decision_cancel(running_decision);
+}
+
+/* A single-threaded dispatcher. SIGINT is blocked while installing/clearing
+ * the borrowed pointer; the handler cannot outlive the scoring instance. */
+static void decision_active(geistr_decision *decision, void *context) {
+    (void) context;
+    sigset_t set, previous; sigemptyset(&set); sigaddset(&set, SIGINT);
+    if (sigprocmask(SIG_BLOCK, &set, &previous) != 0) abort();
+    running_decision = decision;
+    if (decision && interrupted && geistr_decision_cancel(decision) != GEISTR_OK) abort();
+    if (sigprocmask(SIG_SETMASK, &previous, nullptr) != 0) abort();
 }
 
 static bool comparing; /* bench --compare */
@@ -416,6 +473,27 @@ static int pull(const char *id) {
 
 int main(int argc, char **argv) {
     setlocale(LC_CTYPE, ""); /* character widths for the view and the line editor */
+    /* Preserve leading global options, then pass decision arguments intact:
+     * option descriptions and UTF-8 IDs are never interpreted by chat parsing. */
+    int first = 1;
+    while (first + 1 < argc && (!strcmp(argv[first], "--models") || !strcmp(argv[first], "--catalog"))) {
+        if (!strcmp(argv[first], "--models")) models_dir = argv[first + 1];
+        else catalog_file = argv[first + 1];
+        first += 2;
+    }
+    if (first < argc && !strcmp(argv[first], "decide")) {
+        if (!models_dir) {
+            if (geistr_models_dir(default_models, sizeof default_models) != GEISTR_OK) {
+                fputs("geistr: no model folder: set HOME or GEISTEN_HOME, or use --models\n", stderr);
+                return ERROR;
+            }
+            models_dir = default_models;
+        }
+        struct sigaction sa = {.sa_handler = on_decide_interrupt}; sigemptyset(&sa.sa_mask);
+        if (sigaction(SIGINT, &sa, nullptr) != 0) return ERROR;
+        const geistr_decide_host host = {models_dir, catalog_file, decide_catalog, decision_active, nullptr};
+        return geistr_decide_command((size_t)(argc - first - 1), (const char *const *)(argv + first + 1), &host);
+    }
     const char *args[64];
     int         n = 0;
     bool        installed = false, available = false, json = false;
@@ -427,6 +505,8 @@ int main(int argc, char **argv) {
             models_dir = argv[++i];
         else if (!strcmp(argv[i], "--catalog") && i + 1 < argc)
             catalog_file = argv[++i];
+        else if (!strcmp(argv[i], "--decision-config") && i + 1 < argc)
+            decision_config_file = argv[++i];
         else if (!strcmp(argv[i], "--installed"))
             installed = true;
         else if (!strcmp(argv[i], "--available"))
@@ -482,7 +562,7 @@ int main(int argc, char **argv) {
         processor = cfg.processor;
     if (!strcmp(command, "catalog") && n == 1 && !(installed && available))
         return catalog(installed, available, json);
-    if (installed || available || json)
+    if (installed || available || json || decision_config_file)
         return usage();
     static char socket_path[4300];
     if (!socket && !strcmp(command, "serve"))
