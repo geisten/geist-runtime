@@ -36,6 +36,19 @@
 #include <sys/sysctl.h>
 #endif
 
+
+/* GEIST_TEST_PROCESSOR=gpu|cpu: every model here opens on that processor
+ * (the GPU job, #112); otherwise the runtime chooses (auto). */
+static const geistr_model_opts *test_opts(void) {
+    static geistr_model_opts o = GEISTR_MODEL_OPTS_INIT;
+    const char              *p = getenv("GEIST_TEST_PROCESSOR");
+    o.processor                = !p ? GEISTR_PROCESSOR_AUTO
+                                 : !strcmp(p, "gpu") ? GEISTR_PROCESSOR_GPU
+                                 : !strcmp(p, "cpu") ? GEISTR_PROCESSOR_CPU
+                                                     : GEISTR_PROCESSOR_AUTO;
+    return &o;
+}
+
 static int failures;
 #define CHECK(cond, what)                                                                          \
     do {                                                                                           \
@@ -92,7 +105,7 @@ static uint64_t physical_memory(void) {
 static void window(const char *path, const char *name) {
     geistr_model *m = nullptr;
     char          error[256];
-    geistr_status s = geistr_model_open(path, nullptr, &m, error, sizeof error);
+    geistr_status s = geistr_model_open(path, test_opts(), &m, error, sizeof error);
     CHECK(s == GEISTR_OK, error);
     if (s != GEISTR_OK)
         return;
@@ -128,7 +141,7 @@ static void window(const char *path, const char *name) {
 static void recurrent(const char *path) {
     geistr_model *m = nullptr;
     char          error[256], a[512], b[512];
-    CHECK(geistr_model_open(path, nullptr, &m, error, sizeof error) == GEISTR_OK, error);
+    CHECK(geistr_model_open(path, test_opts(), &m, error, sizeof error) == GEISTR_OK, error);
     if (!m)
         return;
     geistr_chat   *c    = chat(m, 24, GEISTR_OVERFLOW_REFUSE);
@@ -150,7 +163,7 @@ static void recurrent(const char *path) {
 static void thinking(const char *path) {
     geistr_model *m = nullptr;
     char          error[256], a[512], b[512], r[512];
-    CHECK(geistr_model_open(path, nullptr, &m, error, sizeof error) == GEISTR_OK, error);
+    CHECK(geistr_model_open(path, test_opts(), &m, error, sizeof error) == GEISTR_OK, error);
     if (!m)
         return;
     geistr_chat_opts o = GEISTR_CHAT_OPTS_INIT;
@@ -214,7 +227,7 @@ int main(void) {
     }
     char          error[256], a1[1024], a2[1024], again[1024];
     geistr_model *m = nullptr;
-    CHECK(geistr_model_open(path, nullptr, &m, error, sizeof error) == GEISTR_OK, error);
+    CHECK(geistr_model_open(path, test_opts(), &m, error, sizeof error) == GEISTR_OK, error);
     if (!m)
         return 1;
     geistr_model_info info = {.size = sizeof info};
@@ -329,7 +342,7 @@ int main(void) {
     /* ---- overflow ---- */
     {
         geistr_model     *small = nullptr;
-        geistr_model_opts mo    = GEISTR_MODEL_OPTS_INIT;
+        geistr_model_opts mo    = *test_opts();
         mo.context              = 512;
         CHECK(geistr_model_open(path, &mo, &small, error, sizeof error) == GEISTR_OK, error);
         geistr_model_info si = {.size = sizeof si};
@@ -393,7 +406,7 @@ int main(void) {
               "engine backend");
         CHECK(be && geist_model_load(path, be, &gm) == GEIST_OK, "engine model");
         geistr_model     *w  = nullptr;
-        geistr_model_opts wo = GEISTR_MODEL_OPTS_INIT;
+        geistr_model_opts wo = *test_opts();
         wo.context           = 512;
         CHECK(geistr_model_wrap(gm, be, &wo, &w, error, sizeof error) == GEISTR_OK, error);
         geistr_model_info wi = {.size = sizeof wi};
@@ -429,6 +442,9 @@ int main(void) {
     if (large && access(large, R_OK) == 0)
         window(large, "large model");
 
+    const char *want = getenv("GEIST_TEST_PROCESSOR");
+    if (want && !strcmp(want, "gpu"))
+        CHECK(strcmp(backend, "cpu") != 0, "GEIST_TEST_PROCESSOR=gpu: the model runs on the GPU");
     if (failures) {
         fprintf(stderr, "test_real: %d check(s) failed\n", failures);
         return 1;
