@@ -94,7 +94,18 @@ jobs:
           key: geist-model-smollm2-360m-q8-48ab3034d0dd
       - name: fetch reference model (SmolLM2 from the catalog, SHA-verified)
         run: make fetch-model
+      # #96: a thinking model's second answer (earlier reasoning leaves the
+      # history); test_real runs this case when the model is there.
+      - name: cache thinking model (Qwen3 0.6B)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: geistlib/gguf_artifacts/Qwen3-0.6B-Q8_0.gguf
+          key: geist-model-qwen3-0.6b-q8-9465e63a22ad
+      - name: fetch thinking model (Qwen3 0.6B from the catalog, SHA-verified)
+        run: sh scripts/fetch-model.sh models/catalog.json qwen3-0.6b geistlib/gguf_artifacts
       - name: real runtime tests
+        env:
+          GEIST_TEST_MODEL_THINKING: geistlib/gguf_artifacts/Qwen3-0.6B-Q8_0.gguf
         run: make test-real 2>&1 | tee build/logs/test-real.log
       - name: real runtime tests (ASan, UBSan; leaks on Linux)
         run: make BUILD=build/san CFLAGS="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all" LDFLAGS="-fsanitize=address,undefined" test-real 2>&1 | tee build/logs/test-real-asan.log
