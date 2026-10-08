@@ -240,6 +240,27 @@ static const char *reference(geistr_catalog *c, const struct json *j, int list) 
     return keep(c, j->src + j->tok[list].start, (size_t) (j->tok[list].end - j->tok[list].start));
 }
 
+/* The vision tower: {url, sha256, bytes}; url a safetensors checkpoint at a
+ * pinned revision (40 hex digits), so the extraction is reproducible. */
+static bool vision(geistr_catalog *c, const struct json *j, int object, geistr_catalog_entry *m) {
+    static const char *const vision_keys[] = {"url", "sha256", "bytes", nullptr};
+    if (j->tok[object].type != JSMN_OBJECT || !keys(j, object, vision_keys))
+        return false;
+    m->vision_url    = string(c, j, object, "url", 1024);
+    m->vision_sha256 = string(c, j, object, "sha256", 64);
+    const char *rev  = m->vision_url ? strstr(m->vision_url, "/resolve/") : nullptr;
+    size_t      n    = m->vision_url ? strlen(m->vision_url) : 0;
+    if (!rev || strncmp(m->vision_url, "https://huggingface.co/", 23) || strpbrk(m->vision_url, "@?#% ") ||
+        strstr(m->vision_url, "..") || n < 12 || strcmp(m->vision_url + n - 12, ".safetensors"))
+        return false;
+    rev += strlen("/resolve/");
+    for (int k = 0; k < 40; k++)
+        if (!(rev[k] >= '0' && rev[k] <= '9') && !(rev[k] >= 'a' && rev[k] <= 'f'))
+            return false;
+    return rev[40] == '/' && hex(m->vision_sha256, 64) && number(j, object, "bytes", 4 * GIB, &m->vision_bytes) &&
+           m->vision_bytes > 0;
+}
+
 /* Validate model i of the list into m; nullptr on success, else why not. */
 static const char *entry(geistr_catalog *c, const struct json *j, int i, uint64_t schema, geistr_catalog_entry *m) {
     static const char *const model_keys[] = {"id",         "name",         "file",
@@ -247,7 +268,7 @@ static const char *entry(geistr_catalog *c, const struct json *j, int i, uint64_
                                              "working_mib", "recommended_ram_gib", "backends",
                                              "unsupported_format", "group_id", "group_name",
                                              "quantization", "reasoning_format", "quality",
-                                             "reference",  nullptr};
+                                             "reference",  "vision",       nullptr};
     uint64_t                 v;
     if (!keys(j, i, model_keys))
         return "unknown or duplicate key";
@@ -276,6 +297,8 @@ static const char *entry(geistr_catalog *c, const struct json *j, int i, uint64_
         return "bad quality";
     if (get(j, i, "reference") >= 0 && !(m->reference = reference(c, j, get(j, i, "reference"))))
         return "bad reference";
+    if (get(j, i, "vision") >= 0 && !vision(c, j, get(j, i, "vision"), m))
+        return "bad vision";
     if (schema == 2) {
         m->group_id     = string(c, j, i, "group_id", 63);
         m->group_name   = string(c, j, i, "group_name", 100);
@@ -621,7 +644,10 @@ static bool join(char *out, size_t cap, const char *a, const char *b) {
 }
 
 geistr_status geistr_catalog_check(const geistr_catalog_entry *m, const char *dir, bool hash, geistr_install *out) {
-    if (!m || !dir || !out || !component(m->file, true) || !hex(m->sha256, 64))
+    const size_t flen = m && m->file ? strlen(m->file) : 0; /* a model, or its vision tower (#92) */
+    if (!m || !dir || !out || !hex(m->sha256, 64) ||
+        !(component(m->file, true) ||
+          (component(m->file, false) && flen > 12 && !strcmp(m->file + flen - 12, ".safetensors"))))
         return GEISTR_INVALID;
     *out = GEISTR_INSTALL_MISSING;
     char path[4096], receipts[4096], receipt[4096], before[256], after[256], seen[256] = "", sum[65];

@@ -20,6 +20,15 @@ def sha(path):
             h.update(block)
     return h.hexdigest()
 
+def png(size=224, square=(0xdd, 0x11, 0x11)):
+    """A PNG: a colored square on white."""
+    import struct, zlib
+    rows = b''.join(b'\0' + b''.join(bytes(square) if size // 4 <= x < size * 3 // 4 and size // 4 <= y < size * 3 // 4
+                                     else b'\xff\xff\xff' for x in range(size)) for y in range(size))
+    chunk = lambda kind, data: struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', size, size, 8, 2, 0, 0, 0)) +
+            chunk(b'IDAT', zlib.compress(rows)) + chunk(b'IEND', b''))
+
 def entry(id, file, digest, size, **extra):
     return {'id': id, 'name': id.upper(), 'file': file, 'url': f'https://huggingface.co/x/y/resolve/main/{file}',
             'sha256': digest, 'bytes': size, 'working_mib': 64, 'recommended_ram_gib': 1, 'backends': ['cpu'],
@@ -582,9 +591,28 @@ def section_http():
     status, _, body = call('POST', '/v1/chat/completions', {'messages': [{'role': 'user', 'content': 'Hi'}], 'tools': weather,
                            'tool_choice': 'none', 'max_tokens': 4})
     assert status == 200, (status, body)  # tool_choice none: no tools, any model
+    # images (#92): refused clearly (400) by a model without vision, and when malformed, in both APIs
+    import base64
+    picture = base64.b64encode(png(16)).decode()
+    def image_part(url):
+        return {'type': 'image_url', 'image_url': {'url': url}}
+    text = {'type': 'text', 'text': 'What is this?'}
+    for content, why in (([text, image_part('data:image/png;base64,' + picture)], 'no vision'),
+                         ([text, {'type': 'image_url', 'image_url': 'data:image/png;base64,' + picture}], 'no vision'),
+                         ([text, image_part('https://example.com/a.png')], 'data: URL'),
+                         ([text, image_part('data:image/png;base64,' + picture), image_part('data:image/png;base64,' + picture)], 'one image'),
+                         ([text, image_part('data:image/png;base64,!!!')], 'not base64')):
+        status, _, body = call('POST', '/v1/chat/completions', {'messages': [{'role': 'user', 'content': content}]})
+        assert status == 400 and why in body, (status, body)
+    for images, why in (([picture], 'no vision'), (['!!!'], 'not base64'), ([picture, picture], 'one image')):
+        status, _, body = call('POST', '/api/chat', {'messages': [{'role': 'user', 'content': 'What is this?', 'images': images}]})
+        assert status == 400 and why in body, (status, body)
+    earlier = [{'role': 'user', 'content': 'Hi', 'images': [picture]}, {'role': 'assistant', 'content': 'Hello.'},
+               {'role': 'user', 'content': 'Bye'}]  # only the last message's image counts
+    assert call('POST', '/api/chat', {'messages': earlier, 'stream': False, 'options': {'num_predict': 2}})[0] == 200
     service.send_signal(signal.SIGTERM)
     assert service.wait(30) == 0
-    print('geistr serve --http: OpenAI (one answer, stream, usage, stop, length) and Ollama APIs, shared cache, Host check, 403/404/405/411/413, context, disconnect, tools refused passed')
+    print('geistr serve --http: OpenAI (one answer, stream, usage, stop, length) and Ollama APIs, shared cache, Host check, 403/404/405/411/413, context, disconnect, tools and images refused passed')
 
 # ---- tools (#92): only with GEISTR_TEST_TOOLS_MODEL, a Qwen3 GGUF -------------
 def section_tools():
@@ -688,6 +716,69 @@ def section_bench():
     print('geistr bench / catalog speeds: recorded per answer with the engine, median of the last ten, by id or path, --compare passed')
 
 # ---- pull -------------------------------------------------------------------
+def pull_vision():
+    """The vision tower (#92): from a checkpoint, only the vision tensors, by HTTP ranges (neighbours in one),
+    into vision_tower.safetensors next to the model, verified; a mismatch is removed."""
+    tensors = [('model.language_model.w', b'L' * 64), ('model.vision_tower.a', b'A' * 24), ('model.vision_tower.b', b'B' * 8),
+               ('model.audio_tower.c', b'C' * 16), ('model.embed_vision.d', b'D' * 40)]
+    def safetensors(items, metadata):
+        head, at = ({'__metadata__': {'format': 'pt'}} if metadata else {}), 0
+        for name, data in items:
+            head[name] = {'dtype': 'BF16', 'shape': [len(data) // 2, 1], 'data_offsets': [at, at + len(data)]}
+            at += len(data)
+        text = json.dumps(head, separators=(',', ':'))
+        text += ' ' * (-len(text) % 8)
+        return len(text).to_bytes(8, 'little') + text.encode() + b''.join(data for _, data in items)
+    checkpoint = safetensors(tensors, True)
+    tower = safetensors([t for t in tensors if '.vision_tower.' in t[0] or '.embed_vision.' in t[0]], False)
+    eyes = b'GGUF eyes, never loaded' * 100
+    rev = 'a' * 40
+    files = {f'/x/y/resolve/{rev}/model.safetensors': checkpoint, '/x/y/resolve/main/eyes.gguf': eyes}
+    ranges = []
+    class Ranges(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+        def do_GET(self):
+            body = files[self.path]
+            if self.headers['Range']:
+                a, b = (int(x) for x in self.headers['Range'].split('=')[1].split('-'))
+                ranges.append((a, b))
+                body, status = body[a:b + 1], 206
+            else:
+                status = 200
+            self.send_response(status)
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+    server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Ranges)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    vision_models, vision_catalog = os.path.join(tmp, 'vision-models'), os.path.join(tmp, 'vision-catalog.json')
+    def run(digest):
+        with open(vision_catalog, 'w') as f:
+            json.dump({**catalog, 'models': [entry('eyes', 'eyes.gguf', hashlib.sha256(eyes).hexdigest(), len(eyes), vision={
+                'url': f'https://huggingface.co/x/y/resolve/{rev}/model.safetensors', 'sha256': digest, 'bytes': len(tower)})]}, f)
+        return subprocess.run([geistr, 'pull', 'eyes', '--models', vision_models, '--catalog', vision_catalog], capture_output=True,
+                              text=True, timeout=60, env={**env, 'GEISTR_TEST_URL_BASE': f'http://127.0.0.1:{server.server_port}'})
+    target = os.path.join(vision_models, 'vision_tower.safetensors')
+    r = run(hashlib.sha256(tower).hexdigest())
+    assert r.returncode == 0 and '✓ vision tower for eyes installed' in r.stdout, (r.stdout, r.stderr)
+    assert open(target, 'rb').read() == tower and not os.path.exists(target + '.part')
+    assert len(ranges) == 4, ranges  # the length, the header, A+B in one, D
+    r = run(hashlib.sha256(tower).hexdigest())  # in place: nothing fetched
+    assert r.returncode == 0 and 'vision tower' not in r.stdout + r.stderr and len(ranges) == 4, (r.stdout, r.stderr)
+    with open(vision_catalog) as f:  # another size than the catalog's: refused before the data
+        doc = json.load(f)
+    doc['models'][0]['vision']['bytes'] += 1
+    with open(vision_catalog, 'w') as f:
+        json.dump(doc, f)
+    os.unlink(target)
+    r = subprocess.run([geistr, 'pull', 'eyes', '--models', vision_models, '--catalog', vision_catalog], capture_output=True,
+                       text=True, timeout=60, env={**env, 'GEISTR_TEST_URL_BASE': f'http://127.0.0.1:{server.server_port}'})
+    assert r.returncode == 1 and 'out of date' in r.stderr and len(ranges) == 6 and not os.path.exists(target), (r.stderr, ranges)
+    r = run('0' * 64)  # the catalog says another tower: fetched again, refused, removed
+    assert r.returncode == 1 and 'does not match' in r.stderr and not os.path.exists(target), r.stderr
+    server.shutdown()
+
 def section_pull():
     r = geistr_run('pull', 'tiny', binary=nonet)
     assert r.returncode == 1 and 'no download module' in r.stderr, r.stderr
@@ -759,7 +850,8 @@ def section_pull():
         r = geistr_run('pull')  # nothing left to update
         assert r.returncode == 0 and 'installed models are current' in r.stdout, (r.stdout, r.stderr)
         server.shutdown()
-        print('geistr pull: download, restart after an ignored range, verify, refuse a mismatch, keep the previous file, size mismatch, first run; PULL=0 has no network code passed')
+        pull_vision()
+        print('geistr pull: download, restart after an ignored range, verify, refuse a mismatch, keep the previous file, size mismatch, first run, a vision tower by ranges; PULL=0 has no network code passed')
     else:
         print('geistr pull: PULL=0 has no network code passed (no libcurl: download not tested)')
 
@@ -848,9 +940,24 @@ def section_gpu():
         with urllib.request.urlopen(request, timeout=180) as reply:
             answer = json.loads(reply.read())
         assert answer['choices'][0]['message']['content'].strip(), answer
+        # an image (#92): the color of the square, then a follow-up without it that still sees it
+        import base64
+        url = 'data:image/png;base64,' + base64.b64encode(png()).decode()
+        ask = [{'role': 'user', 'content': [{'type': 'text', 'text': 'What color is the square? One word.'},
+                                            {'type': 'image_url', 'image_url': {'url': url}}]}]
+        def chat(messages):
+            request = urllib.request.Request(f'http://127.0.0.1:{port}/v1/chat/completions', method='POST', data=json.dumps(
+                {'messages': messages, 'temperature': 0, 'max_tokens': 16}).encode())
+            with urllib.request.urlopen(request, timeout=900) as reply:
+                return json.loads(reply.read())['choices'][0]['message']['content']
+        color = chat(ask)
+        assert 'red' in color.lower(), color
+        shape = chat(ask + [{'role': 'assistant', 'content': color},
+                            {'role': 'user', 'content': 'And its shape? One word.'}])
+        assert 'square' in shape.lower(), shape
     finally:
         service.terminate(); service.wait(60)
-    print('geistr on the GPU: run, chat (/info, /model both ways, the conversation along), serve --http passed')
+    print('geistr on the GPU: run, chat (/info, /model both ways, the conversation along), serve --http, an image passed')
 
 # ---- run: every section, or those in GEISTR_TEST_ONLY (comma separated) -------
 # Each gets its own GEISTEN_HOME (settings, chats, speed.tsv); they share the

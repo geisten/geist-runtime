@@ -81,6 +81,8 @@ static void shipped(const char *file) {
         CHECK(strlen(m->sha256) == 64 && m->bytes && m->group_id && m->group_name);
         CHECK((m->backends & GEISTR_BACKEND_CPU) || m->unsupported_format);
         CHECK(m->quality_passed <= m->quality_total);
+        /* a vision tower (#92) comes whole or not at all */
+        CHECK(!m->vision_url == !m->vision_sha256 && !m->vision_url == !m->vision_bytes);
     }
     printf("catalog: %s, revision %u, %zu models\n", file, geistr_catalog_revision(c), geistr_catalog_count(c));
     geistr_catalog_free(c);
@@ -130,6 +132,14 @@ static void install_states(const char *dir) {
     CHECK(geistr_catalog_check(tiny, dir, true, &state) == GEISTR_OK && state == GEISTR_INSTALL_MISMATCH);
     rmdir(path);
 
+    /* a vision tower is checked like a model; other file kinds are not (#92) */
+    geistr_catalog_entry tower = *tiny;
+    tower.file                 = "vision_tower.safetensors";
+    CHECK(geistr_catalog_check(&tower, dir, true, &state) == GEISTR_OK && state == GEISTR_INSTALL_MISSING);
+    tower.file = "run.sh";
+    CHECK(geistr_catalog_check(&tower, dir, true, &state) == GEISTR_INVALID);
+    tower.file = "../vision_tower.safetensors";
+    CHECK(geistr_catalog_check(&tower, dir, true, &state) == GEISTR_INVALID);
     CHECK(geistr_catalog_check(tiny, nullptr, true, &state) == GEISTR_INVALID);
     CHECK(geistr_catalog_check(nullptr, dir, true, &state) == GEISTR_INVALID);
     geistr_catalog_free(c);

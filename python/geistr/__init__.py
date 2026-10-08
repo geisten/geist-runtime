@@ -44,7 +44,8 @@ class _ModelOpts(C.Structure):
 
 
 class _ModelInfo(C.Structure):
-    _fields_ = [("size", C.c_size_t), ("arch", _str), ("chat_format", _str), ("backend", _str), ("context", C.c_uint32)]
+    _fields_ = [("size", C.c_size_t), ("arch", _str), ("chat_format", _str), ("backend", _str), ("context", C.c_uint32),
+                ("vision", C.c_int)]
 
 
 class _ChatOpts(C.Structure):
@@ -73,7 +74,8 @@ class _Entry(C.Structure):
                                           "quantization", "reasoning_format", "unsupported_format", "quality",
                                           "reference")] + \
                [("bytes", C.c_uint64), ("working_mib", C.c_uint32), ("recommended_ram_gib", C.c_uint32),
-                ("backends", C.c_uint32), ("quality_passed", C.c_uint32), ("quality_total", C.c_uint32)]
+                ("backends", C.c_uint32), ("quality_passed", C.c_uint32), ("quality_total", C.c_uint32),
+                ("vision_url", _str), ("vision_sha256", _str), ("vision_bytes", C.c_uint64)]
 
 
 class _Device(C.Structure):
@@ -287,7 +289,8 @@ class Model:
         i = _ModelInfo(size=C.sizeof(_ModelInfo))
         with self._guard:
             _check(_model_info(self._handle(), C.byref(i)))
-        return {"arch": _s(i.arch), "chat_format": _s(i.chat_format), "backend": _s(i.backend), "context": i.context}
+        return {"arch": _s(i.arch), "chat_format": _s(i.chat_format), "backend": _s(i.backend), "context": i.context,
+                "vision": bool(i.vision)}
 
     @property
     def decision_capability(self) -> dict:

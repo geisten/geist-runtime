@@ -442,12 +442,20 @@ static int pull_all(void) {
     if (!c)
         return ERROR;
     int rc = OK, updated = 0;
-    for (size_t i = 0; i < geistr_catalog_count(c) && rc != CANCELLED; i++)
-        if (install_state(geistr_catalog_get(c, i), true) == GEISTR_INSTALL_MISMATCH) {
-            int one = geistr_pull(geistr_catalog_get(c, i), models_dir);
+    for (size_t i = 0; i < geistr_catalog_count(c) && rc != CANCELLED; i++) {
+        const geistr_catalog_entry *m     = geistr_catalog_get(c, i);
+        geistr_install              state = install_state(m, true);
+        if (state == GEISTR_INSTALL_MISMATCH) {
+            int one = geistr_pull(m, models_dir);
             rc      = one == OK ? rc : one;
             updated += one == OK;
+            state = one == OK ? GEISTR_INSTALL_OK : state;
         }
+        if (state == GEISTR_INSTALL_OK && rc != CANCELLED) { /* and its vision tower (#92) */
+            int one = geistr_pull_vision(m, models_dir);
+            rc      = one == OK ? rc : one;
+        }
+    }
     if (rc == OK && !updated)
         printf("✓ the installed models are current (catalog revision %u)\n", geistr_catalog_revision(c));
     geistr_catalog_free(c);
@@ -468,6 +476,8 @@ static int pull(const char *id) {
         rc = OK;
     } else
         rc = geistr_pull(m, models_dir);
+    if (rc == OK && m)
+        rc = geistr_pull_vision(m, models_dir); /* its vision tower, if the catalog lists one (#92) */
     geistr_catalog_free(c);
     return rc;
 }
@@ -513,6 +523,8 @@ static int first_run(const char *processor, bool fresh) {
             char answer[16] = "";
             bool yes        = fgets(answer, sizeof answer, stdin) && strchr("yY\n", answer[0]);
             rc              = !yes ? USAGE : geistr_pull(best->entry, models_dir);
+            if (rc == OK)
+                rc = geistr_pull_vision(best->entry, models_dir);
             if (!yes)
                 printf("Later: geistr pull %s, then geistr chat %s\n", id, id);
             if (rc == OK) {

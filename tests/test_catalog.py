@@ -43,6 +43,16 @@ for field in ['group_id', 'group_name', 'quantization']:
     bad = copy.deepcopy(good); del bad['models'][0][field]; invalid.append(bad)
 for field, value in [('group_name', 'Conflicting name'), ('quantization', 'Q4_0')]:
     bad = copy.deepcopy(good); bad['models'][-2][field] = value; invalid.append(bad)
+# The vision tower (#92): a safetensors file at a pinned revision, its SHA-256 and size.
+vision = next(m['vision'] for m in base['models'] if 'vision' in m)
+pinned = vision['url']
+for change in [{'url': pinned.replace('/resolve/' + pinned.split('/resolve/')[1][:40], '/resolve/main')},
+               {'url': pinned.replace('.safetensors', '.gguf')}, {'url': pinned.replace('huggingface.co', 'evil.example')},
+               {'url': pinned + '?x=1'}, {'sha256': '0' * 63}, {'bytes': 0}, {'bytes': 5 * 2**30}, {'extra': 1}]:
+    bad = copy.deepcopy(good); bad['models'][0]['vision'] = {**vision, **change}; invalid.append(bad)
+for value in ['https://huggingface.co/a/b/resolve/main/m.safetensors', [], None]:
+    bad = copy.deepcopy(good); bad['models'][0]['vision'] = value; invalid.append(bad)
+bad = copy.deepcopy(good); del bad['models'][0]; bad['models'][0]['vision'] = {k: v for k, v in vision.items() if k != 'sha256'}; invalid.append(bad)
 # Schema 1 carries no grouping metadata.
 bad = copy.deepcopy(good); bad['schema'] = 1; invalid.append(bad)
 legacy = copy.deepcopy(good); legacy['schema'] = 1

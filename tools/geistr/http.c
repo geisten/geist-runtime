@@ -239,6 +239,65 @@ static char *content_of(const struct json *j, int t) {
     return all.s ? all.s : strdup("");
 }
 
+/* ---- images (#92): the last message's, base64 ------------------------------
+ * OpenAI: a content part {"type":"image_url","image_url":{"url":"data:…;base64,…"}};
+ * Ollama: "images": ["…"]. ponytail: only the last message's image reaches the
+ * model; an earlier one lives on in the held conversation that saw it (matched
+ * by text: a client that sends another image under the same words and answers
+ * gets the old one; a hash per held turn if that matters). */
+
+static unsigned char *base64(const char *s, size_t n, size_t *len) {
+    unsigned char *out = malloc(n / 4 * 3 + 3);
+    uint32_t       acc = 0;
+    size_t         o = 0, bits = 0;
+    for (size_t i = 0; out && i < n && s[i] != '='; i++) {
+        const char *at = strchr("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", s[i]);
+        if (!at || !s[i]) {
+            free(out);
+            return nullptr;
+        }
+        acc = acc << 6 | (uint32_t) (at - "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/");
+        if ((bits += 6) >= 8)
+            bits -= 8, out[o++] = (unsigned char) (acc >> bits);
+    }
+    *len = o;
+    return out;
+}
+
+/* The image of the request's last message into r; nullptr, or why not. */
+static const char *read_image(const struct json *j, struct svc_request *r) {
+    int list = json_field(j, 0, "messages"), last = -1, found = -1, count = 0;
+    for (int item = json_next(j, list, -1); item >= 0; item = json_next(j, list, item))
+        last = item;
+    int images = json_field(j, last, "images"), content = json_field(j, last, "content");
+    for (int item = json_next(j, images, -1); item >= 0; item = json_next(j, images, item))
+        found = item, count++;
+    for (int part = json_next(j, content, -1); json_count(j, content) > 0 && part >= 0;
+         part = json_next(j, content, part)) {
+        char *type = json_string(j, json_field(j, part, "type"));
+        if (type && !strcmp(type, "image_url")) {
+            int   url    = json_field(j, part, "image_url");
+            char *direct = json_string(j, url); /* a string, or {"url": …} */
+            found        = direct ? url : json_field(j, url, "url"), count++;
+            free(direct);
+        }
+        free(type);
+    }
+    if (!count)
+        return nullptr;
+    if (count > 1)
+        return "one image per message";
+    char       *text = json_string(j, found);
+    const char *data = text;
+    if (data && found != json_next(j, images, -1)) { /* OpenAI: a data URL */
+        const char *comma = strstr(data, ";base64,");
+        data              = !strncmp(data, "data:", 5) && comma ? comma + strlen(";base64,") : nullptr;
+    }
+    r->image = data ? base64(data, strlen(data), &r->image_len) : nullptr;
+    free(text);
+    return !data ? "image_url: a data: URL with base64 (no web addresses)" : !r->image ? "image: not base64" : nullptr;
+}
+
 /* ---- tools: Qwen3's format (Hermes style), as its chat template renders it --
  * The tool list goes into the system message; an assistant's earlier calls
  * become <tool_call> blocks, tool results a user turn of <tool_response>
@@ -667,6 +726,12 @@ static void openai_chat(const struct svc_options *o, struct held *pool, FILE *ou
         error_json(out, 400, true, "messages: a list of messages with role and content", nullptr);
         return;
     }
+    const char *why = read_image(j, &r);
+    if (why) {
+        svc_free_request(&r);
+        error_json(out, 400, true, why, nullptr);
+        return;
+    }
     r.temperature = clamp(json_number(j, json_field(j, 0, "temperature"), 1)); /* OpenAI's default */
     r.max         = (unsigned) json_number(j, max >= 0 ? max : json_field(j, 0, "max_tokens"), 0);
     read_stop(j, json_field(j, 0, "stop"), &r);
@@ -816,6 +881,12 @@ static void ollama_chat(const struct svc_options *o, struct held *pool, FILE *ou
     if (!read_messages(j, &r, tools)) {
         svc_free_request(&r);
         error_json(out, 400, false, "messages: a list of messages with role and content", nullptr);
+        return;
+    }
+    const char *why = read_image(j, &r);
+    if (why) {
+        svc_free_request(&r);
+        error_json(out, 400, false, why, nullptr);
         return;
     }
     r.temperature  = clamp(json_number(j, json_field(j, options, "temperature"), 0.8)); /* Ollama's default */

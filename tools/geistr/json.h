@@ -21,6 +21,7 @@ char  *json_string(const struct json *j, int t);        /* unescaped, malloc'd; 
 /* t's JSON text as it stands in the input (an object or array with its
  * brackets, a string without its quotes); nullptr if t is no token. */
 const char *json_raw(const struct json *j, int t, size_t *len);
+int         json_parent(const struct json *j, int t); /* the token t belongs to; -1 at the top */
 double json_number(const struct json *j, int t, double dflt);
 bool   json_bool(const struct json *j, int t, bool dflt); /* true or false, else dflt */
 

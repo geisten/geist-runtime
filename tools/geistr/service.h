@@ -55,6 +55,8 @@ struct svc_request {
     unsigned            max;         /* answer tokens; 0 = the rest of the context */
     const char *const  *stop;
     size_t              n_stop;
+    unsigned char      *image; /* the last message's image (#92): PNG, JPEG or BMP bytes */
+    size_t              image_len;
 };
 void svc_free_request(struct svc_request *r);
 

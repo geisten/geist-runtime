@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "revision": 9,
+  "revision": 10,
   "models": [
     {
       "id": "bitnet-2b",
@@ -314,6 +314,7 @@
       "url": "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf",
       "sha256": "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
       "bytes": 3106738272,
+      "vision": {"url": "https://huggingface.co/unsloth/gemma-4-E2B-it/resolve/d36bdd3855c82a6a1a23f7c459b749f5724ae75d/model.safetensors", "sha256": "ab81adc241e40afa8c3404693b3fde0da8fd87a9caec1eb1a985c2b5bc2c8749", "bytes": 337175896},
       "working_mib": 5120,
       "recommended_ram_gib": 8,
       "backends": [
