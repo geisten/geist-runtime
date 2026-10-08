@@ -5,6 +5,7 @@
 #include "cli.h"
 #include <curl/curl.h>
 #include <errno.h>
+#include <stdint.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,12 +22,13 @@ static void on_pull_interrupt(int signal) {
 struct sink {
     FILE    *file;
     uint64_t offset, bytes, limit;
+    bool     over; /* the file is larger than the catalog says */
 };
 
 static size_t on_data(char *data, size_t size, size_t count, void *context) {
     struct sink *s = context;
     size_t       n = size * count;
-    if (n > s->limit - s->bytes || fwrite(data, 1, n, s->file) != n)
+    if ((s->over = n > s->limit - s->bytes) || fwrite(data, 1, n, s->file) != n)
         return 0;
     s->bytes += n;
     return n;
@@ -117,7 +119,14 @@ int geistr_pull(const geistr_catalog_entry *m, const char *dir) {
         ok = rc == CURLE_OK && (status == 200 || status == 206) && s.bytes == m->bytes;
         if (isatty(2))
             fputc('\n', stderr);
-        if (!ok)
+        /* Complete but of another size (the catalog is behind the file):
+         * resuming cannot help, so the part goes. */
+        const bool sized = !stop && ((rc == CURLE_OK && s.bytes != m->bytes) || s.over);
+        if (sized) {
+            fprintf(stderr, "geistr: %s is %s %ju bytes the catalog gives; removed, the catalog may be out of date (geistr pull)\n",
+                    m->id, s.over ? "larger than the" : "smaller than the", (uintmax_t) m->bytes);
+            unlink(part);
+        } else if (!ok)
             fprintf(stderr, "geistr: download %s: %s; run geistr pull %s again to resume\n",
                     stop ? "stopped" : "failed", stop ? "Ctrl-C" : curl_easy_strerror(rc), m->id);
         curl_easy_cleanup(curl);
@@ -130,18 +139,33 @@ int geistr_pull(const geistr_catalog_entry *m, const char *dir) {
     if (!ok)
         return stop ? 130 : 1;
     /* Verified under its final name: one hash, which also leaves the receipt.
-     * Anything but a match is removed; installed means verified. */
+     * Anything but a match is removed; installed means verified. An older
+     * file of that name waits aside and comes back if the new one fails. */
     fprintf(stderr, "verifying %s …\n", m->id);
     geistr_install state = GEISTR_INSTALL_MISMATCH;
+    char           old[4300];
+    snprintf(old, sizeof old, "%s.old", target);
+    const bool aside = rename(target, old) == 0;
+    if (!aside && errno != ENOENT) {
+        fprintf(stderr, "geistr: cannot replace %s: %s\n", target, strerror(errno));
+        return 1;
+    }
     if (rename(part, target) != 0) {
         fprintf(stderr, "geistr: cannot install %s: %s\n", target, strerror(errno));
+        if (aside)
+            rename(old, target);
         return 1;
     }
     if (geistr_catalog_check(m, dir, true, &state) != GEISTR_OK || state != GEISTR_INSTALL_OK) {
         unlink(target);
-        fprintf(stderr, "geistr: %s does not match its SHA-256; removed, try again\n", m->id);
+        if (aside)
+            rename(old, target);
+        fprintf(stderr, "geistr: %s does not match its SHA-256; removed%s, try again\n", m->id,
+                aside ? " (the previous file stays)" : "");
         return 1;
     }
+    if (aside)
+        unlink(old);
     printf("✓ %s installed\n", m->id);
     return 0;
 }
