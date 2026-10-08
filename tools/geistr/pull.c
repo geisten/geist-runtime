@@ -335,10 +335,16 @@ int geistr_pull_vision(const geistr_catalog_entry *m, const char *dir) {
     unsigned char hlen[8];
     for (int k = 0; k < 8; k++)
         hlen[k] = (unsigned char) ((uint64_t) head_n >> (8 * k));
-    out = fopen(part, "wb");
+    if (8 + head_n + total != m->vision_bytes) { /* known before the download */
+        fprintf(stderr, "geistr: vision tower for %s: %ju bytes, the catalog says %ju; the catalog may be out of date\n",
+                m->id, (uintmax_t) (8 + head_n + total), (uintmax_t) m->vision_bytes);
+        free(head);
+        goto done;
+    }
+    out = make_dirs(dir, 0755) ? fopen(part, "wb") : nullptr;
     bool ok = out && head && fwrite(hlen, 1, 8, out) == 8 && fwrite(head, 1, head_n, out) == head_n;
     free(head);
-    if (!ok || !make_dirs(dir, 0755))
+    if (!ok)
         goto done;
     /* the data: neighbouring tensors in one range each */
     s = (struct range_sink) {.file = out, .total = total};

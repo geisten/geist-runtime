@@ -766,6 +766,15 @@ def pull_vision():
     assert len(ranges) == 4, ranges  # the length, the header, A+B in one, D
     r = run(hashlib.sha256(tower).hexdigest())  # in place: nothing fetched
     assert r.returncode == 0 and 'vision tower' not in r.stdout + r.stderr and len(ranges) == 4, (r.stdout, r.stderr)
+    with open(vision_catalog) as f:  # another size than the catalog's: refused before the data
+        doc = json.load(f)
+    doc['models'][0]['vision']['bytes'] += 1
+    with open(vision_catalog, 'w') as f:
+        json.dump(doc, f)
+    os.unlink(target)
+    r = subprocess.run([geistr, 'pull', 'eyes', '--models', vision_models, '--catalog', vision_catalog], capture_output=True,
+                       text=True, timeout=60, env={**env, 'GEISTR_TEST_URL_BASE': f'http://127.0.0.1:{server.server_port}'})
+    assert r.returncode == 1 and 'out of date' in r.stderr and len(ranges) == 6 and not os.path.exists(target), (r.stderr, ranges)
     r = run('0' * 64)  # the catalog says another tower: fetched again, refused, removed
     assert r.returncode == 1 and 'does not match' in r.stderr and not os.path.exists(target), r.stderr
     server.shutdown()
