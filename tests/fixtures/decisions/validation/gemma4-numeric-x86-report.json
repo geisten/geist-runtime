@@ -1,0 +1,24 @@
+{
+  "scope": "three independent numerical development fixtures; not MMLU quality",
+  "verdict": "FAIL",
+  "cases": [
+    {
+      "fixture": "plain",
+      "max_absolute_error": 2.0284384170000003,
+      "logits": "FAIL",
+      "selection": "PASS"
+    },
+    {
+      "fixture": "unicode",
+      "max_absolute_error": 3.41221952,
+      "logits": "FAIL",
+      "selection": "PASS"
+    },
+    {
+      "fixture": "order",
+      "max_absolute_error": 9.00177387,
+      "logits": "FAIL",
+      "selection": "FAIL"
+    }
+  ]
+}

@@ -107,9 +107,11 @@ Build the optional engine with `make runtime DECISION=1` (or `make geistr
 DECISION=1 PULL=0`, `make wheel DECISION=1`). `DECISION=0` remains the default;
 all decision symbols stay linkable and return explicit unsupported errors.
 The engine is the Makefile's pin (`GEIST_REF`). The recorded validation evidence
-(`tests/fixtures/decisions/validation`) was produced on engine
-`5dd7e1747df86092a320e638c66993afd409e3b6` and is kept as recorded; it is not
-re-established for later pins until it is recorded again.
+(`tests/fixtures/decisions/validation`): the Apple records (NEON, Metal) were
+produced on engine `5dd7e1747df86092a320e638c66993afd409e3b6` and are kept as
+recorded; the x86 CPU records (`*-x86.jsonl`, `manifest.json` → `x86_cpu`) on
+the current pin `0707c3b1c9e547c909d200331a0750b4ff8e8cbe` (#94). Evidence is
+not re-established for later pins until it is recorded again.
 Required EXPERIMENTAL engine symbols are availability/support/mode probes,
 create/score/destroy, error access, tokenization and resource observation
 (`geistr_decision_reset` clears only the wrapper's state: every score starts
@@ -221,9 +223,20 @@ fixtures exceed frozen atol=0.10/rtol=0.01; two of three choose another option.
 Maximum candidate-logit differences are approximately 6.49, 3.52 and 7.13.
 The failure and raw scores are retained in `gemma4_numeric.json` and
 `gemma4_runtime_cpu.jsonl`; `tools/verify_decision_evidence.py` returns nonzero
-for this known failure. No tolerance is widened. The cause is not yet isolated
-between the pinned numerical implementations; an engine/reference investigation
-is required before Gemma numerical acceptance or release eligibility.
+for this known failure. No tolerance is widened.
+
+Re-recorded on x86 at the current pin (#94, `gemma4_numeric_x86.json`, the same
+reference outputs): maximum differences 2.03, 3.41 and 9.00; the first two now
+choose the reference's option, the third does not, so the verdict stays FAIL.
+The cause is isolated in geistlib#694: geistlib#697 fixed two cpu_x86
+activation-scale bugs (the first fixture went from 6.49 to 2.03), cpu_neon has
+the same pattern (geistlib#698), and the frozen atol 0.10 / rtol 0.01 cannot
+hold across engines that quantize activations to int8: the llama.cpp reference
+itself moves by up to 3.97 logits between batch sizes and changes its choice on
+the third fixture. A new contract (a full-precision-activation reference; a
+winner gate only where the reference's top-two gap is at least 3 logits) is
+proposed there and needs a decision before Gemma numerical acceptance or
+release eligibility.
 
 `docs/DECISION_EVIDENCE_PLAN.json` freezes the development comparison and pending
 performance gate. No paired overhead verdict, complete Apple lifecycle verdict,

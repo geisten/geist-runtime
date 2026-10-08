@@ -1,5 +1,6 @@
 """The evidence verifier must reject known drift and tampered raw outputs."""
 import copy
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -29,4 +30,17 @@ try:
     raise RuntimeError('accepted incomplete population')
 except ValueError:
     pass
-print('evidence verifier: independent Gemma drift FAIL preserved; finite complete output required')
+# #94: the x86 record on the current pin: bound to its reference copy, still FAIL (a linked cause), and the
+# manifest's hashes are those of the files
+validation = root / 'tests/fixtures/decisions/validation'
+x86 = json.loads((root / 'tests/fixtures/decisions/gemma4_numeric_x86.json').read_text())
+x86_rows = [json.loads(line) for line in (validation / 'gemma4-cpu-x86.jsonl').read_text().splitlines() if line.startswith('{')]
+assert x86['outputs'] == reference['outputs'] and x86['actual_sha256'] == hashlib.sha256((validation / 'gemma4-cpu-x86.jsonl').read_bytes()).hexdigest()
+report = module.numerical(plan, fixture, x86, x86_rows)
+manifest = json.loads((validation / 'manifest.json').read_text())
+assert report['verdict'] == manifest['x86_cpu']['independent_gemma_numeric_verdict'] == 'FAIL'
+assert [c['selection'] for c in report['cases']] == list(manifest['x86_cpu']['independent_gemma_numeric']['selection'].values())
+for section in (manifest, manifest['x86_cpu']):
+    for name, record in section['records'].items():
+        assert hashlib.sha256((validation / name).read_bytes()).hexdigest() == record['sha256'], name
+print('evidence verifier: independent Gemma drift FAIL preserved (Apple NEON and x86 records); finite complete output required; manifest hashes match')
