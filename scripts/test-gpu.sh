@@ -1,7 +1,7 @@
 #!/bin/sh
 # test-gpu.sh [models dir] — the GPU tests (#112): the real runtime and the CLI
 # on the GPU (Vulkan on Linux, Metal on macOS) with the reference model, a
-# thinking model and a GPU-sized one.
+# thinking model and a GPU-sized one (with its vision tower: an image request).
 #
 # The models come from the catalog into a folder of the runner's own
 # (default $GEIST_CI_MODELS, else ~/geist-ci-models), SHA-256 verified and
@@ -36,6 +36,10 @@ if command -v flock >/dev/null; then
 fi
 echo "gpu: $(date -u +%FT%TZ) · load $(uptime | sed 's/.*average[s]*: //')"
 command -v nvidia-smi >/dev/null && nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv,noheader || true
+
+# gemma4-e2b's vision tower (#92), through geistr pull: the same extraction users get
+gpu_make geistr
+GEISTEN_HOME="$dir/.geistr-home" build/gpu/geistr --models "$dir" pull gemma4-e2b
 
 GEIST_TEST_PROCESSOR=gpu GEIST_TEST_MODEL_THINKING="$thinking" gpu_make test-real
 GEISTR_TEST_GPU_MODELS="$dir" gpu_make test-geistr ONLY=gpu

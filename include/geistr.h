@@ -128,6 +128,7 @@ typedef struct geistr_model_info {
     const char *chat_format; /* "gemma4", "chatml", "llama3", "bitnet", … */
     const char *backend;     /* the processor in use: "cpu", "metal", "vulkan" */
     uint32_t    context;     /* the context window in use, in tokens */
+    int         vision;      /* 1: geistr_chat_image works: a vision tower was found next to the model (#92) */
 } geistr_model_info;
 
 /* Fill *info. Its strings are borrowed until the model is released.
@@ -202,6 +203,14 @@ GEISTR_NODISCARD geistr_status geistr_chat_send(geistr_chat *chat, size_t count,
 /* Messages in the conversation: every sent message and every answer (an
  * answer counts once it has started). Turns dropped by DROP_OLDEST are gone. */
 size_t geistr_chat_length(const geistr_chat *chat);
+
+/* An image for the next geistr_chat_send (#92): PNG, JPEG or BMP bytes,
+ * decoded now, placed at the start of that send's last message. One per
+ * send; the send consumes it, whatever its outcome. GEISTR_FORMAT if the
+ * model has no vision (geistr_model_info.vision) or the bytes are no image.
+ * The image stays in the conversation until it is rebuilt from text
+ * (dropping old turns, a rewind before it): from then on it goes without. */
+GEISTR_NODISCARD geistr_status geistr_chat_image(geistr_chat *chat, const void *data, size_t len);
 
 /* Go back to the first keep messages; later ones and their cache are
  * dropped, an unfinished answer is ended. rewind(chat, 0) starts a new

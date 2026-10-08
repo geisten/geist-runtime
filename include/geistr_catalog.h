@@ -60,6 +60,12 @@ typedef struct geistr_catalog_entry {
     uint32_t    backends;       /* GEISTR_BACKEND_* bits */
     uint32_t    quality_passed; /* sums over all quality tasks; 0/0 without evidence */
     uint32_t    quality_total;
+    /* The vision tower (#92), optional: the tensors model.vision_tower.* and
+     * model.embed_vision.* of the checkpoint at vision_url (a pinned
+     * revision), extracted into vision_tower.safetensors next to the model; vision_sha256 and vision_bytes are of that file. */
+    const char *vision_url;
+    const char *vision_sha256;
+    uint64_t    vision_bytes;
 } geistr_catalog_entry;
 
 /* Parse len bytes of catalog JSON (at most 1 MiB, at most 1024 models).

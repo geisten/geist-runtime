@@ -75,6 +75,22 @@ static geistr_chat *chat(geistr_model *m, uint32_t max_tokens, geistr_overflow o
     return c;
 }
 
+/* Images (#92): a model without vision refuses them, clearly; bad arguments too. */
+static void no_vision(geistr_model *m) {
+    static const unsigned char png[] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
+    geistr_model_info          info  = {.size = sizeof info};
+    CHECK(geistr_model_info_get(m, &info) == GEISTR_OK && !info.vision, "SmolLM2 has no vision");
+    geistr_chat *c = chat(m, 4, GEISTR_OVERFLOW_REFUSE);
+    if (!c)
+        return;
+    CHECK(geistr_chat_image(c, png, sizeof png) == GEISTR_FORMAT && strstr(geistr_chat_error(c), "vision"),
+          "an image refused without vision");
+    CHECK(geistr_chat_image(c, nullptr, 4) == GEISTR_INVALID && geistr_chat_image(c, png, 0) == GEISTR_INVALID &&
+                  geistr_chat_image(nullptr, png, sizeof png) == GEISTR_INVALID,
+          "image arguments");
+    geistr_chat_close(c);
+}
+
 /* send + drain; the answer into out (truncated to cap), the status back. */
 static geistr_status ask(geistr_chat *c, size_t n, const geistr_message msgs[], char *out, size_t cap) {
     out[0]          = 0;
@@ -232,6 +248,7 @@ int main(void) {
         return 1;
     geistr_model_info info = {.size = sizeof info};
     CHECK(geistr_model_info_get(m, &info) == GEISTR_OK && !strcmp(info.chat_format, "chatml"), "SmolLM2 speaks ChatML");
+    no_vision(m);
     /* info's strings are borrowed until the model is released: keep copies. */
     char arch[64], backend[64];
     snprintf(arch, sizeof arch, "%s", info.arch);

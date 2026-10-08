@@ -191,8 +191,15 @@ time; a client that disconnects stops its answer.
 get `tool_calls` back (`finish_reason: tool_calls`; streamed too), send the
 results as `role: tool` messages, and the model answers with them, as in the
 OpenAI SDK's function-calling example. `tool_choice: "none"` turns tools off
-for a request. A model without a tool format refuses `tools` (400). Not
-supported yet: embeddings, images, more than one model.
+for a request. A model without a tool format refuses `tools` (400).
+
+**Images** work with Gemma 4 E2B (`gemma4-e2b`): `geistr pull gemma4-e2b`
+also fetches its vision tower (the vision tensors of the original model, a
+337 MB `vision_tower.safetensors` next to it, SHA-256 verified). Send an
+`image_url` part with a `data:` URL (OpenAI) or `images` (Ollama), PNG, JPEG
+or BMP, one per message; the image goes with the last message, and the
+conversation keeps it for the follow-up questions. Other models refuse images
+(400). Not supported yet: embeddings, more than one model.
 
 Without `--http`, `geistr serve` listens on a Unix socket only (owner only,
 0600), and `geistr chat --socket` chats through it. `--chats N` sets how many

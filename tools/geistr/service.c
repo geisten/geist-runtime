@@ -169,7 +169,7 @@ void svc_free_request(struct svc_request *r) {
         free((char *) r->messages[i].role), free((char *) r->messages[i].content);
     for (size_t i = 0; r->stop && i < r->n_stop; i++)
         free((char *) r->stop[i]);
-    free(r->messages), free((void *) r->stop);
+    free(r->messages), free((void *) r->stop), free(r->image);
     *r = (struct svc_request) {};
 }
 
@@ -236,6 +236,10 @@ void svc_chat(const struct svc_options *o, struct held *pool, const struct svc_r
     }
     held_keep(c, keep);
     geistr_status s = geistr_chat_limit(c->chat, r->max);
+    if (s == GEISTR_OK && r->image && geistr_chat_image(c->chat, r->image, r->image_len) != GEISTR_OK) {
+        out->error(out->ctx, GEISTR_INVALID, geistr_chat_error(c->chat)); /* no vision, not an image */
+        return;
+    }
     if (s == GEISTR_OK)
         s = geistr_chat_send(c->chat, n - keep, m + keep);
     if (s != GEISTR_OK) {

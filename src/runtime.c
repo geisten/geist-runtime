@@ -119,6 +119,7 @@ struct geistr_model {
     pthread_mutex_t engine;
     pthread_rwlock_t setup;
     bool            borrowed; /* geistr_model_wrap: the caller owns m and be */
+    bool            vision;   /* a vision tower is loaded (#92) */
     char            error[256];
 };
 
@@ -217,6 +218,7 @@ static geistr_status model_describe(geistr_model *m, struct geist_model *gm, str
                           ? forced
                           : tpl_family_detect(geist_model_metadata_str(gm, "tokenizer.chat_template", nullptr),
                                               geist_model_arch(gm));
+    m->vision    = m->family == TPL_GEMMA4 && (geist_model_modalities(gm) & GEIST_MOD_VISION);
     m->n_stops   = tpl_stop_ids(token_lookup, gm, geist_model_eos_token(gm), MAX_STOPS, m->stops);
     m->bos       = geist_model_bos_token(gm);
     m->add_bos   = geist_model_add_bos(gm);
@@ -462,6 +464,7 @@ geistr_status geistr_model_info_get(const geistr_model *m, geistr_model_info *in
                .chat_format = tpl_family_name(m->family),
                .backend     = !strncmp(backend, "cpu", 3) ? "cpu" : backend,
                .context     = m->context,
+               .vision      = m->vision,
     };
     size_t size = info->size;
     if (size < sizeof size || size > sizeof full)
@@ -510,8 +513,19 @@ struct geistr_chat {
     struct str_pieces pieces;
     geistr_stats      stats;
     double            started;
+    uint8_t          *image; /* geistr_chat_image: decoded RGB for the next send */
+    int               image_w, image_h;
     char              error[256];
 };
+
+/* stb_image, compiled into libgeist (geistlib's stb_impl.c). */
+extern unsigned char *stbi_load_from_memory(const unsigned char *buffer, int len, int *x, int *y, int *comp, int req);
+extern void           stbi_image_free(void *data);
+
+/* Gemma 4's image in a user turn: <|image>, its soft tokens, <image|>. */
+#define IMAGE_OPEN  "<|image>"
+#define IMAGE_CLOSE "<image|>\n"
+#define IMAGE_TOKENS 280 /* ponytail: Gemma 4's default budget, for the room check */
 
 static geistr_status fail(geistr_chat *c, geistr_status s, const char *fmt, ...) {
     va_list ap;
@@ -620,8 +634,25 @@ void geistr_chat_close(geistr_chat *c) {
     str_stops_free(&c->stop);
     free(c->raw);
     free(c->recent);
+    if (c->image)
+        stbi_image_free(c->image);
     free(c);
     model_release(m);
+}
+
+geistr_status geistr_chat_image(geistr_chat *c, const void *data, size_t len) {
+    if (!c || !data || !len || len > INT_MAX)
+        return GEISTR_INVALID;
+    if (!c->model->vision)
+        return fail(c, GEISTR_FORMAT, "this model has no vision (Gemma 4 with its vision tower: geistr pull)");
+    int      w = 0, h = 0, channels = 0;
+    uint8_t *rgb = stbi_load_from_memory(data, (int) len, &w, &h, &channels, 3);
+    if (!rgb)
+        return fail(c, GEISTR_FORMAT, "not an image (PNG, JPEG or BMP)");
+    if (c->image)
+        stbi_image_free(c->image);
+    c->image = rgb, c->image_w = w, c->image_h = h;
+    return GEISTR_OK;
 }
 
 size_t geistr_chat_length(const geistr_chat *c) {
@@ -861,9 +892,7 @@ static bool to_stops(void *c, const char *text) {
     return str_stops_feed(&((geistr_chat *) c)->stop, text, queue_answer, c);
 }
 
-geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_message messages[]) {
-    if (!c)
-        return GEISTR_INVALID;
+static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_message messages[]) {
     atomic_store(&c->cancel, false);
     if (!count || !messages)
         return fail(c, GEISTR_INVALID, "send needs at least one message");
@@ -872,6 +901,8 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
             return fail(c, GEISTR_INVALID, "a message has no content");
     if (is_role(messages[count - 1].role, "assistant"))
         return fail(c, GEISTR_INVALID, "the last message must not be from the assistant");
+    if (c->image && strchr(messages[count - 1].content, '\x1f'))
+        return fail(c, GEISTR_INVALID, "a message with an image cannot contain U+001F");
     /* A thinking model's earlier reasoning is not part of its history: the
      * templates of Qwen3, QwQ and DeepSeek-R1 drop it, and the models are
      * trained so; kept, Qwen3's next answer is empty or wrong (#96). So
@@ -888,7 +919,7 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
         if (s == GEISTR_OK) {
             again[0] = (geistr_message) {"assistant", plain};
             memcpy(again + 1, messages, count * sizeof *again);
-            s = geistr_chat_send(c, count + 1, again);
+            s = chat_send(c, count + 1, again);
         } else if (s == GEISTR_NO_MEMORY)
             s = fail(c, s, "out of memory");
         free(again);
@@ -905,7 +936,20 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
     struct tpl_state st = {.family = c->tpl.family, .started = c->tpl.started};
     if (c->tpl.folded && !(st.folded = strdup(c->tpl.folded)))
         return fail(c, GEISTR_NO_MEMORY, "out of memory");
-    char *text = tpl_render_send(&st, count, messages);
+    /* An image (#92) opens the last message: rendered with a U+001F where
+     * its soft tokens go, the text on either side tokenized apart. */
+    geistr_message *with_image = c->image ? calloc(count, sizeof *with_image) : nullptr;
+    char           *opened     = nullptr;
+    if (with_image) {
+        memcpy(with_image, messages, count * sizeof *with_image);
+        size_t n = strlen(IMAGE_OPEN "\x1f" IMAGE_CLOSE) + strlen(messages[count - 1].content) + 1;
+        if ((opened = malloc(n)))
+            snprintf(opened, n, IMAGE_OPEN "\x1f" IMAGE_CLOSE "%s", messages[count - 1].content);
+        with_image[count - 1].content = opened;
+    }
+    char *text = (!c->image || opened) ? tpl_render_send(&st, count, with_image ? with_image : messages) : nullptr;
+    free(with_image);
+    free(opened);
     if (!text) {
         tpl_free(&st);
         return fail(c, GEISTR_NO_MEMORY, "out of memory");
@@ -913,7 +957,10 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
     const char  *gen   = tpl_generation_prompt(c->model->family);
     const size_t t_len = strlen(text), g_len = strlen(gen);
     text[t_len - g_len] = 0; /* the turns; gen follows */
-    struct ids close = {}, turns = {}, prompt = {};
+    char *after_image   = c->image ? strrchr(text, '\x1f') : nullptr;
+    if (after_image)
+        *after_image++ = 0;
+    struct ids close = {}, turns = {}, image_after = {}, prompt = {};
     geistr_status s = GEISTR_OK;
     if (len0 == 0 && c->model->add_bos && c->model->bos >= 0 && !ids_push(&turns, 1, &c->model->bos))
         s = GEISTR_NO_MEMORY;
@@ -921,9 +968,11 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
         s = tokenize(c, tpl_answer_close(c->model->family, c->end_marker), &close);
     if (s == GEISTR_OK)
         s = tokenize(c, text, &turns);
+    if (s == GEISTR_OK && after_image)
+        s = tokenize(c, after_image, &image_after);
     if (s == GEISTR_OK)
         s = tokenize(c, gen, &prompt);
-    const size_t adding = close.n + turns.n + prompt.n;
+    const size_t adding = close.n + turns.n + image_after.n + prompt.n + (after_image ? IMAGE_TOKENS : 0);
     size_t       input  = adding;
     uint32_t     dropped = 0, dropped_new = 0; /* held turns, and new messages, that went */
     bool         rebuilt = false;
@@ -932,7 +981,8 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
     geistr_message       *kept   = nullptr;
 
     if (s == GEISTR_OK && len0 + adding + 1 > c->model->context) {
-        if (c->opts.overflow != GEISTR_OVERFLOW_DROP_OLDEST) {
+        /* ponytail: a rebuild replays text only, so an image must fit as is */
+        if (c->opts.overflow != GEISTR_OVERFLOW_DROP_OLDEST || after_image) {
             s = fail(c, GEISTR_CONTEXT, "the conversation does not fit the context window");
         } else {
             /* Drop the oldest turns (a leading system turn stays) until the
@@ -1013,6 +1063,16 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
         s = prefill(c, close.n, close.v);
         if (s == GEISTR_OK)
             s = prefill(c, turns.n, turns.v);
+        if (s == GEISTR_OK && after_image) {
+            engine_lock(c->model);
+            const enum geist_status is =
+                    geist_session_attach_image(c->s, (size_t) c->image_h, (size_t) c->image_w, c->image);
+            engine_unlock(c->model);
+            if (is != GEIST_OK)
+                s = fail(c, from_engine(is), "image: %s", geist_session_errmsg(c->s));
+        }
+        if (s == GEISTR_OK)
+            s = prefill(c, image_after.n, image_after.v);
         if (s == GEISTR_OK)
             s = prefill(c, prompt.n, prompt.v);
         if (s != GEISTR_OK) {
@@ -1031,9 +1091,11 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
             }
         }
     }
-    const size_t answer_at = len0 + adding; /* where the answer starts, if not rebuilt */
+    /* where the answer starts, if not rebuilt (an image's tokens are counted by the engine) */
+    const size_t answer_at = after_image && s == GEISTR_OK && !rebuilt ? session_length(c) : len0 + adding;
     free(close.v);
     free(turns.v);
+    free(image_after.v);
     free(prompt.v);
     free(text);
     if (s != GEISTR_OK) {
@@ -1079,6 +1141,15 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
            .first_answer_ms  = -1,
     };
     return GEISTR_OK;
+}
+
+geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_message messages[]) {
+    if (!c)
+        return GEISTR_INVALID;
+    geistr_status s = chat_send(c, count, messages);
+    if (c->image) /* one send, one image */
+        stbi_image_free(c->image), c->image = nullptr;
+    return s;
 }
 
 /* ---- next ------------------------------------------------------------------ */
