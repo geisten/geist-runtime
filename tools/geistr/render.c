@@ -1273,6 +1273,10 @@ static void finish_all(struct md *m, const char *unused) {
     m->table   = nullptr;
     m->n_table = m->cap_table = 0;
     flush_pending(m);
+    if (m->skip_line) { /* the answer's last line is a fence: its rule all the same */
+        m->skip_line = false;
+        fence_rule(m);
+    }
     if (m->math)
         math_cancel(m);
     m->bold = m->italic = m->code = m->block = m->heading = m->quote = false;
