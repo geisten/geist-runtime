@@ -144,7 +144,8 @@ bool str_output_feed(struct str_output *o,
             }
         } else {
             o->state = STR_ANSWER;
-            if (!answer(o->prefix, emit, ctx))
+            /* The line break after </think> is layout, not answer. */
+            if (!answer(o->prefix + (o->reasoning ? leading : 0), emit, ctx))
                 return false;
             o->used = 0;
             return answer(s, emit, ctx);

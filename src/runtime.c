@@ -872,6 +872,29 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
             return fail(c, GEISTR_INVALID, "a message has no content");
     if (is_role(messages[count - 1].role, "assistant"))
         return fail(c, GEISTR_INVALID, "the last message must not be from the assistant");
+    /* A thinking model's earlier reasoning is not part of its history: the
+     * templates of Qwen3, QwQ and DeepSeek-R1 drop it, and the models are
+     * trained so; kept, Qwen3's next answer is empty or wrong (#96). So
+     * before the next turn the last answer leaves the context and comes back
+     * without its reasoning: back to its start, then again with the new
+     * messages (a small prefill). Unfinished reasoning leaves nothing. */
+    if (c->opts.reasoning == GEISTR_REASONING_THINK_TAGS && (c->answering || c->open) && c->raw &&
+        (strstr(c->raw, "<think>") || strstr(c->raw, "</think>"))) {
+        const char     *end   = strstr(c->raw, "</think>");
+        const char     *after = end ? end + strlen("</think>") : "";
+        char           *plain = strdup(after + strspn(after, " \t\r\n"));
+        geistr_message *again = plain ? calloc(count + 1, sizeof *again) : nullptr;
+        geistr_status   s     = again ? geistr_chat_rewind(c, c->answer_turn) : GEISTR_NO_MEMORY;
+        if (s == GEISTR_OK) {
+            again[0] = (geistr_message) {"assistant", plain};
+            memcpy(again + 1, messages, count * sizeof *again);
+            s = geistr_chat_send(c, count + 1, again);
+        } else if (s == GEISTR_NO_MEMORY)
+            s = fail(c, s, "out of memory");
+        free(again);
+        free(plain);
+        return s;
+    }
     if (!answer_commit(c) || !turns_reserve(c, count + 1))
         return fail(c, GEISTR_NO_MEMORY, "out of memory");
 

@@ -223,7 +223,7 @@ static void reasoning_case(const char *generated, const char *answer, const char
 
 static void test_reasoning(void) {
     reasoning_case("<think>SECRET</think>**Answer** → 🌿", "**Answer** → 🌿", "SECRET");
-    reasoning_case(" \n<think></think>\n<think>SECRET</think> Grüß 🌿", " Grüß 🌿", "SECRET");
+    reasoning_case(" \n<think></think>\n<think>SECRET</think> Grüß 🌿", "Grüß 🌿", "SECRET");
     for (const char *const *t = (const char *[]) {"<think>SECRET", "<thi", "<think></think>", "<think>SECRET</think>", nullptr}; *t; t++)
         reasoning_case(*t, "", strstr(*t, "SECRET") ? "SECRET" : ""); /* no answer: nothing shown */
     reasoning_case("Plain `code` with <think>literal</think>.", "Plain `code` with <think>literal</think>.", "");

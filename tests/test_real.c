@@ -144,6 +144,35 @@ static void recurrent(const char *path) {
     geistr_model_close(m);
 }
 
+/* A thinking model (Qwen3): earlier reasoning leaves the history, as its
+ * template has it; kept, the next answer was empty (#96). The continued
+ * chat answers like one built from the plain messages. */
+static void thinking(const char *path) {
+    geistr_model *m = nullptr;
+    char          error[256], a[512], b[512], r[512];
+    CHECK(geistr_model_open(path, nullptr, &m, error, sizeof error) == GEISTR_OK, error);
+    if (!m)
+        return;
+    geistr_chat_opts o = GEISTR_CHAT_OPTS_INIT;
+    o.max_tokens       = 400;
+    o.reasoning        = GEISTR_REASONING_THINK_TAGS;
+    geistr_chat   *c = nullptr, *fresh = nullptr;
+    geistr_message q1 = {"user", "What is the capital of France? One word."};
+    geistr_message q2 = {"user", "And of Germany? One word."};
+    CHECK(geistr_chat_open(m, &o, &c) == GEISTR_OK && geistr_chat_open(m, &o, &fresh) == GEISTR_OK, "thinking: open");
+    CHECK(ask(c, 1, &q1, a, sizeof a) == GEISTR_OK && ask(c, 1, &q2, b, sizeof b) == GEISTR_OK, "thinking: two turns");
+    CHECK(strstr(b, "Berlin"), "thinking: the second answer after reasoning");
+    geistr_message all[] = {q1, {"assistant", a}, q2};
+    const uint32_t held = stats(c).context_tokens - stats(c).output_tokens;
+    CHECK(ask(fresh, 3, all, r, sizeof r) == GEISTR_OK && strstr(r, "Berlin"), "thinking: rebuilt answers");
+    const uint32_t built = stats(fresh).context_tokens - stats(fresh).output_tokens;
+    CHECK(held == built, "thinking: the continued context is the rebuilt one");
+    printf("  thinking model: \"%s\", then \"%s\" (rebuilt: \"%s\"), context %u and %u tokens\n", a, b, r, held, built);
+    geistr_chat_close(fresh);
+    geistr_chat_close(c);
+    geistr_model_close(m);
+}
+
 struct cancel_after {
     geistr_chat *c;
     unsigned     ms;
@@ -393,6 +422,9 @@ int main(void) {
     const char *rec = getenv("GEIST_TEST_MODEL_RECURRENT");
     if (rec && access(rec, R_OK) == 0)
         recurrent(rec);
+    const char *thinker = getenv("GEIST_TEST_MODEL_THINKING");
+    if (thinker && access(thinker, R_OK) == 0)
+        thinking(thinker);
     const char *large = getenv("GEIST_TEST_MODEL_LARGE");
     if (large && access(large, R_OK) == 0)
         window(large, "large model");
