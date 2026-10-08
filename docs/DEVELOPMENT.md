@@ -109,6 +109,12 @@ The optional fixed-option decision contract (#13) is documented in
 configuration support alone establishes neither backend decision support nor
 quality-matched speedups.
 
+## End-to-end test
+
+[E2E-TESTPLAN.md](E2E-TESTPLAN.md) is the manual or agent-driven test of the
+apps on real terminals, models and hardware: install, catalog, run, chat,
+service APIs, Python, decisions. Run it before a release.
+
 ## CI
 
 Every PR and push to `main` runs `.github/workflows/ci.yml`; the job
