@@ -183,7 +183,7 @@ int config(int n, const char **args) {
         for (size_t i = 0; i < N_SETTINGS; i++) {
             char value[2048];
             value_of(&settings[i], value, sizeof value);
-            printf("%-12s %s\n", settings[i].key, value);
+            printf("%-13s %s\n", settings[i].key, value);
         }
         return OK;
     }

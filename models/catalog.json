@@ -479,7 +479,7 @@
     },
     {
       "id": "qwen38-27b-q4",
-      "name": "Qwen3.8 27B Q4_0",
+      "name": "Qwen3.8 27B",
       "file": "Qwen3.8-27B-Q4_0.gguf",
       "url": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/4ca720788d1e01f1bff70c033e0d0028fd02e502/Qwen3.8-27B-Q4_0.gguf",
       "sha256": "ede16c7b36e578ca87a8c70e011e4b4633a32c831c0ce76d0f474582384e671d",
@@ -497,7 +497,7 @@
     },
     {
       "id": "qwen38-27b-q8",
-      "name": "Qwen3.8 27B Q8_0",
+      "name": "Qwen3.8 27B",
       "file": "Qwen3.8-27B-Q8_0.gguf",
       "url": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/4ca720788d1e01f1bff70c033e0d0028fd02e502/Qwen3.8-27B-Q8_0.gguf",
       "sha256": "a680f44a06920e5d689774823782006aa3acc8db95750323373b24139b67e348",

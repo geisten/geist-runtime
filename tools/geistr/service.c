@@ -252,6 +252,8 @@ void svc_chat(const struct svc_options *o, struct held *pool, const struct svc_r
     bool         gone     = out->alive && !out->alive(out->ctx); /* accepted: a stream's headers go now */
     time_t       beat     = time(nullptr);
     while (!gone && (s = geistr_chat_next(c->chat, &p)) == GEISTR_OK && p.part != GEISTR_PART_END) {
+        if (*o->stop) /* SIGTERM: the answer ends now, as stopped, and the service after it */
+            geistr_chat_cancel(c->chat);
         if (p.part == GEISTR_PART_THINKING) { /* hidden reasoning: a sign of life about once a second */
             if (out->alive && time(nullptr) != beat)
                 beat = time(nullptr), gone = !out->alive(out->ctx);

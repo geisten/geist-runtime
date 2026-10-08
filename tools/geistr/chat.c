@@ -532,6 +532,11 @@ static void status_line(const struct session *x, const char *what) {
            normal(faint));
 }
 
+/* geistr run's pieces: after ^C, what was already on its way stays unshown. */
+static int run_piece(void *context, const geistr_piece *piece) {
+    return interrupted ? 1 : print_piece(context, piece);
+}
+
 /* One answer to `prompt` (geistr run). */
 int answer_once(const char *name, const char *prompt, const char *processor) {
     struct session x;
@@ -548,7 +553,7 @@ int answer_once(const char *name, const char *prompt, const char *processor) {
     turn[n++]        = (geistr_message) {"user", prompt};
     struct shown out = {};
     view_begin(&out);
-    geistr_status s = geistr_chat_run(x.chat, n, turn, print_piece, &out);
+    geistr_status s = geistr_chat_run(x.chat, n, turn, run_piece, &out);
     md_finish(&out.view);
     putchar('\n');
     speed(x.chat, x.name, x.backend, s == GEISTR_OK, "answer", stderr);

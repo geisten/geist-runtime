@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 
 static int compare_doubles(const void *a, const void *b) {
@@ -32,9 +33,16 @@ void speeds_load(const geistr_catalog *c, geistr_local *local) {
         double   rate[LAST], first[LAST];
         unsigned count;
     } (*seen)[2] = calloc(n, sizeof *seen);
+    struct stat *files = calloc(n ? n : 1, sizeof *files); /* each model's file (st_ino 0: none) */
+    for (size_t i = 0; files && models_dir && i < n; i++) {
+        char at[4400];
+        snprintf(at, sizeof at, "%s/%s", models_dir, geistr_catalog_get(c, i)->file);
+        if (stat(at, &files[i]) != 0)
+            files[i].st_ino = 0;
+    }
     char path[4200];
     snprintf(path, sizeof path, "%s/speed.tsv", data_dir);
-    FILE  *f    = seen && data_dir[0] ? fopen(path, "r") : nullptr;
+    FILE  *f    = seen && files && data_dir[0] ? fopen(path, "r") : nullptr;
     char  *line = nullptr;
     size_t cap  = 0;
     while (f && getline(&line, &cap, f) > 0) { /* ponytail: reads it all; an index if it ever gets slow,
@@ -44,10 +52,14 @@ void speeds_load(const geistr_catalog *c, geistr_local *local) {
         /* the seventh column, the source, does not matter here: every answer counts */
         if (!model || !proc || !rate || !first || !when || !engine || strcmp(engine, GEISTR_ENGINE))
             continue; /* another engine's speed */
-        const char *base = strrchr(model, '/') ? strrchr(model, '/') + 1 : model;
+        /* By id; one run from a .gguf path only when it is that model's file
+         * in the models folder (the same name elsewhere is another file). */
+        struct stat file;
+        bool        by_file = strchr(model, '/') && stat(model, &file) == 0;
         for (size_t i = 0; i < n; i++) {
             const geistr_catalog_entry *m = geistr_catalog_get(c, i);
-            if (strcmp(m->id, model) && strcmp(m->file, base))
+            if (by_file ? !files[i].st_ino || file.st_ino != files[i].st_ino || file.st_dev != files[i].st_dev
+                        : strcmp(m->id, model) != 0)
                 continue;
             unsigned k = !strcmp(proc, "gpu"), slot = seen[i][k].count++ % LAST;
             seen[i][k].rate[slot]  = strtod(rate, nullptr);
@@ -65,6 +77,7 @@ void speeds_load(const geistr_catalog *c, geistr_local *local) {
             s->first        = median(seen[i][k].first, m);
         }
     free(seen);
+    free(files);
 }
 
 /* The catalog's reference tokens/s for cpu or gpu (another computer), or 0. */

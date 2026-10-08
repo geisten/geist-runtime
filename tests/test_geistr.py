@@ -188,7 +188,7 @@ def section_run():
     assert geistr_run('config', 'system').stdout.strip() == 'Answer in one word.'
     assert geistr_run('config', 'stats', 'off').returncode == 0
     settings = geistr_run('config').stdout
-    assert conf in settings and 'stats        off' in settings and 'processor    auto' in settings, settings
+    assert conf in settings and 'stats         off' in settings and 'processor     auto' in settings, settings
     r = geistr_run('chat', 'ref', input='What is the capital of Italy?\n/clear\n/help\n/exit\n')
     assert r.returncode == 0 and 'Rome' in r.stdout and 'tok/s' not in r.stdout and '/clear' in r.stdout, r.stdout
     assert geistr_run('config', 'stats', 'on').returncode == 0 and geistr_run('config', 'system', '').returncode == 0
@@ -203,7 +203,7 @@ def section_run():
     assert f'· {model_path} · the conversation moves along' in r.stdout and 'system prompt set' in r.stdout, r.stdout
     assert 'saved for the next chat' in r.stdout, r.stdout
     saved = geistr_run('config').stdout
-    assert 'temperature  0.3' in saved and 'processor    cpu' in saved and 'Answer briefly.' in saved, saved
+    assert 'temperature   0.3' in saved and 'processor     cpu' in saved and 'Answer briefly.' in saved, saved
     assert geistr_run('config', 'processor', 'auto').returncode == 0 and geistr_run('config', 'system', '').returncode == 0
     assert geistr_run('config', 'temperature', '0').returncode == 0 and geistr_run('config', 'model', 'ref').returncode == 0
     # Tab completion in a real terminal (pty): commands, model ids, the list, history
@@ -424,11 +424,32 @@ def section_serve():
                        capture_output=True, text=True, env=env, timeout=120)
     assert r.returncode == 0 and 'the service has its model' in r.stdout and 'temperature 0.5' in r.stdout, r
     assert '· service' in r.stdout and 'chatml' in r.stdout, r.stdout
+    # SIGTERM mid-answer: the answer ends as cancelled and the service at once (#100)
+    s = unix.socket(unix.AF_UNIX); s.connect(sock)
+    s.sendall((json.dumps({'op': 'chat', 'messages': [{'role': 'user', 'content': 'Write a long story.'}],
+                           'max': 4000}) + '\n').encode())
+    lines = s.makefile(encoding='utf-8')
+    json.loads(lines.readline())
+    t0 = time.time()
     service.send_signal(signal.SIGTERM)
-    assert service.wait(30) == 0 and not os.path.exists(sock)
+    last = [json.loads(l) for l in lines][-1]
+    s.close()
+    assert service.wait(30) == 0 and time.time() - t0 < 5 and not os.path.exists(sock), time.time() - t0
+    assert last.get('finish') == 'cancelled', last
     r = geistr_run('chat', '--socket=' + sock)
     assert r.returncode == 1 and 'no service' in r.stderr, r.stderr
-    print('geistr serve / chat --socket: protocol, 0600 socket, cache hit, rewind, two clients, disconnect, context, SIGTERM passed')
+    # a data folder too long for a socket path: the socket goes to the private runtime folder
+    run = tempfile.mkdtemp(prefix='gr-run-')
+    long_home = os.path.join(tmp, 'h' * 120)
+    service = subprocess.Popen([geistr, 'serve', 'ref', '--cpu', *base], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                               text=True, env={**env, 'GEISTEN_HOME': long_home, 'XDG_RUNTIME_DIR': run, 'TMPDIR': run})
+    deadline = time.time() + 120
+    while not os.path.exists(os.path.join(run, 'geistr.sock')):
+        assert service.poll() is None and time.time() < deadline, service.stderr.read()
+        time.sleep(0.1)
+    service.send_signal(signal.SIGTERM)
+    assert service.wait(30) == 0
+    print('geistr serve / chat --socket: protocol, 0600 socket, cache hit, rewind, two clients, disconnect, context, SIGTERM mid-answer, long data folder passed')
 
 # ---- serve --http: the OpenAI and Ollama APIs --------------------------------
 def section_http():
@@ -547,6 +568,10 @@ def section_bench():
     with open(speeds, 'a') as f:  # a model recorded by path counts for its catalog entry
         f.write(f'{model_path}\tcpu\t1000.0\t0.1\t0\t{engine}\n' * 11)
         f.write(f'ref\tcpu\t5.0\t0.1\t0\tanother-engine\n' * 11)  # not this engine's: ignored
+        elsewhere = os.path.join(tmp, 'elsewhere', os.path.basename(model_path))  # the same name, another file
+        os.makedirs(os.path.dirname(elsewhere), exist_ok=True)
+        open(elsewhere, 'wb').close()
+        f.write(f'{elsewhere}\tcpu\t1.0\t0.1\t0\t{engine}\n' * 11)
     measured = listing()['ref']['tokens_per_s']
     assert measured['cpu'] == 1000.0, measured  # the median of the last ten with this engine
     assert listing()['tiny']['tokens_per_s'] == {'cpu': None, 'gpu': None}

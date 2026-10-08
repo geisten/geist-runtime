@@ -149,8 +149,12 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
             return failure(2, "duplicate/conflicting flag");
         seen |= bit;
     }
-    if ((!question && !question_file) || !config_file || !count)
-        return failure(2, "question, --config and supplied --option values required");
+    if (!question && !question_file)
+        return failure(2, "--question TEXT (or --question-file) required");
+    if (!config_file)
+        return failure(2, "--config FILE required");
+    if (!count)
+        return failure(2, "at least one --option ID DESC required");
     char *owned_question = nullptr;
     size_t question_len = question ? strnlen(question, GEISTR_DECISION_MAX_QUESTION + 1) : 0;
     if (question_file && read_bounded(&question_len, GEISTR_DECISION_MAX_QUESTION, question_file,
