@@ -560,9 +560,79 @@ def section_http():
     t0 = time.time()
     assert call('POST', '/api/chat', {'messages': [{'role': 'user', 'content': 'Hi'}], 'stream': False,
                 'options': {'num_predict': 2}})[0] == 200 and time.time() - t0 < 60
+    # tools (#92): a model without a tool format refuses them, clearly (400), in both APIs
+    weather = [{'type': 'function', 'function': {'name': 'get_weather', 'parameters': {'type': 'object',
+                'properties': {'city': {'type': 'string'}}}}}]
+    status, _, body = call('POST', '/v1/chat/completions', {'messages': [{'role': 'user', 'content': 'Hi'}], 'tools': weather})
+    assert status == 400 and 'tool-calling' in body, (status, body)
+    status, _, body = call('POST', '/api/chat', {'messages': [{'role': 'user', 'content': 'Hi'}], 'tools': weather})
+    assert status == 400 and 'tool-calling' in body, (status, body)
+    status, _, body = call('POST', '/v1/chat/completions', {'messages': [{'role': 'user', 'content': 'Hi'}], 'tools': weather,
+                           'tool_choice': 'none', 'max_tokens': 4})
+    assert status == 200, (status, body)  # tool_choice none: no tools, any model
     service.send_signal(signal.SIGTERM)
     assert service.wait(30) == 0
-    print('geistr serve --http: OpenAI (one answer, stream, usage, stop, length) and Ollama APIs, shared cache, Host check, 403/404/405/411/413, context, disconnect passed')
+    print('geistr serve --http: OpenAI (one answer, stream, usage, stop, length) and Ollama APIs, shared cache, Host check, 403/404/405/411/413, context, disconnect, tools refused passed')
+
+# ---- tools (#92): only with GEISTR_TEST_TOOLS_MODEL, a Qwen3 GGUF -------------
+def section_tools():
+    import http.client, socket as unix
+    qwen = os.environ['GEISTR_TEST_TOOLS_MODEL']
+    probe = unix.socket(); probe.bind(('127.0.0.1', 0)); port = probe.getsockname()[1]; probe.close()
+    sock = f'/tmp/geistr-tools-{os.getpid()}.sock'
+    # the built-in catalog (not the test's): it knows the file, and that Qwen3 reasons in <think> tags
+    service = subprocess.Popen([geistr, 'serve', qwen, f'--socket={sock}', f'--http=127.0.0.1:{port}', '--cpu', '--models', models],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, env=env)
+    def call(path, body):
+        c = http.client.HTTPConnection('127.0.0.1', port, timeout=300)
+        c.request('POST', path, body=json.dumps(body))
+        r = c.getresponse(); data = r.read().decode(); c.close()
+        assert r.status == 200, (r.status, data)
+        return data
+    deadline = time.time() + 120
+    while True:
+        try:
+            c = http.client.HTTPConnection('127.0.0.1', port, timeout=5); c.request('GET', '/'); c.getresponse(); c.close(); break
+        except OSError:
+            assert time.time() < deadline and service.poll() is None, service.stderr.read()
+            time.sleep(.5)
+    weather = [{'type': 'function', 'function': {'name': 'get_weather', 'description': 'Get the current weather in a city',
+                'parameters': {'type': 'object', 'properties': {'city': {'type': 'string'}}, 'required': ['city']}}}]
+    ask = [{'role': 'user', 'content': 'What is the weather in Paris? Use the tool.'}]
+    # OpenAI: the call, not streamed
+    done = json.loads(call('/v1/chat/completions', {'messages': ask, 'tools': weather, 'temperature': 0}))
+    choice = done['choices'][0]
+    assert choice['finish_reason'] == 'tool_calls', done
+    tool_call = choice['message']['tool_calls'][0]
+    assert tool_call['type'] == 'function' and tool_call['function']['name'] == 'get_weather', done
+    assert json.loads(tool_call['function']['arguments'])['city'] == 'Paris', done
+    # the result back (the assistant message as the SDK sends it: no content), then an answer that uses it
+    history = ask + [{'role': 'assistant', 'tool_calls': [tool_call]},
+                     {'role': 'tool', 'tool_call_id': tool_call['id'], 'content': json.dumps({'temperature_c': 21, 'sky': 'sunny'})}]
+    done = json.loads(call('/v1/chat/completions', {'messages': history, 'tools': weather, 'temperature': 0}))
+    assert done['choices'][0]['finish_reason'] == 'stop' and '21' in done['choices'][0]['message']['content'], done
+    # OpenAI: the call streamed, as SDKs accumulate it
+    body = call('/v1/chat/completions', {'messages': ask, 'tools': weather, 'temperature': 0, 'stream': True})
+    chunks = [json.loads(l[6:]) for l in body.split('\n') if l.startswith('data: {')]
+    deltas = [d for c in chunks for d in c['choices'][0]['delta'].get('tool_calls', [])]
+    assert deltas and deltas[0]['function']['name'] == 'get_weather' and 'Paris' in deltas[0]['function']['arguments'], body
+    assert chunks[-1]['choices'][0]['finish_reason'] == 'tool_calls', chunks[-1]
+    content = ''.join(c['choices'][0]['delta'].get('content', '') for c in chunks)
+    assert '<tool_call>' not in content and 'get_weather' not in content, content  # no call text as content
+    # Ollama: the call (arguments an object), and the result back
+    done = json.loads(call('/api/chat', {'messages': ask, 'tools': weather, 'stream': False, 'options': {'temperature': 0}}))
+    calls = done['message']['tool_calls']
+    assert calls[0]['function']['name'] == 'get_weather' and calls[0]['function']['arguments']['city'] == 'Paris', done
+    history = ask + [{'role': 'assistant', 'content': '', 'tool_calls': calls},
+                     {'role': 'tool', 'content': json.dumps({'temperature_c': 4, 'sky': 'snow'})}]
+    done = json.loads(call('/api/chat', {'messages': history, 'tools': weather, 'stream': False, 'options': {'temperature': 0}}))
+    assert '4' in done['message']['content'] and not done['message'].get('tool_calls'), done
+    # without tools: a plain answer, no call format
+    done = json.loads(call('/v1/chat/completions', {'messages': [{'role': 'user', 'content': 'Say hi.'}], 'temperature': 0}))
+    assert done['choices'][0]['finish_reason'] == 'stop' and 'tool_calls' not in done['choices'][0]['message'], done
+    service.send_signal(signal.SIGTERM)
+    assert service.wait(60) == 0
+    print('geistr serve --http tools (Qwen3): OpenAI call (plain, streamed), the result back, Ollama call and result, no tools passed')
 
 # ---- bench and the speed chart --------------------------------------------------
 def section_bench():
@@ -778,9 +848,12 @@ SECTIONS = {name[len('section_'):]: f for name, f in list(globals().items()) if 
 only = [s for s in os.environ.get('GEISTR_TEST_ONLY', '').split(',') if s]
 assert all(s in SECTIONS for s in only), f'GEISTR_TEST_ONLY: unknown section in {only}; known: {", ".join(SECTIONS)}'
 assert 'gpu' not in only or os.environ.get('GEISTR_TEST_GPU_MODELS'), 'gpu: set GEISTR_TEST_GPU_MODELS'
+assert 'tools' not in only or os.environ.get('GEISTR_TEST_TOOLS_MODEL'), 'tools: set GEISTR_TEST_TOOLS_MODEL'
 for name, section in SECTIONS.items():
     if name == 'gpu' and not os.environ.get('GEISTR_TEST_GPU_MODELS'):
         continue  # no GPU models here (#112)
+    if name == 'tools' and not os.environ.get('GEISTR_TEST_TOOLS_MODEL'):
+        continue  # no tool-capable model here (#92)
     if not only or name in only:
         env['GEISTEN_HOME'] = os.path.join(tmp, 'home-' + name)
         if name != 'catalog':  # it starts from an empty model folder

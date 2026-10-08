@@ -111,6 +111,8 @@ jobs:
         run: make BUILD=build/san CFLAGS="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all" LDFLAGS="-fsanitize=address,undefined" test-real 2>&1 | tee build/logs/test-real-asan.log
       # #11: the CLI against the reference model, with and without the download module.
       - name: geistr CLI
+        env:
+          GEISTR_TEST_TOOLS_MODEL: geistlib/gguf_artifacts/Qwen3-0.6B-Q8_0.gguf  # #92: tool calls
         run: make test-geistr PULL=1 2>&1 | tee build/logs/test-geistr.log
       # #9: the Python package. pip install the wheel into a fresh venv; the
       # 10-line example and the tests. Linux: auditwheel makes it manylinux
