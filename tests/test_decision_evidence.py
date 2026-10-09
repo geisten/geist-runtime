@@ -65,7 +65,12 @@ for proc in ('cpu', 'gpu'):
     current = [json.loads(line) for line in (validation / 'apple-17/contract-94-12f77e8' / f'records-gemma4-{proc}.jsonl').read_text().splitlines()
                if line.startswith('{')]
     assert module.against_oracle(plan, plan17, fixture, oracle, current)['94']['verdict'] == 'PASS', proc
-for section in (manifest, manifest['x86_cpu'], manifest['apple_17']):
+# #94 on the current pin d53560d: x86 (the self-hosted runner) and Apple, #94 contract, latest oracle
+for name in ('x86-d53560d/records-gemma4-cpu-x86.jsonl', 'apple-17/contract-94-d53560d/records-gemma4-cpu.jsonl',
+             'apple-17/contract-94-d53560d/records-gemma4-gpu.jsonl'):
+    rows94 = [json.loads(line) for line in (validation / name).read_text().splitlines() if line.startswith('{')]
+    assert module.against_oracle(plan, plan17, fixture, oracle, rows94)['94']['verdict'] == 'PASS', name
+for section in (manifest, manifest['x86_cpu'], manifest['apple_17'], manifest['x86_cpu_d53560d']):
     for name, record in section['records'].items():
         assert hashlib.sha256((validation / name).read_bytes()).hexdigest() == record['sha256'], name
 print('evidence verifier: independent Gemma drift FAIL preserved (Apple NEON, Metal and x86 records, both contracts); finite complete output required; manifest hashes match')

@@ -530,6 +530,18 @@
    },
    "apple-17/followup-d53560d/lifecycle-gemma4-gpu.json": {
     "sha256": "659fd34f1d0b843710a053e57539365b251d20e722a757f53a7ada3b4a9bc928"
+   },
+   "apple-17/contract-94-d53560d/numeric-gemma4-cpu.json": {
+    "sha256": "014b056e25484471b26b6bf3c1d6a06e0ea653dc0372eb06ee9a580e3d4e7d8e"
+   },
+   "apple-17/contract-94-d53560d/numeric-gemma4-gpu.json": {
+    "sha256": "a679d8db1bcf66b11cfb99040fea58b853dd1968ea6bd6ce5c46a33351d4bab3"
+   },
+   "apple-17/contract-94-d53560d/records-gemma4-cpu.jsonl": {
+    "sha256": "24c8a4aa25aa3c97798148541aa376a06acc7b280fe4874e91770b65722a8d13"
+   },
+   "apple-17/contract-94-d53560d/records-gemma4-gpu.jsonl": {
+    "sha256": "d220c07ba6cb0752d49a8e696de8ff1d53cb93722044066bd6eae79fa0362a12"
    }
   },
   "followup_12f77e8": {
@@ -689,6 +701,51 @@
     }
    },
    "diagnosis": "bonsai2-cpu fails only the growth check (+70 MB over 3 cycles, limit 64 MiB); growth slows to +1-10 MB per cycle and macOS leaks finds 0 leaks in the engine and the runtime path: allocator warm-up"
+  },
+  "independent_gemma_numeric_d53560d": {
+   "engine_revision": "d53560d743ccbee1652aafc338405071d79f9f18",
+   "contract": "94",
+   "verdict": "PASS",
+   "note": "records byte-identical to 12f77e8"
+  }
+ },
+ "x86_cpu_d53560d": {
+  "engine_revision": "d53560d743ccbee1652aafc338405071d79f9f18",
+  "hardware": "AMD Ryzen 9 9950X, 32 threads, 60 GiB, Linux 7.0 x86-64 (cpu_x86), the self-hosted runner",
+  "run": "decision-evidence workflow, run 37945054905 (scripts/decision-evidence-x86.sh)",
+  "threads": 6,
+  "context": 512,
+  "processor": "explicit cpu",
+  "oracle": "llama.cpp v0.6.0 (tests/fixtures/decisions/gemma4_oracle_llamacpp.json)",
+  "contract": "94",
+  "independent_gemma_numeric_verdict": "PASS",
+  "original_contract_verdict": "FAIL",
+  "max_absolute_error": {
+   "plain": 1.68,
+   "unicode": 3.24,
+   "order": 1.17
+  },
+  "selection": {
+   "plain": "PASS",
+   "unicode": "NOT_GATED",
+   "order": "PASS"
+  },
+  "records": {
+   "x86-d53560d/cli-gemma4-cpu-x86.jsonl": {
+    "sha256": "5144fe7a88a80885fe7ab68d28b9fa236eb865758f704ce14fca8ab0c854e152"
+   },
+   "x86-d53560d/host.txt": {
+    "sha256": "1aa083eeb319c2aee5ded9fa14336743665aa1f143f6f98a1166ae87518d8643"
+   },
+   "x86-d53560d/numeric-gemma4-cpu-x86.json": {
+    "sha256": "507d512483d71fe79e472e9775a512f7026874ea84832d6e8d65f148d4128279"
+   },
+   "x86-d53560d/python-gemma4-cpu-x86.jsonl": {
+    "sha256": "82d8aa2f5e50671b7fe8391b07a66cedc7b2b4cfa73c897f2713b96bb85b184c"
+   },
+   "x86-d53560d/records-gemma4-cpu-x86.jsonl": {
+    "sha256": "fd5b1bc168d25807180b7e1a84e868d2c800f141a6110c2b1c699dd92df0489d"
+   }
   }
  }
 }

@@ -1,0 +1,62 @@
+{
+  "oracle": {
+    "project": "ggml-org/llama.cpp",
+    "tag": "v0.6.0",
+    "commit": "d81235049384534c167caea52b85a694f6103d14",
+    "binary_sha256": "941d7d6010f2c0b69bab72e6798ce4e236a2305329cd1a5bb24c4c799194b838",
+    "source_sha256": "ad47fc5e3bf95a38c4ab135fdcb02785ca3c4834465db3097fedeb67ac1c3e42",
+    "host": "Darwin arm64"
+  },
+  "original": {
+    "scope": "three independent numerical development fixtures; not MMLU quality",
+    "verdict": "FAIL",
+    "cases": [
+      {
+        "fixture": "plain",
+        "max_absolute_error": 1.6777849000000007,
+        "logits": "FAIL",
+        "selection": "PASS"
+      },
+      {
+        "fixture": "unicode",
+        "max_absolute_error": 3.24016286,
+        "logits": "FAIL",
+        "selection": "PASS"
+      },
+      {
+        "fixture": "order",
+        "max_absolute_error": 1.167603253,
+        "logits": "FAIL",
+        "selection": "PASS"
+      }
+    ]
+  },
+  "94": {
+    "scope": "three independent numerical development fixtures under the #94 contract; not MMLU quality",
+    "contract": "94",
+    "verdict": "PASS",
+    "cases": [
+      {
+        "fixture": "plain",
+        "reference_gap": 12.734277136,
+        "max_absolute_error": 1.6777849000000007,
+        "envelope": "PASS",
+        "selection": "PASS"
+      },
+      {
+        "fixture": "unicode",
+        "reference_gap": 0.6459322099999998,
+        "max_absolute_error": 3.24016286,
+        "envelope": "PASS",
+        "selection": "NOT_GATED"
+      },
+      {
+        "fixture": "order",
+        "reference_gap": 9.521364729999998,
+        "max_absolute_error": 1.167603253,
+        "envelope": "PASS",
+        "selection": "PASS"
+      }
+    ]
+  }
+}

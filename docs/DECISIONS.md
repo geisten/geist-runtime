@@ -112,7 +112,10 @@ produced on engine `5dd7e1747df86092a320e638c66993afd409e3b6` and are kept as
 recorded; the x86 CPU records (`*-x86.jsonl`, `manifest.json` → `x86_cpu`) on
 engine `0707c3b1c9e547c909d200331a0750b4ff8e8cbe` (#94). Evidence is
 not re-established for later pins until it is recorded again. The Apple records of #17
-(`validation/apple-17`, `manifest.json` → `apple_17`) are on engine `4afbfcd`.
+(`validation/apple-17`, `manifest.json` → `apple_17`) are on engine `4afbfcd`, with Gemma's
+numeric records again on `12f77e8` and `d53560d`; x86 on `d53560d` (`validation/x86-d53560d`,
+`manifest.json` → `x86_cpu_d53560d`, the self-hosted runner, the `decision-evidence` workflow).
+On `d53560d` Gemma passes the #94 contract against llama.cpp v0.6.0 on cpu_x86, cpu_neon and Metal.
 Required EXPERIMENTAL engine symbols are availability/support/mode probes,
 create/score/destroy, error access, tokenization and resource observation
 (`geistr_decision_reset` clears only the wrapper's state: every score starts

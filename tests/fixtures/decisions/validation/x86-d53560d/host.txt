@@ -1,0 +1,11 @@
+date 2026-10-09T14:37:55Z
+engine d53560d743ccbee1652aafc338405071d79f9f18
+source ceceb8e6f993af4b5ea88364e16ce4ffe7edb85a
+uname Linux 7.0.0-34-generic x86_64
+CPU(s):                                  32
+Thread(s) pro Kern:                      2
+Speicher:         59          21          13          12          36          38
+load 4,04, 23,52, 24,81
+0fc59f1354698345c3e6e8650017d925393753b61a70eb9f6a28851ee149b963  build/dec-x86/test_decision_real
+1b6541d1dc1be2339451903499126c8c697f445e6fdfaf1ca585440d41aa52ec  build/dec-x86/geistr
+740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8  /home/germar/geist-ci-models/gemma-4-E2B-it-Q4_K_M.gguf
