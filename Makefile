@@ -113,7 +113,7 @@ test: all $(BUILD)/test_decide_driver
 ENGINE_GOALS := runtime test-real test-embed fetch-embed-model chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python $(BUILD)/test_decision_real $(BUILD)/bench_decision
 ifneq (,$(filter $(ENGINE_GOALS),$(MAKECMDGOALS)))
 GEIST_REPO ?= https://github.com/geisten/geistlib.git
-GEIST_REF  ?= 12f77e80503ce3278fcab714bf7a5b6e55d923c1
+GEIST_REF  ?= d53560d743ccbee1652aafc338405071d79f9f18
 GEISTLIB   ?= geistlib
 DECISION   ?= 0
 ENGINE := $(shell GEIST_REPO='$(GEIST_REPO)' GEIST_REF='$(GEIST_REF)' \
