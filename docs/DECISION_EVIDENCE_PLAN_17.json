@@ -1,0 +1,124 @@
+{
+  "schema": 1,
+  "issue": "geisten/geist-runtime#17",
+  "frozen": "2026-10-09, before any measurement on engine 4afbfcd; nothing below is changed after measuring",
+  "extends": {
+    "plan": "docs/DECISION_EVIDENCE_PLAN.json",
+    "plan_sha256": "5910f6e47e9640264b070d8a1237300f68e1420af9da5193ebb86a922de4e4ca",
+    "note": "the original plan stays unchanged; its performance, memory and quality protocols apply except where this file is more specific"
+  },
+  "scope": "Apple development evidence and a declared quality pilot; no held-out quality claim, no speed claim against another model",
+  "host": {
+    "hardware": "Apple M1 Max, 10 cores, 64 GiB",
+    "engine_revision": "4afbfcd730d041992608fab2a4c1797442dce7f6",
+    "threads": 6,
+    "context": 512,
+    "backends": [
+      "cpu_neon",
+      "metal"
+    ],
+    "models": {
+      "gemma4": {
+        "profile": "gemma4-e2b-q4-v1",
+        "sha256": "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
+        "bytes": 3106738272
+      },
+      "bonsai2": {
+        "profile": "bonsai2-27b-pq2-v1",
+        "sha256": "3907dc1658db1f78a9826bf8d5bcb8dc65db0d466388937af57f2294fae62ec1",
+        "bytes": 7206168928
+      }
+    },
+    "thermal_policy": "on mains power; one inference process at a time; 1-minute load average below 4 before each block, recorded with every result"
+  },
+  "contract_choice": {
+    "user_decision": "the #94 contract applies only if performance does not get significantly worse; otherwise the original contract stays",
+    "what_could_cost": [
+      "the cpu_neon activation-scale fix geistlib#698 (in engine 4afbfcd, not in 0707c3b)",
+      "the optional FP32 KV cache for decisions (#94 proposal, last bullet)"
+    ],
+    "significant": "a ratio of means worse than 5 %: scoring time new/old > 1.05, or decode tokens/s new/old < 0.95",
+    "p1_engine": {
+      "compare": "engine 0707c3b against 4afbfcd, same runtime source otherwise",
+      "measure": [
+        "direct-engine DENSE scoring time per fixture, cpu_neon, both models: 5 warm-up, then 3 interleaved blocks of 30 per engine",
+        "geistr bench decode tokens/s, cpu_neon, both models: 3 interleaved runs per engine"
+      ],
+      "metal": "recorded for information; geistlib#698 changes no Metal code"
+    },
+    "p2_fp32_kv": {
+      "compare": "direct-engine DENSE scoring with kv_mode AUTO against FP32, engine 4afbfcd, both models, cpu_neon and metal, 5 warm-up and 30 interleaved pairs",
+      "adopt": "the runtime passes FP32 KV for decisions only if every ratio FP32/AUTO <= 1.05; otherwise decisions keep AUTO and the numeric gate runs on AUTO"
+    },
+    "rule": "if p1 is significant in any cpu_neon combination, the original contract (independent_numeric in the original plan) is the gate; otherwise the #94 contract below is the gate. Both verdicts are reported either way."
+  },
+  "independent_numeric_94": {
+    "oracle": "the unchanged independent llama.cpp/Prism outputs in tests/fixtures/decisions/gemma4_numeric.json (revision 01ae597e, CPU, F32 KV)",
+    "reference_gaps": {
+      "plain": 13.544,
+      "unicode": 3.121,
+      "order": 3.572
+    },
+    "winner_gate": "the selected option must equal the oracle's where the oracle's top-two gap >= 3.0 logits (all three fixtures here)",
+    "envelope": "abs(actual - oracle) <= 4.0 logits for every candidate",
+    "below_gap": "a fixture with a gap < 3.0 gates no winner; its envelope still applies",
+    "full_precision_control": "geist cpu_scalar with FP32 KV on the same fixtures, recorded with its distance to the oracle; informational, not a gate",
+    "within_engine": "wrapper against direct engine, determinism: bit-identical (atol 0.10 / rtol 0.01 as the upper bound)",
+    "backends_gated": [
+      "cpu_neon",
+      "metal"
+    ],
+    "reruns": "one run per backend; no best-repeat selection"
+  },
+  "overhead_gate": {
+    "protocol": "the original plan's performance section, unchanged: 5 warm-up pairs, 30 measured pairs, AB/BA alternating, ratio of paired means, 10000-resample paired bootstrap, seed 14917, PASS upper <= 1.02, FAIL lower > 1.02, else INCONCLUSIVE",
+    "A": "geistr_decision_score (runtime), timed from the call to the copied result",
+    "B": "geist_decision_score on the same model and backend with the same native prompt and candidate IDs (direct engine), result copied",
+    "combinations": "gemma4 and bonsai2 x cpu_neon and metal x DENSE; SELECTED_ROWS is an explicit unsupported error and is reported as not applicable",
+    "workload": "the profile fixture's cases in turn, one case per pair",
+    "phases": {
+      "scoring": "gated",
+      "decode": "not applicable (no generation)",
+      "setup, tokenization, profile rendering": "measured and reported separately, not gated"
+    },
+    "end_to_end": "p50 and p95 of geistr decide (CLI) over 30 runs per combination, including model load, reported separately"
+  },
+  "lifecycle": {
+    "tool": "tools/stress_decisions.py",
+    "runs": "gemma4 and bonsai2 x cpu_neon and metal",
+    "requests": 100,
+    "cycles": 3,
+    "budgets_rule": "weights once plus room: max = 1.5 x file bytes + 1 GiB; after cleanup = 1 GiB RSS, 256 MiB Metal; a duplicated copy of the weights exceeds the max",
+    "budgets": {
+      "gemma4": {
+        "rss_max_bytes": 5733849232,
+        "rss_cleanup_max_bytes": 1073741824,
+        "metal_max_bytes": 5733849232,
+        "metal_cleanup_max_bytes": 268435456
+      },
+      "bonsai2": {
+        "rss_max_bytes": 11882995216,
+        "rss_cleanup_max_bytes": 1073741824,
+        "metal_max_bytes": 11882995216,
+        "metal_cleanup_max_bytes": 268435456
+      }
+    },
+    "estimate_seconds": {
+      "gemma4": 900,
+      "bonsai2": 2700
+    },
+    "counters": "runtime live allocations and bytes, process RSS and scoped MTLDevice.currentAllocatedSize, each reported on its own; none is total system GPU memory"
+  },
+  "quality_pilot": {
+    "declared": "development pilot; it cannot satisfy the held-out requirement",
+    "evaluator": "geistlib tools/prepare_decision_eval.py and tools/eval_decision.py at engine 4afbfcd (geistlib#587's procedure), unchanged",
+    "data": "cais/mmlu revision c30699e8356da336a370243923dbaf21066bb9fe, overlap policy exclude, 5 shots",
+    "population": "development split, --per-subject 1 --subject-limit 8 (label-independent hash selection), canonical order is the quality population",
+    "rotations": "--rotations 4: all four cyclic arrangements of every pilot question; per-rotation accuracy, decision-change rate and error/coverage reported; rotations never add to N",
+    "model_backend": "gemma4 on metal, 6 threads; Bonsai quality stays with geistlib#587",
+    "baseline": "the evaluator's short-answer and capped reasoning arms, --decode-cap 512",
+    "margin_pp": 2,
+    "warmup_repeats": "--warmup 0 --repeats 1",
+    "verdict": "descriptive; quality eligibility stays false"
+  }
+}
