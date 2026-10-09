@@ -54,7 +54,7 @@
 #define NO_POSITION SIZE_MAX
 
 const char *geistr_version(void) {
-    return "0.3.0";
+    return "0.3.1";
 }
 
 static void put_error(char *error, size_t cap, const char *fmt, ...) {
