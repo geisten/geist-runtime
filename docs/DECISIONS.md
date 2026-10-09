@@ -241,8 +241,10 @@ release eligibility.
 
 Apple at engine `4afbfcd` (#17, [DECISION_EVIDENCE_17.md](DECISION_EVIDENCE_17.md)):
 wrapper/CLI/Python controls and the paired 2 % overhead gate PASS on NEON and Metal for
-both models; Gemma numerics FAIL on `order` on every backend, full precision included
-(geistlib#728); the lifecycle passes on Metal and fails on NEON (geistlib#729).
+both models; Gemma numerics: against the latest llama.cpp (v0.6.0; the oracle is always
+the latest release, `tools/llama_oracle.py`) every backend picks the oracle's option,
+logits within 1.3–2.4, so the original atol 0.10 still fails and the #94 contract passes
+(the old Prism oracle computed `order` differently, geistlib#728); the lifecycle passes on Metal and fails on NEON (geistlib#729).
 Decisions use FP32 KV (measured free). Quality: a development pilot only.
 
 `docs/DECISION_EVIDENCE_PLAN.json` freezes the development comparison;

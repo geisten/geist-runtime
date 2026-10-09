@@ -132,6 +132,14 @@
         "Metal provider bytes are readable only while a model is loaded: metal_cleanup_max_bytes is reported as not observable after close, never as PASS",
         "no retained growth: model-closed RSS of cycle 3 at most 64 MiB above cycle 1"
       ]
+    },
+    {
+      "date": "2026-10-09, user decision, after geistlib#728 showed the frozen oracle revision computed Gemma 4 differently",
+      "section": "independent_numeric_94 and the original contract",
+      "change": [
+        "the oracle is always the latest upstream llama.cpp release, recorded by tools/llama_oracle.py before numeric evidence (now v0.6.0, d81235049)",
+        "the original 01ae597e oracle and its verdicts stay recorded; the contract choice (the original contract) is unchanged; both contracts are reported"
+      ]
     }
   ]
 }

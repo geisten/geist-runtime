@@ -13,7 +13,7 @@ hashes and the analysis are in `tests/fixtures/decisions/validation/apple-17/` a
 |---|---|
 | Configuration correctness: native IDs, wrapper = direct engine (bit-identical), CLI, Python, error/cancel/recovery, feature-off | **PASS**, both models, NEON and Metal |
 | Runtime overhead, scoring phase, paired 2 % gate | **PASS**, all four model × backend combinations |
-| Gemma numerics against the independent llama.cpp oracle | **FAIL** under both contracts: fixture `order` (geistlib#728) |
+| Gemma numerics against the independent llama.cpp oracle | frozen oracle (Prism 01ae597e): **FAIL**, both contracts, `order`, the oracle's error (geistlib#728). Latest llama.cpp v0.6.0: same option on all fixtures; original contract **FAIL** (1.3–2.4 logits), #94 contract PASS |
 | Lifecycle, 100 requests × 3 cycles, frozen memory budgets | Metal **PASS** (both models); CPU **FAIL** (geistlib#729) |
 | Quality | development pilot only; **not eligible** |
 
@@ -77,6 +77,25 @@ difference is between the two Gemma 4 implementations, not int8 activations
 (geistlib#728). Original contract: FAIL; #94 contract: FAIL (envelope 4 logits and
 winner gate on `order`).
 
+### Against the latest llama.cpp (decision 2026-10-09)
+
+The 7.8-logit gap on `order` came from the oracle, not geist (geistlib#728): the frozen
+revision is a Prism fork from 2026-09-21; upstream llama.cpp computes `order` like geist.
+From now on the oracle is always the latest upstream release, recorded with
+`tools/llama_oracle.py` (builds it CPU-only from source and records tag, commit and binary
+hash): now v0.6.0 (`d81235049`), `tests/fixtures/decisions/gemma4_oracle_llamacpp.json`.
+
+| | plain | unicode | order | original contract | #94 contract |
+|---|---|---|---|---|---|
+| NEON | 1.70 | 2.42 | 1.54 | FAIL | PASS |
+| Metal | 1.35 | 2.22 | 1.39 | FAIL | PASS |
+| cpu_scalar + FP32 KV | 1.34 | 2.22 | 1.34 | FAIL | PASS |
+
+Every backend picks the oracle's option on all three fixtures (largest difference per
+fixture shown). The original atol 0.10 / rtol 0.01 still fails: two independent
+implementations do not agree to a tenth of a logit. The contract in force stays the
+original one (the contract choice above); the #94 contract would pass.
+
 ## Lifecycle
 
 `tools/stress_decisions.py`, 100 requests (every tenth with chat, an invalid request and a
@@ -120,7 +139,7 @@ open with geistlib#587.
 
 ## Open
 
-- geistlib#728: the `order` difference between geist's and llama.cpp's Gemma 4.
+- The original contract cannot pass between two implementations; only a contract change would let Gemma numerics pass.
 - geistlib#729: cpu_neon memory (Bonsai twice; ~1.4 GB kept after close).
 - Held-out quality campaign (geistlib#587).
 - If the P1 outlier should be re-measured under a new, frozen protocol (more runs,

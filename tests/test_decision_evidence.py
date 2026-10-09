@@ -47,6 +47,18 @@ for name in ('records-gemma4-cpu', 'records-gemma4-gpu'):
     apple = [json.loads(line) for line in (validation / 'apple-17' / (name + '.jsonl')).read_text().splitlines() if line.startswith('{')]
     assert module.numerical(plan, fixture, reference, apple)['verdict'] == 'FAIL', name
     assert module.numerical_94(plan17, fixture, reference, apple)['verdict'] == 'FAIL', name
+# The oracle is the latest llama.cpp release (decision 2026-10-09): bound to the fixture and artifact,
+# and its verdicts are what the manifest says
+oracle_path = root / 'tests/fixtures/decisions/gemma4_oracle_llamacpp.json'
+oracle = json.loads(oracle_path.read_text())
+latest = manifest['apple_17']['independent_gemma_numeric_latest_llamacpp']
+assert latest['oracle_sha256'] == hashlib.sha256(oracle_path.read_bytes()).hexdigest()
+assert oracle['token_fixture_sha256'] == hashlib.sha256((root / 'tests/fixtures/decisions/gemma4.json').read_bytes()).hexdigest()
+for name in ('records-gemma4-cpu', 'records-gemma4-gpu'):
+    apple = [json.loads(line) for line in (validation / 'apple-17' / (name + '.jsonl')).read_text().splitlines() if line.startswith('{')]
+    both = module.against_oracle(plan, plan17, fixture, oracle, apple)
+    assert both['original']['verdict'] == latest['verdicts'][name]['original'], name
+    assert both['94']['verdict'] == latest['verdicts'][name]['contract_94'], name
 for section in (manifest, manifest['x86_cpu'], manifest['apple_17']):
     for name, record in section['records'].items():
         assert hashlib.sha256((validation / name).read_bytes()).hexdigest() == record['sha256'], name

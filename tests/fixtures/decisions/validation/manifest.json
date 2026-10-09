@@ -125,7 +125,7 @@
  },
  "apple_17": {
   "plan": "docs/DECISION_EVIDENCE_PLAN_17.json",
-  "plan_sha256": "4d5547149620bd55b1fe7c362e1d4da3ffd3b89d4105656b63899a1ba9df7538",
+  "plan_sha256": "97b379ff515f0f414639ea6d8bb0d4f56cd4d88cdfaaab1a72e5d4a0a76ce656",
   "engine_revision": "4afbfcd730d041992608fab2a4c1797442dce7f6",
   "hardware": "Apple M1 Max, 10 cores, 64 GiB, macOS 27.0, on mains power",
   "threads": 6,
@@ -499,6 +499,9 @@
    },
    "apple-17/followup-12f77e8/lifecycle-gemma4-cpu.json": {
     "sha256": "ca54e11470d59cd338bfe24bf757c849e6e73cd4c7dea39196988774802125ef"
+   },
+   "apple-17/numeric-oracle-llamacpp-v0.6.0.json": {
+    "sha256": "d56f4bf17d329693294b985365aaacb4a7fa66943a5940024f8355956fd1bb72"
    }
   },
   "followup_12f77e8": {
@@ -518,6 +521,57 @@
      "rss_max_bytes_observed": 9745809408
     }
    }
+  },
+  "independent_gemma_numeric_latest_llamacpp": {
+   "oracle": "tests/fixtures/decisions/gemma4_oracle_llamacpp.json",
+   "oracle_sha256": "f56c935c29e56613b446a965b6edc10469ca6d4aa1c1c58d948a84ef9a11889d",
+   "release": "v0.6.0",
+   "commit": "d81235049384534c167caea52b85a694f6103d14",
+   "verdicts": {
+    "records-gemma4-cpu": {
+     "original": "FAIL",
+     "contract_94": "PASS",
+     "selections": [
+      "PASS",
+      "PASS",
+      "PASS"
+     ],
+     "max_absolute_error": {
+      "plain": 1.7,
+      "unicode": 2.42,
+      "order": 1.54
+     }
+    },
+    "records-gemma4-gpu": {
+     "original": "FAIL",
+     "contract_94": "PASS",
+     "selections": [
+      "PASS",
+      "PASS",
+      "PASS"
+     ],
+     "max_absolute_error": {
+      "plain": 1.35,
+      "unicode": 2.22,
+      "order": 1.39
+     }
+    },
+    "scalar-gemma4": {
+     "original": "FAIL",
+     "contract_94": "PASS",
+     "selections": [
+      "PASS",
+      "PASS",
+      "PASS"
+     ],
+     "max_absolute_error": {
+      "plain": 1.34,
+      "unicode": 2.22,
+      "order": 1.34
+     }
+    }
+   },
+   "note": "every backend picks the oracle's option on all three fixtures; logits within 1.3-2.4; the original atol 0.10 fails, the #94 envelope passes; the contract in force is the original"
   }
  }
 }
