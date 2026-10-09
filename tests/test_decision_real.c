@@ -64,7 +64,8 @@ static int run(const char *path, const char *profile_name, const char *processor
         const struct geist_decision_opts engine_opts = {.mode = numeric == 1 ? GEIST_DECISION_DENSE
                                                                              : GEIST_DECISION_SELECTED_ROWS,
                                                         .max_prompt_tokens = 512,
-                                                        .max_candidates = GEISTR_DECISION_MAX_OPTIONS};
+                                                        .max_candidates = GEISTR_DECISION_MAX_OPTIONS,
+                                                        .kv_mode = GEIST_KV_FP32}; /* as the runtime */
         engine_setup_lock(m);
         const enum geist_status created = geist_decision_create(m->m, m->be, &engine_opts, &direct);
         engine_setup_unlock(m);

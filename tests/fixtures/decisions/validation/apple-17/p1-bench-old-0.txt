@@ -1,0 +1,13 @@
+⚙ gemma4-e2b          31.0 tok/s · 3.1 s
+⚡ gemma4-e2b          86.1 tok/s · 1.6 s
+⚙ bonsai2-27b-pq2     9.2 tok/s · 20.0 s
+⚡ bonsai2-27b-pq2     19.0 tok/s · 7.9 s
+
+✓ bitnet-2b          BitNet b1.58 2B · I2_S                1.2 GB  ⚙   ·  ⚡   ·
+✓ smollm2-360m       SmolLM2 360M · Q8_0                   386 MB  ⚙   ·  ⚡   ·
+✓ qwen3-0.6b         Qwen3 0.6B · Q8_0                     639 MB  ⚙   ·  ⚡   ·
+✓ qwen35-0.8b        Qwen3.5 0.8B · Q8_0                   812 MB  ⚙   ·  ⚡   ·
+✓ gemma4-e2b         Gemma 4 E2B · Q4_K_M                  3.1 GB  ⚙   31  ⚡   86
+✓ gemma4-e4b         Gemma 4 E4B · Q4_K_M                  5.0 GB  ⚙   ·  ⚡   ·
+✓ bonsai2-27b-pq2    Bonsai 2 27B (ternary) · PQ2_0        7.2 GB  ⚙    9  ⚡   19  ⚠ free RAM tight
+✓ qwen38-27b-q4      Qwen3.8 27B · Q4_0                   16.1 GB  ⚙   ·  ⚡   ·  ⚠ free RAM tight

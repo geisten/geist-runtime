@@ -1,0 +1,13 @@
+{
+  "fixture": "tests/fixtures/decisions/gemma4.json",
+  "fixture_sha256": "ecf29659383ca2d7531c34c575c55171b1f45c3839a659e04f7747f7239f4e35",
+  "artifact_sha256": "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
+  "profile": "gemma4-e2b-q4-v1",
+  "processor": "cpu",
+  "mode": "dense",
+  "requests": 100,
+  "cycles": 3,
+  "rss_max_bytes": 5733849232,
+  "rss_cleanup_max_bytes": 1073741824,
+  "estimate_seconds": 900
+}

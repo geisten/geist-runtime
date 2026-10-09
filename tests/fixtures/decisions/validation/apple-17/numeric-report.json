@@ -1,0 +1,164 @@
+{
+  "records-gemma4-cpu": {
+    "original": {
+      "scope": "three independent numerical development fixtures; not MMLU quality",
+      "verdict": "FAIL",
+      "cases": [
+        {
+          "fixture": "plain",
+          "max_absolute_error": 1.889526273,
+          "logits": "FAIL",
+          "selection": "PASS"
+        },
+        {
+          "fixture": "unicode",
+          "max_absolute_error": 1.0014200199999994,
+          "logits": "FAIL",
+          "selection": "PASS"
+        },
+        {
+          "fixture": "order",
+          "max_absolute_error": 7.76276107,
+          "logits": "FAIL",
+          "selection": "FAIL"
+        }
+      ]
+    },
+    "contract_94": {
+      "scope": "three independent numerical development fixtures under the #94 contract; not MMLU quality",
+      "contract": "94",
+      "verdict": "FAIL",
+      "cases": [
+        {
+          "fixture": "plain",
+          "reference_gap": 13.543977547,
+          "max_absolute_error": 1.889526273,
+          "envelope": "PASS",
+          "selection": "PASS"
+        },
+        {
+          "fixture": "unicode",
+          "reference_gap": 3.1207242000000006,
+          "max_absolute_error": 1.0014200199999994,
+          "envelope": "PASS",
+          "selection": "PASS"
+        },
+        {
+          "fixture": "order",
+          "reference_gap": 3.5719861999999996,
+          "max_absolute_error": 7.76276107,
+          "envelope": "FAIL",
+          "selection": "FAIL"
+        }
+      ]
+    }
+  },
+  "records-gemma4-gpu": {
+    "original": {
+      "scope": "three independent numerical development fixtures; not MMLU quality",
+      "verdict": "FAIL",
+      "cases": [
+        {
+          "fixture": "plain",
+          "max_absolute_error": 1.544264943,
+          "logits": "FAIL",
+          "selection": "PASS"
+        },
+        {
+          "fixture": "unicode",
+          "max_absolute_error": 0.7992739599999998,
+          "logits": "FAIL",
+          "selection": "PASS"
+        },
+        {
+          "fixture": "order",
+          "max_absolute_error": 7.83981137,
+          "logits": "FAIL",
+          "selection": "FAIL"
+        }
+      ]
+    },
+    "contract_94": {
+      "scope": "three independent numerical development fixtures under the #94 contract; not MMLU quality",
+      "contract": "94",
+      "verdict": "FAIL",
+      "cases": [
+        {
+          "fixture": "plain",
+          "reference_gap": 13.543977547,
+          "max_absolute_error": 1.544264943,
+          "envelope": "PASS",
+          "selection": "PASS"
+        },
+        {
+          "fixture": "unicode",
+          "reference_gap": 3.1207242000000006,
+          "max_absolute_error": 0.7992739599999998,
+          "envelope": "PASS",
+          "selection": "PASS"
+        },
+        {
+          "fixture": "order",
+          "reference_gap": 3.5719861999999996,
+          "max_absolute_error": 7.83981137,
+          "envelope": "FAIL",
+          "selection": "FAIL"
+        }
+      ]
+    }
+  },
+  "scalar-gemma4": {
+    "original": {
+      "scope": "three independent numerical development fixtures; not MMLU quality",
+      "verdict": "FAIL",
+      "cases": [
+        {
+          "fixture": "plain",
+          "max_absolute_error": 1.530031353,
+          "logits": "FAIL",
+          "selection": "PASS"
+        },
+        {
+          "fixture": "unicode",
+          "max_absolute_error": 0.8008594499999999,
+          "logits": "FAIL",
+          "selection": "PASS"
+        },
+        {
+          "fixture": "order",
+          "max_absolute_error": 7.881909369999999,
+          "logits": "FAIL",
+          "selection": "FAIL"
+        }
+      ]
+    },
+    "contract_94": {
+      "scope": "three independent numerical development fixtures under the #94 contract; not MMLU quality",
+      "contract": "94",
+      "verdict": "FAIL",
+      "cases": [
+        {
+          "fixture": "plain",
+          "reference_gap": 13.543977547,
+          "max_absolute_error": 1.530031353,
+          "envelope": "PASS",
+          "selection": "PASS"
+        },
+        {
+          "fixture": "unicode",
+          "reference_gap": 3.1207242000000006,
+          "max_absolute_error": 0.8008594499999999,
+          "envelope": "PASS",
+          "selection": "PASS"
+        },
+        {
+          "fixture": "order",
+          "reference_gap": 3.5719861999999996,
+          "max_absolute_error": 7.881909369999999,
+          "envelope": "FAIL",
+          "selection": "FAIL"
+        }
+      ]
+    }
+  }
+}

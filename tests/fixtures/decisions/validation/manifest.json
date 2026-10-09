@@ -122,5 +122,378 @@
    "cause": "https://github.com/geisten/geistlib/issues/694: int8 activation quantization; the llama.cpp reference itself moves up to 3.97 logits between batch sizes and flips fixture order, so the frozen atol 0.10 / rtol 0.01 cannot hold across int8-activation engines. The contract stays frozen until a new one is decided (runtime#94)."
   },
   "not_recorded": "bonsai2 on x86; cpu_neon (geistlib#698) and Metal records, paired overhead and 100-request lifecycle gates: Apple hardware (runtime#17)"
+ },
+ "apple_17": {
+  "plan": "docs/DECISION_EVIDENCE_PLAN_17.json",
+  "plan_sha256": "4d5547149620bd55b1fe7c362e1d4da3ffd3b89d4105656b63899a1ba9df7538",
+  "engine_revision": "4afbfcd730d041992608fab2a4c1797442dce7f6",
+  "hardware": "Apple M1 Max, 10 cores, 64 GiB, macOS 27.0, on mains power",
+  "threads": 6,
+  "context": 512,
+  "binary_sha256": {
+   "bench_decision": "d5a120f1daab3d471dde6affb659b36ff9514e24a337903fc7899c5191c12879",
+   "test_decision_real": "33c237da40b20a9bbaa205d0ec577a2815bc2b9841959bd81f6ae0f9575f3d03",
+   "geistr": "f2fe38ed8c06c63d3045a7d994555c4dab65a061a5a4753c5bc6663324bbe5ac"
+  },
+  "binary_note": "final FP32-KV builds; p1, p2 and the AUTO overhead runs used the same source before the kv_mode line (that build was not kept)",
+  "contract_choice": {
+   "p1_significant": [
+    "bonsai2-27b-pq2-cpu"
+   ],
+   "contract": "original",
+   "note": "the one significant combination is Bonsai cpu decode tokens/s (mean of 6.5, 9.1, 9.3 against 8.9, 8.9, 9.2); the frozen rule uses the mean, no rerun"
+  },
+  "fp32_kv_adopted": true,
+  "overhead_gate": {
+   "bonsai2-cpu": "PASS",
+   "bonsai2-gpu": "PASS",
+   "gemma4-cpu": "PASS",
+   "gemma4-gpu": "PASS"
+  },
+  "overhead_gate_auto_kv": {
+   "bonsai2-cpu": "PASS",
+   "bonsai2-gpu": "INCONCLUSIVE",
+   "gemma4-cpu": "INCONCLUSIVE",
+   "gemma4-gpu": "PASS"
+  },
+  "independent_gemma_numeric": {
+   "records-gemma4-cpu": {
+    "original": "FAIL",
+    "contract_94": "FAIL"
+   },
+   "records-gemma4-gpu": {
+    "original": "FAIL",
+    "contract_94": "FAIL"
+   },
+   "scalar-gemma4": {
+    "original": "FAIL",
+    "contract_94": "FAIL"
+   }
+  },
+  "independent_gemma_numeric_cause": "geistlib#728: all geist backends, full precision included, differ from the llama.cpp oracle on \"order\"",
+  "lifecycle": {
+   "gemma4-gpu": {
+    "verdict": "PASS",
+    "error": null,
+    "requests": 300
+   },
+   "gemma4-cpu": {
+    "verdict": "FAIL",
+    "error": "RSS 1428209664 after the model closed, budget 1073741824",
+    "requests": 100
+   },
+   "bonsai2-gpu": {
+    "verdict": "PASS",
+    "error": null,
+    "requests": 300
+   },
+   "bonsai2-cpu": {
+    "verdict": "FAIL",
+    "error": "evidence invariant failed (stress_decisions.py:104)",
+    "requests": 0
+   }
+  },
+  "lifecycle_cause": "geistlib#729: cpu_neon holds Bonsai weights about twice; ~1.4 GB stays after a CPU model closes",
+  "lifecycle_reruns": "declared: run1 (chat check failed on a thinking model: visible text empty; fixed to check generated tokens), run2 (Bonsai cpu: unnamed check; checks now name their line)",
+  "quality_pilot": {
+   "chat_direct": {
+    "questions": 8,
+    "per_rotation_accuracy": {
+     "0": 0.5,
+     "1": 0.5,
+     "2": 0.25,
+     "3": 0.5
+    },
+    "decision_change_rate": 0.4583333333333333,
+    "errors": 0
+   },
+   "cloze": {
+    "questions": 8,
+    "per_rotation_accuracy": {
+     "0": 0.125,
+     "1": 0.5,
+     "2": 0.5,
+     "3": 0.5
+    },
+    "decision_change_rate": 0.8333333333333334,
+    "errors": 0
+   }
+  },
+  "quality_eligible": false,
+  "records": {
+   "apple-17/analysis.json": {
+    "sha256": "dda40b719a1bebbe53588fbad24ae9d395943a087612f5edb576959d81875f32"
+   },
+   "apple-17/cli-bonsai2-cpu.jsonl": {
+    "sha256": "82b6e37c981a221a2dea9614a9e379b59d03cf3c1f9101ff609896bdb5bd1873"
+   },
+   "apple-17/cli-bonsai2-gpu.jsonl": {
+    "sha256": "969b0046f7c2999762152b163d9a45eb8083e8e8dac0398301f7616081c9753b"
+   },
+   "apple-17/cli-gemma4-cpu.jsonl": {
+    "sha256": "5144fe7a88a80885fe7ab68d28b9fa236eb865758f704ce14fca8ab0c854e152"
+   },
+   "apple-17/cli-gemma4-gpu.jsonl": {
+    "sha256": "c40bc17ee15cbb4b973b842f3beafe21dfb73e3c72056629191cb34b2ef5a55f"
+   },
+   "apple-17/lifecycle-bonsai2-cpu-run1.err": {
+    "sha256": "f1b73d09b727c5897d8b9a1630e7cd5ed3c05cd97440e22117476449edadadc9"
+   },
+   "apple-17/lifecycle-bonsai2-cpu-run1.json": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+   },
+   "apple-17/lifecycle-bonsai2-cpu-run2.json": {
+    "sha256": "9fc5d8c04290c972570f355475415071c42c9c60265325fa7e410a062cfb40a1"
+   },
+   "apple-17/lifecycle-bonsai2-cpu.json": {
+    "sha256": "2345cd27d2c00f9b5f3bb7cfab31c00878f48faca789e0552735b2d39fcc2b00"
+   },
+   "apple-17/lifecycle-bonsai2-gpu-run1.err": {
+    "sha256": "f1b73d09b727c5897d8b9a1630e7cd5ed3c05cd97440e22117476449edadadc9"
+   },
+   "apple-17/lifecycle-bonsai2-gpu-run1.json": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+   },
+   "apple-17/lifecycle-bonsai2-gpu.json": {
+    "sha256": "e42956949aa400624ed6a56b29d54270d6f1c1144a0382ed3cdcbcd36cb7e8ab"
+   },
+   "apple-17/lifecycle-gemma4-cpu-run1.err": {
+    "sha256": "f2863a1363afc523c42c42b121df24b403f2949c34cfeb7dd902a444f2e6844e"
+   },
+   "apple-17/lifecycle-gemma4-cpu-run1.json": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+   },
+   "apple-17/lifecycle-gemma4-cpu.json": {
+    "sha256": "06920055750518dc08a4010f39bb1506285e57f98794795b99e65401b776a973"
+   },
+   "apple-17/lifecycle-gemma4-gpu.json": {
+    "sha256": "2aeeefb2166ee2b35d0c43972b47ae6f9ab5742e61b72213861303999e38d6c8"
+   },
+   "apple-17/lifecycle-plan-bonsai2-cpu.json": {
+    "sha256": "a6fbb5f3d28b900c59b90869416483d1c06f1ac397b957d7c55b07886bcee47f"
+   },
+   "apple-17/lifecycle-plan-bonsai2-gpu.json": {
+    "sha256": "447f990391e6ce97a90371bff33662d3543265318261f8a4ee622405d797a73a"
+   },
+   "apple-17/lifecycle-plan-gemma4-cpu.json": {
+    "sha256": "a8b09b7ef3d333b18b4e6c8e6f0e60ebbb64e365e40e57221ab1cd0ed153f7f5"
+   },
+   "apple-17/lifecycle-plan-gemma4-gpu.json": {
+    "sha256": "6cbaa667c11acc97d3af0118164203fa9843c11aeb93f36a0e08a086d0ae0743"
+   },
+   "apple-17/mmlu-pilot/cases/calibration.jsonl": {
+    "sha256": "7c1109b37686a00fa1d26c48c40b6372f7c6f30a15066ed252e42350fb550ea5"
+   },
+   "apple-17/mmlu-pilot/cases/chat_template.jinja": {
+    "sha256": "241c50d86bdfe5e43307da87f559cd2416aacd67a8de46c15acc0105ef2200b7"
+   },
+   "apple-17/mmlu-pilot/cases/development.jsonl": {
+    "sha256": "d1e384114ac849d3a8e9e40bb6f89e6a804fd977abe88ae4b65c344cf1826f61"
+   },
+   "apple-17/mmlu-pilot/cases/metadata.json": {
+    "sha256": "1c38ce2a439627a55a31c6ee72c918bacd880f888cdd4576c74956efc2207b5a"
+   },
+   "apple-17/mmlu-pilot/cases/split_audit.json": {
+    "sha256": "7744caf2f70ea72db9fd48e35458b752f3734134144e9ac2fa0804c1ddbab142"
+   },
+   "apple-17/mmlu-pilot/cases/test.jsonl": {
+    "sha256": "eb55a4a9d771bfee0162f2d3617b6c35229356e9377b455bbf983f3a8fdca296"
+   },
+   "apple-17/mmlu-pilot/cases/tokenizer.log": {
+    "sha256": "3dfa3fb239f56c778a1e9b33eb31328349edd155a95806dac4378904e88527e5"
+   },
+   "apple-17/mmlu-pilot/rotation_audit.json": {
+    "sha256": "310b0d7bb263457f8f623326be4b1fc38e5a05055437d01552ad04fb8abce4ac"
+   },
+   "apple-17/mmlu-pilot/run/chat_direct.cases.jsonl": {
+    "sha256": "ce397ed7df68d04da5e43f5f97c757a61714eba914507d4160c8c3822804c6ae"
+   },
+   "apple-17/mmlu-pilot/run/chat_direct.component_timings.json": {
+    "sha256": "a0a020d52de34dce8dd677dca90f56709b2959b278b1890b9d0e6a47fc77bada"
+   },
+   "apple-17/mmlu-pilot/run/chat_direct.driver.jsonl": {
+    "sha256": "58e2d784472c054d8e674666853ca3f4db5ac3e6c148abf0d9d66f4f98334098"
+   },
+   "apple-17/mmlu-pilot/run/chat_direct.stderr.log": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+   },
+   "apple-17/mmlu-pilot/run/chat_reasoning.cases.jsonl": {
+    "sha256": "429ab7bdc6f10cb1399f991fa2c5b53f7258146698beda6e6422f17c42ce2de2"
+   },
+   "apple-17/mmlu-pilot/run/chat_reasoning.component_timings.json": {
+    "sha256": "f360588cc7e19b2ff2b2d29ffdfb061f57be611f4d1dbf00b981691d60387b4f"
+   },
+   "apple-17/mmlu-pilot/run/chat_reasoning.driver.jsonl": {
+    "sha256": "1481ec6b6861095d5ddea790977ed250974f36d32a1cdcb6c1ddb3bf78ea2403"
+   },
+   "apple-17/mmlu-pilot/run/chat_reasoning.stderr.log": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+   },
+   "apple-17/mmlu-pilot/run/cloze.cases.jsonl": {
+    "sha256": "141215742e969540cc4deb80c130905b8df1dc16326de9f387666b78812a12d5"
+   },
+   "apple-17/mmlu-pilot/run/cloze.component_timings.json": {
+    "sha256": "de14bc7edfbeaafebac4c382ff9d6eef73f39dc401cd1988be63191dac71af6b"
+   },
+   "apple-17/mmlu-pilot/run/cloze.driver.jsonl": {
+    "sha256": "dd210e51e58f3f54d75f7c4e73fc50fa31f51e7a339d81f044855e98fa3982a2"
+   },
+   "apple-17/mmlu-pilot/run/cloze.stderr.log": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+   },
+   "apple-17/mmlu-pilot/run/manifest.json": {
+    "sha256": "f548899c63f4db43b5d34de97d50af2e95f424c6d4bf44f9756313233c8216f8"
+   },
+   "apple-17/mmlu-pilot/run/prepared_metadata.json": {
+    "sha256": "1c38ce2a439627a55a31c6ee72c918bacd880f888cdd4576c74956efc2207b5a"
+   },
+   "apple-17/mmlu-pilot/run/report.json": {
+    "sha256": "7fe162b55ab7374335bee3a875678facb5d2978428ca6c777c29b183a483d2c3"
+   },
+   "apple-17/mmlu-pilot/run/split_audit.json": {
+    "sha256": "7744caf2f70ea72db9fd48e35458b752f3734134144e9ac2fa0804c1ddbab142"
+   },
+   "apple-17/numeric-report.json": {
+    "sha256": "9e337539c2363996341a5c738d7b71658f1a6c1673bfe58e2d48751a76b7cff4"
+   },
+   "apple-17/overhead-bonsai2-cpu.jsonl": {
+    "sha256": "e74326daa38398eb9deec3b73000c5d569e5cca5007ca144c1707699fa0845e7"
+   },
+   "apple-17/overhead-bonsai2-gpu.jsonl": {
+    "sha256": "46f6f654353e4f89041c5e2b9aee950dc9a479268b426be3afb959edf4b6427f"
+   },
+   "apple-17/overhead-gemma4-cpu.jsonl": {
+    "sha256": "53d4c07c0756c19ac7013f70c8f0408fe8b7e2981659308b59be14b7a471f191"
+   },
+   "apple-17/overhead-gemma4-gpu.jsonl": {
+    "sha256": "efdfa7aad9fa396d55e4e0236d37f7c6b62599d5c2fe506fc85fcbff28e1684e"
+   },
+   "apple-17/overhead_fp32-bonsai2-cpu.jsonl": {
+    "sha256": "45fb35d2dfca5fab019d987c9502a48d144ea66d3309b4a1461069c243602f3e"
+   },
+   "apple-17/overhead_fp32-bonsai2-gpu.jsonl": {
+    "sha256": "0d6b99443f0b3db7a3b07076e765ad5a9b4c4caa6117ca72185a0ed658e135bf"
+   },
+   "apple-17/overhead_fp32-gemma4-cpu.jsonl": {
+    "sha256": "d94afeeba8feef7c7d871f59b16c34867fc57475df29bdf8aa529ae4fe69c2b7"
+   },
+   "apple-17/overhead_fp32-gemma4-gpu.jsonl": {
+    "sha256": "20241bdff5af5d549e4443b2a784126606feb057b684f7c6a270e1844efa8729"
+   },
+   "apple-17/p1-bench-home/speed.tsv": {
+    "sha256": "f2722b3f5edd9eaa0f4f3ef6373cc72f4e346daf76025e83e0cae2b268e28b96"
+   },
+   "apple-17/p1-bench-new-0.txt": {
+    "sha256": "254eece075b562973b870e855424e4ed3918ed3e76722605e1329d75d47b25c8"
+   },
+   "apple-17/p1-bench-new-1.txt": {
+    "sha256": "402d7094b1c948132d54bc48dbe651a87268ecf92520752565afae92780f4e30"
+   },
+   "apple-17/p1-bench-new-2.txt": {
+    "sha256": "39758e3d040680e2186cd80d14e350bc280096f08837658fb2fef2a45882c822"
+   },
+   "apple-17/p1-bench-old-0.txt": {
+    "sha256": "7d9f4603b87b19fc9da1e975e58fc9da2b69205e9e635edd2fde188d981b5392"
+   },
+   "apple-17/p1-bench-old-1.txt": {
+    "sha256": "1d467dfd7cd8c66e5b1e243f94646ec3919f2a4b817e4c7923737fc40d926717"
+   },
+   "apple-17/p1-bench-old-2.txt": {
+    "sha256": "f2f51a5e8953ccd539edcba708fd57f6ac29e49946c2995a43cd0f1c71564a22"
+   },
+   "apple-17/p1-direct-bonsai2-cpu-new-0.jsonl": {
+    "sha256": "409241647ffc1c4a733cef99b2b0645a54ea790825bc12bfce7ba3dfe31f6dcc"
+   },
+   "apple-17/p1-direct-bonsai2-cpu-new-1.jsonl": {
+    "sha256": "dbf0f3abeb1c07624827691df657bd4aeda5edd25660ec8500d5e7b7b621e5cd"
+   },
+   "apple-17/p1-direct-bonsai2-cpu-new-2.jsonl": {
+    "sha256": "799a16f124e563efa7a23cc783935e27f15b23fd52a1c04826ff5e2b0c59e6dd"
+   },
+   "apple-17/p1-direct-bonsai2-cpu-old-0.jsonl": {
+    "sha256": "e4fa5c253765456407a50c52047802501f66aba599b131904c78e7ce3e9959ca"
+   },
+   "apple-17/p1-direct-bonsai2-cpu-old-1.jsonl": {
+    "sha256": "667c0f743f8556e7a7054625a775dcf7b79ede6bdb6ac84e5323a936acd74235"
+   },
+   "apple-17/p1-direct-bonsai2-cpu-old-2.jsonl": {
+    "sha256": "1850649ac3abc07db018e9afa3901282bf719f6ad5ea65e3165ffaeac04f089d"
+   },
+   "apple-17/p1-direct-bonsai2-gpu-new-0.jsonl": {
+    "sha256": "b03aef4fee4e729fa11092010e246fc9c6f53c8f59038ed4039e9a9914248c5d"
+   },
+   "apple-17/p1-direct-bonsai2-gpu-old-0.jsonl": {
+    "sha256": "323027ff9a4d028a470bc3dcd8fd5490b6c5584a4be317bbc56662fc5b5e8635"
+   },
+   "apple-17/p1-direct-gemma4-cpu-new-0.jsonl": {
+    "sha256": "13cdd98a52229ea80ca78d1be9087af08bcbed9daad55857779c4cce4e87656a"
+   },
+   "apple-17/p1-direct-gemma4-cpu-new-1.jsonl": {
+    "sha256": "e617098fc12d0a3e79c9582f0161f01a4f2f6931ca0060727b82a1df2b107f0f"
+   },
+   "apple-17/p1-direct-gemma4-cpu-new-2.jsonl": {
+    "sha256": "5ee9bb1bf0c04b777ed338739c06abe1185e28a484bc07ed21cd2fc87bad694a"
+   },
+   "apple-17/p1-direct-gemma4-cpu-old-0.jsonl": {
+    "sha256": "073603990b188455c2344b5282053ddf0f2742028a7cfacd986fa3807a99e9ce"
+   },
+   "apple-17/p1-direct-gemma4-cpu-old-1.jsonl": {
+    "sha256": "79a62c5ef8f0d573734b264fc8c78c565817588986c114c25760503748d6ad83"
+   },
+   "apple-17/p1-direct-gemma4-cpu-old-2.jsonl": {
+    "sha256": "a23346fc832c6575b3f590481d5beb219596842e5c45251f2572feb0e2a76334"
+   },
+   "apple-17/p1-direct-gemma4-gpu-new-0.jsonl": {
+    "sha256": "ac6bf02cfb78b3a9866864c1cc85a233e655eec4a36580e0c0ab1f9abf625d5b"
+   },
+   "apple-17/p1-direct-gemma4-gpu-old-0.jsonl": {
+    "sha256": "f6c708e69d369fd5ed1acfbe3ac2e079dd8c4f422c5feb553a5a56cac2f5b496"
+   },
+   "apple-17/p2-kvpair-bonsai2-cpu.jsonl": {
+    "sha256": "8230ce2be7a5cba9997d4a7583dfd29751d5c13fe067bf1a8f7051b17ceaf896"
+   },
+   "apple-17/p2-kvpair-bonsai2-gpu.jsonl": {
+    "sha256": "80873cec37fb4882374f1bdcb635c2a61436f6bdd43790f2c72b009baa85a33a"
+   },
+   "apple-17/p2-kvpair-gemma4-cpu.jsonl": {
+    "sha256": "fed415df71bcad60f7623c0bb3ac0ff5521bc6b8c7b2360fa3ff8fcdfe57d254"
+   },
+   "apple-17/p2-kvpair-gemma4-gpu.jsonl": {
+    "sha256": "1fdb3fb159661dd3890936dafa901fd71bc623f63079f6d1c44e9da3cbc2adf2"
+   },
+   "apple-17/python-bonsai2-cpu.jsonl": {
+    "sha256": "a906c771be20776ecb0ae2868bc889362a8b0e07911b181a1db11cbb99530a10"
+   },
+   "apple-17/python-bonsai2-gpu.jsonl": {
+    "sha256": "efd295db5ee99c3b985bebbf0773532d1271bbeeb8ca4e01d8bb5f9eea5a0fad"
+   },
+   "apple-17/python-gemma4-cpu.jsonl": {
+    "sha256": "9c6c933992f9a0576423aa4a52fcda8fef8a87b11a01709ada354210986a7b8c"
+   },
+   "apple-17/python-gemma4-gpu.jsonl": {
+    "sha256": "95864612716c4ee424fd07e82134648d5bd60c8f1043bf9ba0faad23964a59d7"
+   },
+   "apple-17/records-bonsai2-cpu.jsonl": {
+    "sha256": "2b73dd4fe0966120db84c32ed3cc4ccdf67a36be7973691b27d52e773faff77e"
+   },
+   "apple-17/records-bonsai2-gpu.jsonl": {
+    "sha256": "05f589f8a0928e63f1cfbba2f1d49b00cb814d45770e01f8e6051bca8e2562d3"
+   },
+   "apple-17/records-gemma4-cpu.jsonl": {
+    "sha256": "24c8a4aa25aa3c97798148541aa376a06acc7b280fe4874e91770b65722a8d13"
+   },
+   "apple-17/records-gemma4-gpu.jsonl": {
+    "sha256": "d220c07ba6cb0752d49a8e696de8ff1d53cb93722044066bd6eae79fa0362a12"
+   },
+   "apple-17/runs.jsonl": {
+    "sha256": "f916fed37a40330c2117351b49b22747adce61f3ddb9890b37856fd508c92422"
+   },
+   "apple-17/scalar-bonsai2.jsonl": {
+    "sha256": "1e2fdd7a312498acd203c85461532d6ac7826ec92684f08af31591da565e43b6"
+   },
+   "apple-17/scalar-gemma4.jsonl": {
+    "sha256": "e71eb3d06111142d4983131b6fc9104d576fd38f0303be243372ae538201ad05"
+   }
+  }
  }
 }

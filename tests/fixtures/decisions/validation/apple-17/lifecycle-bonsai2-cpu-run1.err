@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "/Users/germar/workspace/geist-runtime/tools/stress_decisions.py", line 108, in <module>
+    main()
+    ~~~~^^
+  File "/Users/germar/workspace/geist-runtime/tools/stress_decisions.py", line 51, in main
+    require(chat.ask('Reply OK.'), 'evidence invariant failed')
+    ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/germar/workspace/geist-runtime/tools/stress_decisions.py", line 21, in require
+    raise ValueError(message)
+ValueError: evidence invariant failed

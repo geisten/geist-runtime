@@ -1,0 +1,12 @@
+{"profile":"bonsai2","backend":"cpu_neon","mode":1,"fixture":0,"native_ids":true,"direct_bit_identical":true,"model_calls":1}
+{"profile":"bonsai2","backend":"cpu_neon","mode":1,"fixture":0,"best_index":0,"logits":[19.8214378,11.9277973]}
+{"profile":"bonsai2","backend":"cpu_neon","mode":1,"fixture":1,"native_ids":true,"direct_bit_identical":true,"model_calls":1}
+{"profile":"bonsai2","backend":"cpu_neon","mode":1,"fixture":1,"best_index":0,"logits":[17.2543182,16.9952431]}
+{"profile":"bonsai2","backend":"cpu_neon","mode":1,"fixture":2,"native_ids":true,"direct_bit_identical":true,"model_calls":1}
+{"profile":"bonsai2","backend":"cpu_neon","mode":1,"fixture":2,"best_index":1,"logits":[14.7183943,17.7896366,12.6447048,17.1402683]}
+{"profile":"bonsai2","backend":"cpu_neon","mode":2,"fixture":0,"native_ids":true,"direct_bit_identical":true,"model_calls":1}
+{"profile":"bonsai2","backend":"cpu_neon","mode":2,"fixture":0,"best_index":0,"logits":[19.8214378,11.9277973]}
+{"profile":"bonsai2","backend":"cpu_neon","mode":2,"fixture":1,"native_ids":true,"direct_bit_identical":true,"model_calls":1}
+{"profile":"bonsai2","backend":"cpu_neon","mode":2,"fixture":1,"best_index":0,"logits":[17.2543182,16.9952431]}
+{"profile":"bonsai2","backend":"cpu_neon","mode":2,"fixture":2,"native_ids":true,"direct_bit_identical":true,"model_calls":1}
+{"profile":"bonsai2","backend":"cpu_neon","mode":2,"fixture":2,"best_index":1,"logits":[14.7183943,17.7896366,12.6447048,17.1402683]}

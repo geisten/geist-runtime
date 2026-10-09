@@ -1,0 +1,13 @@
+{
+  "fixture": "tests/fixtures/decisions/bonsai2.json",
+  "fixture_sha256": "0869852fd5586552ff273ecaa7720c4d8cd5c1e23e3e2e16d4ff328e88c86728",
+  "artifact_sha256": "3907dc1658db1f78a9826bf8d5bcb8dc65db0d466388937af57f2294fae62ec1",
+  "profile": "bonsai2-27b-pq2-v1",
+  "processor": "cpu",
+  "mode": "dense",
+  "requests": 100,
+  "cycles": 3,
+  "rss_max_bytes": 11882995216,
+  "rss_cleanup_max_bytes": 1073741824,
+  "estimate_seconds": 2700
+}

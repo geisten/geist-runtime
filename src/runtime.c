@@ -1543,8 +1543,12 @@ geistr_status geistr_decision_open(geistr_model *m, size_t error_cap, const geis
         geistr_decision_close(d);
         return GEISTR_NO_MEMORY;
     }
-    struct geist_decision_opts so = {
-        .mode = numeric, .max_prompt_tokens = max_prompt, .max_candidates = GEISTR_DECISION_MAX_OPTIONS};
+    /* FP32 KV: as the independent reference, and measured free on Apple (#17,
+     * DECISION_EVIDENCE_PLAN_17.json p2: FP32/AUTO 0.995-1.006). */
+    struct geist_decision_opts so = {.mode              = numeric,
+                                     .max_prompt_tokens = max_prompt,
+                                     .max_candidates    = GEISTR_DECISION_MAX_OPTIONS,
+                                     .kv_mode           = GEIST_KV_FP32};
     struct geist_session_opts to = {.max_seq_len = 1, .top_p = 1.0f};
     engine_setup_lock(m);
     enum geist_status es = geist_decision_create(m->m, m->be, &so, &d->scorer);
