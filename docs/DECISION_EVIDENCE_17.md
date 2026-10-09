@@ -13,7 +13,7 @@ hashes and the analysis are in `tests/fixtures/decisions/validation/apple-17/` a
 |---|---|
 | Configuration correctness: native IDs, wrapper = direct engine (bit-identical), CLI, Python, error/cancel/recovery, feature-off | **PASS**, both models, NEON and Metal |
 | Runtime overhead, scoring phase, paired 2 % gate | **PASS**, all four model × backend combinations |
-| Gemma numerics against the independent llama.cpp oracle | frozen oracle (Prism 01ae597e): **FAIL**, both contracts, `order`, the oracle's error (geistlib#728). Latest llama.cpp v0.6.0: same option on all fixtures; original contract **FAIL** (1.3–2.4 logits), #94 contract PASS |
+| Gemma numerics against the independent llama.cpp oracle | **PASS** under the #94 contract (in force since 2026-10-09) against the latest llama.cpp (v0.6.0), engine `12f77e8`, NEON and Metal: same option on every fixture, logits within 1.3–2.4. The original contract (atol 0.10) still fails and is reported only |
 | Lifecycle, 100 requests × 3 cycles, frozen memory budgets | Metal **PASS** (both models); CPU **FAIL** (geistlib#729) |
 | Quality | development pilot only; **not eligible** |
 
@@ -34,8 +34,9 @@ cpu_neon fix geistlib#698), interleaved:
 | decode, Bonsai CPU | 9.0 tok/s | 8.3 tok/s | **0.922** |
 
 The Bonsai decode mean falls by 7.8 %, from one run (6.5 against 9.1 and 9.3; the old
-engine had 8.9, 8.9, 9.2). The frozen rule uses the mean and allows no rerun, so the
-**original contract** is the gate. The verdict is the same under both (below).
+engine had 8.9, 8.9, 9.2). The frozen rule uses the mean and allows no rerun, so it kept
+the original contract. **On 2026-10-09 the #94 contract was put in force by decision**
+(plan amendment); the original contract is still reported, never as the gate.
 
 FP32 KV for decisions cost nothing measurable (FP32/AUTO 0.995–1.006), so, as the plan
 said, the runtime now passes `GEIST_KV_FP32` for decisions, like the oracle.
@@ -94,7 +95,8 @@ hash): now v0.6.0 (`d81235049`), `tests/fixtures/decisions/gemma4_oracle_llamacp
 Every backend picks the oracle's option on all three fixtures (largest difference per
 fixture shown). The original atol 0.10 / rtol 0.01 still fails: two independent
 implementations do not agree to a tenth of a logit. The contract in force stays the
-original one (the contract choice above); the #94 contract would pass.
+#94 contract (by decision, 2026-10-09): **PASS**. Re-recorded on engine `12f77e8`
+(`apple-17/contract-94-12f77e8/`), the values are identical.
 
 ## Lifecycle
 

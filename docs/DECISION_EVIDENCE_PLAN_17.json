@@ -140,6 +140,14 @@
         "the oracle is always the latest upstream llama.cpp release, recorded by tools/llama_oracle.py before numeric evidence (now v0.6.0, d81235049)",
         "the original 01ae597e oracle and its verdicts stay recorded; the contract choice (the original contract) is unchanged; both contracts are reported"
       ]
+    },
+    {
+      "date": "2026-10-09, user decision",
+      "section": "contract_choice",
+      "change": [
+        "the #94 contract (independent_numeric_94) is the contract in force, by the user's decision; it replaces the outcome of the p1 rule (which had kept the original contract over one Bonsai CPU decode run)",
+        "the original contract is still computed and reported, never as the gate"
+      ]
     }
   ]
 }

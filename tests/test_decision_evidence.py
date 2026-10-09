@@ -59,6 +59,12 @@ for name in ('records-gemma4-cpu', 'records-gemma4-gpu'):
     both = module.against_oracle(plan, plan17, fixture, oracle, apple)
     assert both['original']['verdict'] == latest['verdicts'][name]['original'], name
     assert both['94']['verdict'] == latest['verdicts'][name]['contract_94'], name
+# The contract in force is #94 (decision 2026-10-09): Gemma on engine 12f77e8 against the latest oracle
+assert manifest['apple_17']['contract_in_force'] == '94'
+for proc in ('cpu', 'gpu'):
+    current = [json.loads(line) for line in (validation / 'apple-17/contract-94-12f77e8' / f'records-gemma4-{proc}.jsonl').read_text().splitlines()
+               if line.startswith('{')]
+    assert module.against_oracle(plan, plan17, fixture, oracle, current)['94']['verdict'] == 'PASS', proc
 for section in (manifest, manifest['x86_cpu'], manifest['apple_17']):
     for name, record in section['records'].items():
         assert hashlib.sha256((validation / name).read_bytes()).hexdigest() == record['sha256'], name
