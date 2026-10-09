@@ -91,12 +91,18 @@ def main():
                             records.append({'cycle': cycle, 'index': index, 'rss_bytes': resident, **observed, 'model_calls': result.model_calls})
                     cleanup = model.decision_resources
                     require(cleanup['live_allocations'] == cleanup['live_bytes'] == 0, 'evidence invariant failed')
-                    resident = rss()
-                    require(resident <= plan['rss_cleanup_max_bytes'], 'evidence invariant failed')
+                    resident = rss()  # the model is still loaded: its budget is the max (#17 plan amendment)
+                    require(resident <= plan['rss_max_bytes'], 'evidence invariant failed')
                     if plan['processor'] == 'gpu':
                         require(cleanup['provider_known'], 'evidence invariant failed')
-                        require(cleanup['provider_allocated_bytes'] <= plan['metal_cleanup_max_bytes'], 'evidence invariant failed')
+                        require(cleanup['provider_allocated_bytes'] <= plan['metal_max_bytes'], 'evidence invariant failed')
                     records.append({'cycle': cycle, 'phase': 'decision_cleanup', 'rss_bytes': resident, **cleanup})
+        closed = rss()  # model and config closed: what the cycle left behind
+        require(closed <= plan['rss_cleanup_max_bytes'], 'evidence invariant failed')
+        records.append({'cycle': cycle, 'phase': 'model_closed', 'rss_bytes': closed,
+                        'metal_after_close': 'not observable (no loaded model to ask)'})
+    closed = [r['rss_bytes'] for r in records if r.get('phase') == 'model_closed']
+    require(closed[-1] - closed[0] <= 64 << 20, 'retained growth across cycles')
     print(json.dumps({'schema': 1, 'scope': 'lifecycle only; no numeric/quality eligibility', 'plan_sha256': hashlib.sha256(raw_plan).hexdigest(), 'elapsed_seconds': time.monotonic() - started, 'verdict': 'PASS', 'records': records}, indent=2))
 if __name__ == '__main__':
     main()

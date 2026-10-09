@@ -120,5 +120,18 @@
     "margin_pp": 2,
     "warmup_repeats": "--warmup 0 --repeats 1",
     "verdict": "descriptive; quality eligibility stays false"
-  }
+  },
+  "amendments": [
+    {
+      "date": "2026-10-09 07:50, before any lifecycle run (only P1 timing runs had started)",
+      "section": "lifecycle",
+      "reason": "stress_decisions.py takes its cleanup sample with the model still loaded; a 1 GiB RSS budget there would fail on the weights alone, which says nothing about leaks",
+      "change": [
+        "decision cleanup (model loaded): checked against rss_max_bytes and metal_max_bytes, and live allocations and bytes must be 0",
+        "model closed (new sample at the end of each cycle): RSS <= rss_cleanup_max_bytes (1 GiB)",
+        "Metal provider bytes are readable only while a model is loaded: metal_cleanup_max_bytes is reported as not observable after close, never as PASS",
+        "no retained growth: model-closed RSS of cycle 3 at most 64 MiB above cycle 1"
+      ]
+    }
+  ]
 }
