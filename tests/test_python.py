@@ -37,7 +37,8 @@ with geistr.DecisionConfig(b'{"schema":1,"models":[]}') as cfg:
 print("python: ctypes layout = C headers; decision configuration and default-off")
 
 # ---- catalog: packaged copy, a folder of our own, installed vs available ------------
-assert len(geistr.catalog(folder=tempfile.mkdtemp())) >= 1  # the packaged catalog
+packaged = [m.id for m in geistr.catalog(folder=tempfile.mkdtemp())]  # the packaged catalog: every model, once
+assert packaged and len(packaged) == len(set(packaged)), packaged
 folder = tempfile.mkdtemp(prefix="geistr-py-")
 digest = hashlib.sha256(open(model, "rb").read()).hexdigest()
 entry = {"id": "ref", "name": "Reference", "file": os.path.basename(model),
@@ -49,9 +50,12 @@ json.dump({"schema": 2, "revision": 1, "models": [entry, {**entry, "id": "other"
                                                            "group_id": "other"}]}, open(catalog_file, "w"))
 listing = geistr.catalog(folder=folder, catalog_file=catalog_file)
 assert [m.state for m in listing] == ["available", "available"] and listing[0].resource == "fits"
+order = [m.id for m in listing]  # the ranking, as geistr catalog lists it
 os.link(model, os.path.join(folder, os.path.basename(model)))
 listing = geistr.catalog(folder=folder, catalog_file=catalog_file)
-assert listing[0].id == "ref" and listing[0].installed and listing[0].path.endswith(".gguf"), listing
+assert [m.id for m in listing] == order, listing  # installing moves no row
+ref = next(m for m in listing if m.id == "ref")
+assert ref.installed and ref.path.endswith(".gguf"), listing
 assert [m.id for m in geistr.catalog(installed=True, folder=folder, catalog_file=catalog_file)] == ["ref"]
 assert [m.id for m in geistr.catalog(available=True, folder=folder, catalog_file=catalog_file)] == ["other"]
 try:

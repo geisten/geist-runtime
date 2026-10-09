@@ -224,7 +224,7 @@ def _state(entry: _Entry, folder: str) -> str:
 
 def catalog(installed: bool = False, available: bool = False, *, folder: str | None = None,
             catalog_file: str | None = None) -> list[Entry]:
-    """The catalog models and their state here, installed first. Offline.
+    """The catalog models and their state here, in ranking order (as geistr catalog lists them). Offline.
     The first listing hashes each model file once (seconds per GB)."""
     folder = folder or models_dir()
     cat = _Catalog(folder, catalog_file)
@@ -233,19 +233,16 @@ def catalog(installed: bool = False, available: bool = False, *, folder: str | N
     ranking = _p()
     _check(_rank(cat.handle, C.byref(device), None, None, C.byref(ranking)))
     try:
-        fits = {}
+        out = []  # in ranking order, as geistr catalog lists them; installed or not does not count
         for i in range(_ranking_count(ranking)):
             f = _ranking_get(ranking, i).contents
-            fits[f.entry.contents.id] = (_RESOURCE[f.resource], _s(f.resource_reason))
-        out = []
-        for e in cat.entries():
-            resource, reason = fits[e.id]
+            e = f.entry.contents
+            resource, reason = _RESOURCE[f.resource], _s(f.resource_reason)
             out.append(Entry(_s(e.id), _s(e.name), _s(e.quantization), _s(e.file), _s(e.url), _s(e.sha256),
                              e.bytes, e.recommended_ram_gib, _state(e, folder), resource, reason,
                              os.path.join(folder, _s(e.file)), _s(e.reasoning_format)))
     finally:
         _ranking_free(ranking)
-    out.sort(key=lambda m: not m.installed)
     return [m for m in out if not (installed and not m.installed) and not (available and m.installed)]
 
 

@@ -112,14 +112,22 @@ def finish_chat(pid, fd):
     os.close(fd)
 
 # ---- catalog: available → installed (verified) → mismatch ----------------------
+def text_ids(*args):
+    """The ids in geistr catalog's text listing, in its order."""
+    return [line.split()[1] for line in geistr_run('catalog', *args).stdout.splitlines() if line[:1] in '✓↓⟳✗']
+
+
 def section_catalog():
     states = listing()
     assert [m['state'] for m in states.values()] == ['available'] * 4, states
+    order = list(states)  # the ranking: how well each model suits this computer
+    assert sorted(order) == sorted(m['id'] for m in catalog['models']), order  # every model, once
+    assert text_ids() == order, (text_ids(), order)
     assert states['huge']['resource'] == 'unavailable' and states['huge']['resource_reason'] in ('ram', 'disk')
     install_models()
     states = listing()
     assert states['ref']['state'] == 'installed' and states['wrong']['state'] == 'mismatch', states
-    assert list(states)[0] == 'ref'  # installed first
+    assert list(states) == order and text_ids() == order, (list(states), order)  # installing moves no row
     text = geistr_run('catalog').stdout
     assert '✓ ref' in text and '↓ tiny' in text and '⟳ wrong' in text and '✗' in text.split('huge')[1], text
     r = geistr_run('pull', binary=nonet)  # update: wrong is not this catalog's file, so it would be downloaded again
@@ -128,6 +136,16 @@ def section_catalog():
     assert r.returncode == 0 and r.stdout.startswith('geistr ') and 'catalog revision' in r.stdout and 'engine ' in r.stdout, r.stdout
     assert geistr_run('catalog', '--installed').stdout.count('\n') == 1
     assert 'ref' not in geistr_run('catalog', '--available').stdout
+    installed = [i for i in order if states[i]['state'] == 'installed']
+    assert text_ids('--installed') == installed and text_ids('--available') == [i for i in order if i not in installed]
+    # the bundled catalog: every model listed once, in ranking order, text as JSON
+    bundled = json.loads(open(os.path.join(os.path.dirname(__file__), '..', 'models', 'catalog.json')).read())
+    empty = os.path.join(tmp, 'no-models'); os.makedirs(empty, exist_ok=True)
+    bundled_run = lambda *a: subprocess.run([geistr, 'catalog', *a, '--models', empty], capture_output=True, text=True,
+                                            env=env, timeout=120).stdout
+    shown = [m['id'] for m in json.loads(bundled_run('--json'))['models']]
+    assert sorted(shown) == sorted(m['id'] for m in bundled['models']) and len(shown) == len(set(shown)), shown
+    assert [line.split()[1] for line in bundled_run().splitlines() if line[:1] in '✓↓⟳✗'] == shown
     print('geistr catalog: states, receipts, --json schema, filters passed')
 
 # ---- exit codes ------------------------------------------------------------

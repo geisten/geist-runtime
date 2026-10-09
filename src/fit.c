@@ -282,6 +282,7 @@ struct candidate {
     double         rate;    /* pass rate 0..1, < 0 without a reference test */
     double         seconds; /* per typical answer; < 0 unknown */
     bool           installed;
+    bool           embedding; /* no chat: after every chat model (#91) */
 };
 
 static int verdict_rank(geistr_verdict v) {
@@ -291,6 +292,8 @@ static int verdict_rank(geistr_verdict v) {
 /* app_candidate_better: verdict, known quality, installed, pass rate (within
  * RATE_TIE equal), then speed. */
 static bool better(struct candidate a, struct candidate b) {
+    if (a.embedding != b.embedding)
+        return b.embedding;
     if (verdict_rank(a.verdict) != verdict_rank(b.verdict))
         return verdict_rank(a.verdict) < verdict_rank(b.verdict);
     if ((a.rate >= 0) != (b.rate >= 0))
@@ -392,9 +395,9 @@ geistr_status geistr_rank(const geistr_catalog *catalog, const geistr_device *de
         f->estimated_from = estimated ? measured[fastest > 0 ? 1 : 0] : 0;
 
         double           rate      = f->total ? (double) f->passed / f->total : -1;
-        struct candidate candidate = {f->verdict, rate, seconds, f->installed};
+        struct candidate candidate = {f->verdict, rate, seconds, f->installed, m->embedding};
         /* Suitability order ignores installed: stable insertion. */
-        struct candidate fit = {f->verdict, rate, seconds, false};
+        struct candidate fit = {f->verdict, rate, seconds, false, m->embedding};
         size_t           at  = i;
         while (at > 0 && better(fit, ranked[at - 1]))
             ranked[at] = ranked[at - 1], r->order[at] = r->order[at - 1], --at;

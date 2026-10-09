@@ -237,17 +237,17 @@ static int catalog(bool installed_only, bool available_only, bool json) {
     if (json)
         printf("{\"schema\":1,\"models_dir\":"), json_write(stdout, models_dir), printf(",\"models\":[");
     bool first = true;
-    /* Installed first, then available; catalog order within each. */
-    for (int pass = 0; pass < 2; pass++)
-        for (size_t i = 0; i < n; i++) {
-            const geistr_catalog_entry *m         = geistr_catalog_get(c, i);
+    /* In ranking order: how well each model suits this computer; installed or
+     * not does not move a row (geistr_ranking_get). */
+    for (size_t k = 0; k < geistr_ranking_count(r); k++) {
+            const geistr_fit           *f = geistr_ranking_get(r, k);
+            const geistr_catalog_entry *m = f->entry;
+            size_t                      i = 0;
+            while (i < n && geistr_catalog_get(c, i) != m) /* ponytail: linear, a catalog has a handful of models */
+                i++;
             const geistr_decision_policy *permission = geistr_decision_config_find(m->sha256, permissions);
             bool                        installed = state[i] == GEISTR_INSTALL_OK;
-            const geistr_fit           *f         = nullptr;
-            for (size_t k = 0; k < geistr_ranking_count(r); k++)
-                if (geistr_ranking_get(r, k)->entry == m)
-                    f = geistr_ranking_get(r, k);
-            if (installed != (pass == 0) || (installed_only && !installed) || (available_only && installed))
+            if ((installed_only && !installed) || (available_only && installed))
                 continue;
             if (json) {
                 static const char *const states[]    = {"available", "unverified", "installed", "mismatch"};
