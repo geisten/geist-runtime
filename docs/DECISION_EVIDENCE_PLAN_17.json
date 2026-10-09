@@ -123,7 +123,7 @@
   },
   "amendments": [
     {
-      "date": "2026-10-09 07:50, before any lifecycle run (only P1 timing runs had started)",
+      "date": "2026-10-09 07:37, before any lifecycle run (only P1 timing runs had started)",
       "section": "lifecycle",
       "reason": "stress_decisions.py takes its cleanup sample with the model still loaded; a 1 GiB RSS budget there would fail on the weights alone, which says nothing about leaks",
       "change": [
