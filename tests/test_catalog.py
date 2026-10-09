@@ -72,4 +72,10 @@ text = json.dumps(good)
 for bad in [text + 'x', text + '{}', text[:-1], '[' + text + ']', '', text.replace('"schema"', '"sch\\u0065ma"')]:
     assert not accepts(bad), bad[-40:]
 assert accepts(text + '\n')
-print(f'test_catalog.py: {len(invalid) + 6} invalid catalogs refused')
+# The bundled catalog downloads from fixed commits only: a push to a model repository cannot change
+# what geistr fetches (tools/check_catalog.py --pin; the catalog-check workflow checks them weekly)
+import re
+for m in base['models']:
+    for url in [m['url']] + ([m['vision']['url']] if 'vision' in m else []):
+        assert re.search(r'/resolve/[0-9a-f]{40}/', url), f"{m['id']}: not pinned to a commit: {url}"
+print(f'test_catalog.py: {len(invalid) + 6} invalid catalogs refused; bundled URLs pinned')
