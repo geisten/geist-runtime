@@ -1,4 +1,5 @@
-// Independent development oracle on the exact GGUF, pinned llama.cpp/Prism.
+// Independent development oracle on the exact GGUF: the latest upstream llama.cpp
+// release (tools/llama_oracle.py builds and runs it).
 // stdin: n_prompt n_candidates prompt_ids... candidate_ids... (one case/line).
 // CPU, six threads, F32 KV, no flash attention; last prompt position only.
 #include "llama.h"
@@ -13,6 +14,7 @@
 int main(int argc, char **argv) {
     if (argc != 2)
         return 2;
+    ggml_backend_load_all(); /* a build with dynamic backends; a no-op for static ones */
     auto mp = llama_model_default_params();
     ggml_backend_dev_t cpu_only[] = {nullptr};
     mp.devices = cpu_only;

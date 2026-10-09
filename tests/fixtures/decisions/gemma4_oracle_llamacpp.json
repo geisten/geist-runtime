@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "scope": "independent numerical oracle for the decision fixtures; not MMLU quality",
+  "policy": "the latest upstream llama.cpp release at recording time (decision 2026-10-09)",
+  "artifact_sha256": "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
+  "token_fixture_sha256": "ecf29659383ca2d7531c34c575c55171b1f45c3839a659e04f7747f7239f4e35",
+  "reference": {
+    "project": "ggml-org/llama.cpp",
+    "tag": "v0.6.0",
+    "commit": "d81235049384534c167caea52b85a694f6103d14",
+    "binary_sha256": "941d7d6010f2c0b69bab72e6798ce4e236a2305329cd1a5bb24c4c799194b838",
+    "source_sha256": "ad47fc5e3bf95a38c4ab135fdcb02785ca3c4834465db3097fedeb67ac1c3e42",
+    "host": "Darwin arm64"
+  },
+  "execution": "CPU only (no offload devices, n_gpu_layers=0, offload_kqv=false, op_offload=false), F32 KV, flash attention disabled, six threads, last prompt logits only",
+  "cases": [
+    "plain",
+    "unicode",
+    "order"
+  ],
+  "outputs": [
+    {
+      "best_index": 0,
+      "logits": [
+        12.8477135,
+        0.113436364
+      ]
+    },
+    {
+      "best_index": 0,
+      "logits": [
+        10.0194235,
+        9.37349129
+      ]
+    },
+    {
+      "best_index": 3,
+      "logits": [
+        -5.84203196,
+        3.97770357,
+        -1.62239003,
+        13.4990683
+      ]
+    }
+  ]
+}

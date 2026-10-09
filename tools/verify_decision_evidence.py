@@ -60,6 +60,19 @@ def numerical_94(plan17, fixture, reference, actual):
             'contract': '94', 'verdict': verdict, 'cases': reports}
 
 
+def against_oracle(plan, plan17, fixture, oracle, actual):
+    """Both contracts against an oracle recorded by tools/llama_oracle.py (the
+    latest llama.cpp release, decision 2026-10-09): its own provenance replaces
+    the original plan's pinned revision; thresholds are unchanged."""
+    require(oracle['artifact_sha256'] == fixture['artifact_sha256'] == plan['independent_numeric']['artifact_sha256'],
+            'evidence invariant failed')
+    require(oracle['cases'] == [case['id'] for case in fixture['cases']], 'evidence invariant failed')
+    pinned = dict(oracle, reference_revision=plan['independent_numeric']['reference_revision'],
+                  token_fixture_sha256=hashlib.sha256(json.dumps(fixture, ensure_ascii=False, indent=2).encode() + b'\n').hexdigest())
+    return {'oracle': oracle['reference'], 'original': numerical(plan, fixture, pinned, actual),
+            '94': numerical_94(plan17, fixture, oracle, actual)}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--plan', type=Path, required=True)
@@ -67,7 +80,16 @@ def main():
     parser.add_argument('--reference', type=Path, required=True)
     parser.add_argument('--actual', type=Path, required=True)
     parser.add_argument('--plan-17', type=Path, help="#17's plan: check under its #94 contract instead")
+    parser.add_argument('--oracle', action='store_true',
+                        help='--reference is a tools/llama_oracle.py file: report both contracts (needs --plan-17)')
     args = parser.parse_args()
+    if args.oracle:
+        rows = [json.loads(line) for line in args.actual.read_text().splitlines() if line.startswith('{')]
+        rows = [dict(r, mode=r.get('mode', 1)) for r in rows]
+        report = against_oracle(json.loads(args.plan.read_text()), json.loads(args.plan_17.read_text()),
+                                json.loads(args.fixture.read_text()), json.loads(args.reference.read_text()), rows)
+        print(json.dumps(report, indent=2))
+        return 0 if report['original']['verdict'] == 'PASS' else 1
     reference = json.loads(args.reference.read_text())
     require(reference['plan_sha256'] == sha(args.plan), 'changed numerical contract')
     rows = [json.loads(line) for line in args.actual.read_text().splitlines() if line.startswith('{')]
