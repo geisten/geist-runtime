@@ -1,0 +1,12 @@
+{"profile":"gemma4","backend":"metal","mode":1,"fixture":0,"native_ids":true,"direct_bit_identical":true,"model_calls":1}
+{"profile":"gemma4","backend":"metal","mode":1,"fixture":0,"best_index":0,"logits":[12.647397,-1.23725319]}
+{"profile":"gemma4","backend":"metal","mode":1,"fixture":1,"native_ids":true,"direct_bit_identical":true,"model_calls":1}
+{"profile":"gemma4","backend":"metal","mode":1,"fixture":1,"best_index":0,"logits":[10.356452,7.15609074]}
+{"profile":"gemma4","backend":"metal","mode":1,"fixture":2,"native_ids":true,"direct_bit_identical":true,"model_calls":1}
+{"profile":"gemma4","backend":"metal","mode":1,"fixture":2,"best_index":3,"logits":[-7.01862574,4.92629194,-3.00782371,12.294632]}
+{"profile":"gemma4","backend":"metal","mode":2,"fixture":0,"native_ids":true,"direct_bit_identical":true,"model_calls":1}
+{"profile":"gemma4","backend":"metal","mode":2,"fixture":0,"best_index":0,"logits":[12.647397,-1.23725319]}
+{"profile":"gemma4","backend":"metal","mode":2,"fixture":1,"native_ids":true,"direct_bit_identical":true,"model_calls":1}
+{"profile":"gemma4","backend":"metal","mode":2,"fixture":1,"best_index":0,"logits":[10.356452,7.15609074]}
+{"profile":"gemma4","backend":"metal","mode":2,"fixture":2,"native_ids":true,"direct_bit_identical":true,"model_calls":1}
+{"profile":"gemma4","backend":"metal","mode":2,"fixture":2,"best_index":3,"logits":[-7.01862574,4.92629194,-3.00782371,12.294632]}
