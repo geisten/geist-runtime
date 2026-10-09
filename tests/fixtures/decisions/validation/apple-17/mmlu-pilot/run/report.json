@@ -1,0 +1,1029 @@
+{
+  "profiles": {
+    "chat_direct": {
+      "modes": {
+        "decision_dense": {
+          "quality": {
+            "n": 8,
+            "accuracy": 0.5,
+            "log_loss": 2.8284653849480725,
+            "brier_sum_over_classes": 0.7856245612382333,
+            "temperature": 1.0,
+            "ece_equal_width": 0.4359000313764416,
+            "reliability": [
+              {
+                "lower": 0.0,
+                "upper": 0.1,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.1,
+                "upper": 0.2,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.2,
+                "upper": 0.3,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.3,
+                "upper": 0.4,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.4,
+                "upper": 0.5,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.5,
+                "upper": 0.6,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.6,
+                "upper": 0.7,
+                "n": 1,
+                "mean_confidence": 0.612238715115369,
+                "accuracy": 0
+              },
+              {
+                "lower": 0.7,
+                "upper": 0.8,
+                "n": 1,
+                "mean_confidence": 0.7269253469580423,
+                "accuracy": 0
+              },
+              {
+                "lower": 0.8,
+                "upper": 0.9,
+                "n": 1,
+                "mean_confidence": 0.8309181826843444,
+                "accuracy": 1
+              },
+              {
+                "lower": 0.9,
+                "upper": 1.0,
+                "n": 5,
+                "mean_confidence": 0.9957908743244932,
+                "accuracy": 0.6
+              }
+            ],
+            "by_subject": {
+              "clinical_knowledge": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "electrical_engineering": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "high_school_biology": {
+                "n": 1,
+                "accuracy": 1
+              },
+              "high_school_physics": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "international_law": {
+                "n": 1,
+                "accuracy": 1
+              },
+              "moral_disputes": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "nutrition": {
+                "n": 1,
+                "accuracy": 1
+              },
+              "professional_psychology": {
+                "n": 1,
+                "accuracy": 1
+              }
+            }
+          },
+          "rotation_accuracy_supplementary": {
+            "1": 0.5,
+            "2": 0.25,
+            "3": 0.5
+          },
+          "latency": {
+            "warm_sample_p50_ms": 1128.5955,
+            "warm_sample_p95_ms": 1254.8956999999998,
+            "question_median_p50_ms": 1128.5955,
+            "question_median_p95_ms": 1254.8956999999998,
+            "mean_question_median_ms": 1077.88725,
+            "first_call_median_ms": 1066.185,
+            "sequential_rate_estimate_qps": 0.9277408189029047
+          },
+          "peak_process_rss_bytes": 691355648,
+          "projected_rows": [
+            262144
+          ],
+          "logit_readback_bytes": [
+            1048576
+          ]
+        },
+        "decision_selected": {
+          "quality": {
+            "n": 8,
+            "accuracy": 0.5,
+            "log_loss": 2.8284653849480725,
+            "brier_sum_over_classes": 0.7856245612382333,
+            "temperature": 1.0,
+            "ece_equal_width": 0.4359000313764416,
+            "reliability": [
+              {
+                "lower": 0.0,
+                "upper": 0.1,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.1,
+                "upper": 0.2,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.2,
+                "upper": 0.3,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.3,
+                "upper": 0.4,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.4,
+                "upper": 0.5,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.5,
+                "upper": 0.6,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.6,
+                "upper": 0.7,
+                "n": 1,
+                "mean_confidence": 0.612238715115369,
+                "accuracy": 0
+              },
+              {
+                "lower": 0.7,
+                "upper": 0.8,
+                "n": 1,
+                "mean_confidence": 0.7269253469580423,
+                "accuracy": 0
+              },
+              {
+                "lower": 0.8,
+                "upper": 0.9,
+                "n": 1,
+                "mean_confidence": 0.8309181826843444,
+                "accuracy": 1
+              },
+              {
+                "lower": 0.9,
+                "upper": 1.0,
+                "n": 5,
+                "mean_confidence": 0.9957908743244932,
+                "accuracy": 0.6
+              }
+            ],
+            "by_subject": {
+              "clinical_knowledge": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "electrical_engineering": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "high_school_biology": {
+                "n": 1,
+                "accuracy": 1
+              },
+              "high_school_physics": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "international_law": {
+                "n": 1,
+                "accuracy": 1
+              },
+              "moral_disputes": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "nutrition": {
+                "n": 1,
+                "accuracy": 1
+              },
+              "professional_psychology": {
+                "n": 1,
+                "accuracy": 1
+              }
+            }
+          },
+          "rotation_accuracy_supplementary": {
+            "1": 0.5,
+            "2": 0.25,
+            "3": 0.5
+          },
+          "latency": {
+            "warm_sample_p50_ms": 1059.673,
+            "warm_sample_p95_ms": 1271.65495,
+            "question_median_p50_ms": 1059.673,
+            "question_median_p95_ms": 1271.65495,
+            "mean_question_median_ms": 1064.403625,
+            "first_call_median_ms": 1063.301,
+            "sequential_rate_estimate_qps": 0.9394932303053741
+          },
+          "peak_process_rss_bytes": 691355648,
+          "projected_rows": [
+            12
+          ],
+          "logit_readback_bytes": [
+            48
+          ]
+        },
+        "scorealt_dense": {
+          "quality": {
+            "n": 8,
+            "accuracy": 0.5,
+            "log_loss": 2.8284653849480725,
+            "brier_sum_over_classes": 0.7856245612382333,
+            "temperature": 1.0,
+            "ece_equal_width": 0.4359000313764416,
+            "reliability": [
+              {
+                "lower": 0.0,
+                "upper": 0.1,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.1,
+                "upper": 0.2,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.2,
+                "upper": 0.3,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.3,
+                "upper": 0.4,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.4,
+                "upper": 0.5,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.5,
+                "upper": 0.6,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.6,
+                "upper": 0.7,
+                "n": 1,
+                "mean_confidence": 0.612238715115369,
+                "accuracy": 0
+              },
+              {
+                "lower": 0.7,
+                "upper": 0.8,
+                "n": 1,
+                "mean_confidence": 0.7269253469580423,
+                "accuracy": 0
+              },
+              {
+                "lower": 0.8,
+                "upper": 0.9,
+                "n": 1,
+                "mean_confidence": 0.8309181826843444,
+                "accuracy": 1
+              },
+              {
+                "lower": 0.9,
+                "upper": 1.0,
+                "n": 5,
+                "mean_confidence": 0.9957908743244932,
+                "accuracy": 0.6
+              }
+            ],
+            "by_subject": {
+              "clinical_knowledge": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "electrical_engineering": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "high_school_biology": {
+                "n": 1,
+                "accuracy": 1
+              },
+              "high_school_physics": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "international_law": {
+                "n": 1,
+                "accuracy": 1
+              },
+              "moral_disputes": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "nutrition": {
+                "n": 1,
+                "accuracy": 1
+              },
+              "professional_psychology": {
+                "n": 1,
+                "accuracy": 1
+              }
+            }
+          },
+          "rotation_accuracy_supplementary": {
+            "1": 0.5,
+            "2": 0.25,
+            "3": 0.5
+          },
+          "latency": {
+            "warm_sample_p50_ms": 1065.9395,
+            "warm_sample_p95_ms": 1315.31635,
+            "question_median_p50_ms": 1065.9395,
+            "question_median_p95_ms": 1315.31635,
+            "mean_question_median_ms": 1073.363125,
+            "first_call_median_ms": 1058.3519999999999,
+            "sequential_rate_estimate_qps": 0.9316511595272102
+          },
+          "peak_process_rss_bytes": 691355648,
+          "projected_rows": [
+            262144
+          ],
+          "logit_readback_bytes": [
+            1048576
+          ]
+        },
+        "generate_1": {
+          "quality": {
+            "n": 8,
+            "accuracy": 0.5,
+            "invalid_answers": 0,
+            "invalid_reasons": {},
+            "capped_outputs": 8,
+            "by_subject": {
+              "clinical_knowledge": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "electrical_engineering": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "high_school_biology": {
+                "n": 1,
+                "accuracy": 1
+              },
+              "high_school_physics": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "international_law": {
+                "n": 1,
+                "accuracy": 1
+              },
+              "moral_disputes": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "nutrition": {
+                "n": 1,
+                "accuracy": 1
+              },
+              "professional_psychology": {
+                "n": 1,
+                "accuracy": 1
+              }
+            },
+            "generated_tokens": {
+              "min": 1,
+              "max": 1,
+              "mean": 1
+            }
+          },
+          "rotation_accuracy_supplementary": {
+            "1": 0.5,
+            "2": 0.25,
+            "3": 0.5
+          },
+          "latency": {
+            "warm_sample_p50_ms": 1064.2355,
+            "warm_sample_p95_ms": 1308.2727,
+            "question_median_p50_ms": 1064.2355,
+            "question_median_p95_ms": 1308.2727,
+            "mean_question_median_ms": 1076.763,
+            "first_call_median_ms": 1029.987,
+            "sequential_rate_estimate_qps": 0.928709474601189
+          },
+          "peak_process_rss_bytes": 691355648
+        }
+      },
+      "campaign_wall_ms": 276445.41016605217,
+      "runtime": {
+        "kind": "runtime",
+        "version": "0.20.0",
+        "backend": "metal",
+        "vocab": 262144,
+        "kv_mode": "fp32",
+        "eos_token_id": 106
+      }
+    },
+    "cloze": {
+      "modes": {
+        "decision_dense": {
+          "quality": {
+            "n": 8,
+            "accuracy": 0.125,
+            "log_loss": 3.0022909346695865,
+            "brier_sum_over_classes": 1.3143362765914488,
+            "temperature": 1.0,
+            "ece_equal_width": 0.6861883452927017,
+            "reliability": [
+              {
+                "lower": 0.0,
+                "upper": 0.1,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.1,
+                "upper": 0.2,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.2,
+                "upper": 0.3,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.3,
+                "upper": 0.4,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.4,
+                "upper": 0.5,
+                "n": 1,
+                "mean_confidence": 0.4518296601352974,
+                "accuracy": 0
+              },
+              {
+                "lower": 0.5,
+                "upper": 0.6,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.6,
+                "upper": 0.7,
+                "n": 1,
+                "mean_confidence": 0.6169568526856961,
+                "accuracy": 0
+              },
+              {
+                "lower": 0.7,
+                "upper": 0.8,
+                "n": 1,
+                "mean_confidence": 0.7596749470054153,
+                "accuracy": 0
+              },
+              {
+                "lower": 0.8,
+                "upper": 0.9,
+                "n": 2,
+                "mean_confidence": 0.8801144536519048,
+                "accuracy": 0.5
+              },
+              {
+                "lower": 0.9,
+                "upper": 1.0,
+                "n": 3,
+                "mean_confidence": 0.9669387984037984,
+                "accuracy": 0
+              }
+            ],
+            "by_subject": {
+              "clinical_knowledge": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "electrical_engineering": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "high_school_biology": {
+                "n": 1,
+                "accuracy": 1
+              },
+              "high_school_physics": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "international_law": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "moral_disputes": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "nutrition": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "professional_psychology": {
+                "n": 1,
+                "accuracy": 0
+              }
+            }
+          },
+          "rotation_accuracy_supplementary": {
+            "1": 0.5,
+            "2": 0.5,
+            "3": 0.5
+          },
+          "latency": {
+            "warm_sample_p50_ms": 825.221,
+            "warm_sample_p95_ms": 923.58645,
+            "question_median_p50_ms": 825.221,
+            "question_median_p95_ms": 923.58645,
+            "mean_question_median_ms": 815.9715,
+            "first_call_median_ms": 848.7595,
+            "sequential_rate_estimate_qps": 1.2255329996206976
+          },
+          "peak_process_rss_bytes": 683802624,
+          "projected_rows": [
+            262144
+          ],
+          "logit_readback_bytes": [
+            1048576
+          ]
+        },
+        "decision_selected": {
+          "quality": {
+            "n": 8,
+            "accuracy": 0.125,
+            "log_loss": 3.0022909346695865,
+            "brier_sum_over_classes": 1.3143362765914488,
+            "temperature": 1.0,
+            "ece_equal_width": 0.6861883452927017,
+            "reliability": [
+              {
+                "lower": 0.0,
+                "upper": 0.1,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.1,
+                "upper": 0.2,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.2,
+                "upper": 0.3,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.3,
+                "upper": 0.4,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.4,
+                "upper": 0.5,
+                "n": 1,
+                "mean_confidence": 0.4518296601352974,
+                "accuracy": 0
+              },
+              {
+                "lower": 0.5,
+                "upper": 0.6,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.6,
+                "upper": 0.7,
+                "n": 1,
+                "mean_confidence": 0.6169568526856961,
+                "accuracy": 0
+              },
+              {
+                "lower": 0.7,
+                "upper": 0.8,
+                "n": 1,
+                "mean_confidence": 0.7596749470054153,
+                "accuracy": 0
+              },
+              {
+                "lower": 0.8,
+                "upper": 0.9,
+                "n": 2,
+                "mean_confidence": 0.8801144536519048,
+                "accuracy": 0.5
+              },
+              {
+                "lower": 0.9,
+                "upper": 1.0,
+                "n": 3,
+                "mean_confidence": 0.9669387984037984,
+                "accuracy": 0
+              }
+            ],
+            "by_subject": {
+              "clinical_knowledge": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "electrical_engineering": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "high_school_biology": {
+                "n": 1,
+                "accuracy": 1
+              },
+              "high_school_physics": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "international_law": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "moral_disputes": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "nutrition": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "professional_psychology": {
+                "n": 1,
+                "accuracy": 0
+              }
+            }
+          },
+          "rotation_accuracy_supplementary": {
+            "1": 0.5,
+            "2": 0.5,
+            "3": 0.5
+          },
+          "latency": {
+            "warm_sample_p50_ms": 831.7515000000001,
+            "warm_sample_p95_ms": 935.12005,
+            "question_median_p50_ms": 831.7515000000001,
+            "question_median_p95_ms": 935.12005,
+            "mean_question_median_ms": 811.1095,
+            "first_call_median_ms": 810.489,
+            "sequential_rate_estimate_qps": 1.2328791611983339
+          },
+          "peak_process_rss_bytes": 683802624,
+          "projected_rows": [
+            16
+          ],
+          "logit_readback_bytes": [
+            64
+          ]
+        },
+        "scorealt_dense": {
+          "quality": {
+            "n": 8,
+            "accuracy": 0.125,
+            "log_loss": 3.0022909346695865,
+            "brier_sum_over_classes": 1.3143362765914488,
+            "temperature": 1.0,
+            "ece_equal_width": 0.6861883452927017,
+            "reliability": [
+              {
+                "lower": 0.0,
+                "upper": 0.1,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.1,
+                "upper": 0.2,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.2,
+                "upper": 0.3,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.3,
+                "upper": 0.4,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.4,
+                "upper": 0.5,
+                "n": 1,
+                "mean_confidence": 0.4518296601352974,
+                "accuracy": 0
+              },
+              {
+                "lower": 0.5,
+                "upper": 0.6,
+                "n": 0,
+                "mean_confidence": null,
+                "accuracy": null
+              },
+              {
+                "lower": 0.6,
+                "upper": 0.7,
+                "n": 1,
+                "mean_confidence": 0.6169568526856961,
+                "accuracy": 0
+              },
+              {
+                "lower": 0.7,
+                "upper": 0.8,
+                "n": 1,
+                "mean_confidence": 0.7596749470054153,
+                "accuracy": 0
+              },
+              {
+                "lower": 0.8,
+                "upper": 0.9,
+                "n": 2,
+                "mean_confidence": 0.8801144536519048,
+                "accuracy": 0.5
+              },
+              {
+                "lower": 0.9,
+                "upper": 1.0,
+                "n": 3,
+                "mean_confidence": 0.9669387984037984,
+                "accuracy": 0
+              }
+            ],
+            "by_subject": {
+              "clinical_knowledge": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "electrical_engineering": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "high_school_biology": {
+                "n": 1,
+                "accuracy": 1
+              },
+              "high_school_physics": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "international_law": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "moral_disputes": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "nutrition": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "professional_psychology": {
+                "n": 1,
+                "accuracy": 0
+              }
+            }
+          },
+          "rotation_accuracy_supplementary": {
+            "1": 0.5,
+            "2": 0.5,
+            "3": 0.5
+          },
+          "latency": {
+            "warm_sample_p50_ms": 816.8805,
+            "warm_sample_p95_ms": 936.78715,
+            "question_median_p50_ms": 816.8805,
+            "question_median_p95_ms": 936.78715,
+            "mean_question_median_ms": 813.5583750000001,
+            "first_call_median_ms": 809.827,
+            "sequential_rate_estimate_qps": 1.229168097495155
+          },
+          "peak_process_rss_bytes": 683802624,
+          "projected_rows": [
+            262144
+          ],
+          "logit_readback_bytes": [
+            1048576
+          ]
+        }
+      },
+      "campaign_wall_ms": 158401.40362503007,
+      "runtime": {
+        "kind": "runtime",
+        "version": "0.20.0",
+        "backend": "metal",
+        "vocab": 262144,
+        "kv_mode": "fp32",
+        "eos_token_id": 106
+      }
+    },
+    "chat_reasoning": {
+      "modes": {
+        "generate_long": {
+          "quality": {
+            "n": 8,
+            "accuracy": 0,
+            "invalid_answers": 8,
+            "invalid_reasons": {
+              "invalid_final_answer": 8
+            },
+            "capped_outputs": 3,
+            "by_subject": {
+              "clinical_knowledge": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "electrical_engineering": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "high_school_biology": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "high_school_physics": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "international_law": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "moral_disputes": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "nutrition": {
+                "n": 1,
+                "accuracy": 0
+              },
+              "professional_psychology": {
+                "n": 1,
+                "accuracy": 0
+              }
+            },
+            "generated_tokens": {
+              "min": 222,
+              "max": 512,
+              "mean": 381.625
+            }
+          },
+          "rotation_accuracy_supplementary": {
+            "1": 0,
+            "2": 0,
+            "3": 0
+          },
+          "latency": {
+            "warm_sample_p50_ms": 5773.474,
+            "warm_sample_p95_ms": 8423.78105,
+            "question_median_p50_ms": 5773.474,
+            "question_median_p95_ms": 8423.78105,
+            "mean_question_median_ms": 6015.798125,
+            "first_call_median_ms": 5630.898999999999,
+            "sequential_rate_estimate_qps": 0.16622898229318492
+          },
+          "peak_process_rss_bytes": 560824320
+        }
+      },
+      "campaign_wall_ms": 383596.62325005047,
+      "runtime": {
+        "kind": "runtime",
+        "version": "0.20.0",
+        "backend": "metal",
+        "vocab": 262144,
+        "kv_mode": "fp32",
+        "eos_token_id": 106
+      }
+    }
+  },
+  "limitations": [
+    "Preparation loads/checksums the model. No cache eviction: first per-case calls are post-setup and not cold-cache measurements. Profiles run serially in separate processes.",
+    "Process peak RSS includes loaded model and all retained session/decision handles; it is not incremental arm memory.",
+    "Driver reset+prefill+score/generate. Preprocessing and text/answer conversion separate. Additive estimates exclude setup, validation tokenizations, dataset I/O and benchmark reference arms. No fallback/abstention route."
+  ],
+  "comparison": {
+    "paired_quality": {
+      "n": 8,
+      "gains": 4,
+      "losses": 0,
+      "direct_accuracy": 0.5,
+      "baseline_accuracy": 0,
+      "difference_pp": 50.0,
+      "confidence": 0.95,
+      "interval_pp": [
+        -29.298579285489385,
+        87.12332766265145
+      ],
+      "margin_pp": 2.0,
+      "noninferior": false,
+      "interval_method": "paired gain/loss exact binomial intervals with Bonferroni joint coverage; conservative",
+      "assumptions": "Independent questions from the target population. A small subject-stratified pilot is exploratory; repeated timings and label rotations are not additional quality samples.",
+      "inference_p50_ms_ratio_reasoning_over_selected": 5.651801613321263,
+      "additive_component_estimate_ms_ratio_reasoning_over_selected": 5.647167153375889
+    },
+    "quality_matched_speedup_eligible": false,
+    "blockers": [
+      "not a complete held-out quality run",
+      "declared noninferiority margin not established",
+      "reasoning baseline contains invalid or capped answers"
+    ],
+    "scope": "Same questions, greedy FP32 geist policies. Additive preprocessing/surface/parse costs are estimates, not measured service latency. No claim of published Bonsai or Jev parity."
+  },
+  "campaign_wall_ms_including_setup_validation_and_reference_arms": 820096.2707910221,
+  "model_query_count_including_reference_arms_and_repeats": 512,
+  "acceptance_scope": "This harness does not establish external Prism same-token parity or Jev equivalence. Pilot reports remain exploratory even when observed accuracies agree. No production rollout decision is automatic."
+}

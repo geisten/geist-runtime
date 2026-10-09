@@ -1,0 +1,58 @@
+{
+  "protocol": "geist-decision-mmlu-cases-v1",
+  "dataset": "cais/mmlu",
+  "dataset_revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+  "dataset_files_sha256": {
+    "dev": "2b19bde1ed8ca6b482fb283abc90e8e0d9d228947029c0b91795d64b28b3bc3f",
+    "validation": "66cdf0b090ccb657d18d13cd81e31fdc55c3467da9642ffb178653268a97c8ef",
+    "test": "74a41822ce7d3def56e1682f958469c04642a5336a5ce912fa375fdb90fb25d7"
+  },
+  "dataset_subset": true,
+  "split_audit_sha256": "7744caf2f70ea72db9fd48e35458b752f3734134144e9ac2fa0804c1ddbab142",
+  "model_sha256": "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
+  "model_size_bytes": 3106738272,
+  "tokenizer_binary_sha256": "3fe40c153a84c42485e38fa38c312029266281db263e9ccbef00ddc12dc1fbf1",
+  "tokenizer_startup_ms": 1159.1046249959618,
+  "gguf_metadata": {
+    "template_sha256": "241c50d86bdfe5e43307da87f559cd2416aacd67a8de46c15acc0105ef2200b7",
+    "architecture": "gemma4",
+    "add_bos_token": true,
+    "bos_token_id": 2,
+    "eos_token_id": 106
+  },
+  "versions": {
+    "gguf": "0.18.0",
+    "transformers": "5.7.0",
+    "jinja2": "3.1.6",
+    "pyarrow": "24.0.0"
+  },
+  "prompt_policy": "classic-mmlu-fixed-subject-exemplars-chat-final-letter-xhigh-v1",
+  "snapshot_path": "/Users/germar/.cache/huggingface/hub/datasets--cais--mmlu/snapshots/c30699e8356da336a370243923dbaf21066bb9fe",
+  "shots": 5,
+  "rotations": 4,
+  "per_subject": 1,
+  "subject_limit": 8,
+  "template_date": "2026-10-09",
+  "counts": {
+    "development": {
+      "questions": 8,
+      "records": 32,
+      "sha256": "d1e384114ac849d3a8e9e40bb6f89e6a804fd977abe88ae4b65c344cf1826f61"
+    },
+    "calibration": {
+      "questions": 8,
+      "records": 32,
+      "sha256": "7c1109b37686a00fa1d26c48c40b6372f7c6f30a15066ed252e42350fb550ea5"
+    },
+    "test": {
+      "questions": 8,
+      "records": 32,
+      "sha256": "eb55a4a9d771bfee0162f2d3617b6c35229356e9377b455bbf983f3a8fdca296"
+    }
+  },
+  "label_policy": "Cloze uses spaced letters; chat uses bare letters. Every complete prompt+label tokenization must extend the actual prefix by exactly one distinct token.",
+  "preprocessing": "Render and TOK timings retained separately from boundary validation and dataset preparation. Tokenizer model startup/checksums are setup costs. No forced cache eviction.",
+  "quality": "Preparation supplies no accuracy or speedup evidence. Development/calibration/test identities are disjoint; test labels do not choose prompts or temperature.",
+  "preparation_wall_ms": 14437.150499899872,
+  "tokenizer_calls_including_boundary_validation": 1440
+}

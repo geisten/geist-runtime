@@ -40,7 +40,14 @@ report = module.numerical(plan, fixture, x86, x86_rows)
 manifest = json.loads((validation / 'manifest.json').read_text())
 assert report['verdict'] == manifest['x86_cpu']['independent_gemma_numeric_verdict'] == 'FAIL'
 assert [c['selection'] for c in report['cases']] == list(manifest['x86_cpu']['independent_gemma_numeric']['selection'].values())
-for section in (manifest, manifest['x86_cpu']):
+# #17: the Apple records on the current pin: every raw file's hash, and the numeric FAIL under both contracts
+plan17 = json.loads((root / 'docs/DECISION_EVIDENCE_PLAN_17.json').read_text())
+assert manifest['apple_17']['plan_sha256'] == hashlib.sha256((root / 'docs/DECISION_EVIDENCE_PLAN_17.json').read_bytes()).hexdigest()
+for name in ('records-gemma4-cpu', 'records-gemma4-gpu'):
+    apple = [json.loads(line) for line in (validation / 'apple-17' / (name + '.jsonl')).read_text().splitlines() if line.startswith('{')]
+    assert module.numerical(plan, fixture, reference, apple)['verdict'] == 'FAIL', name
+    assert module.numerical_94(plan17, fixture, reference, apple)['verdict'] == 'FAIL', name
+for section in (manifest, manifest['x86_cpu'], manifest['apple_17']):
     for name, record in section['records'].items():
         assert hashlib.sha256((validation / name).read_bytes()).hexdigest() == record['sha256'], name
-print('evidence verifier: independent Gemma drift FAIL preserved (Apple NEON and x86 records); finite complete output required; manifest hashes match')
+print('evidence verifier: independent Gemma drift FAIL preserved (Apple NEON, Metal and x86 records, both contracts); finite complete output required; manifest hashes match')

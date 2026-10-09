@@ -1,0 +1,247 @@
+{
+  "plan_sha256": "4d5547149620bd55b1fe7c362e1d4da3ffd3b89d4105656b63899a1ba9df7538",
+  "p1": {
+    "scoring": {
+      "bonsai2-cpu": {
+        "old_ms": 11919.334644444445,
+        "new_ms": 11641.183611111112,
+        "ratio_new_old": 0.9766638791819661,
+        "n": [
+          90,
+          90
+        ]
+      },
+      "bonsai2-gpu": {
+        "old_ms": 1172.8694,
+        "new_ms": 1240.8988333333332,
+        "ratio_new_old": 1.0580025647641018,
+        "n": [
+          30,
+          30
+        ]
+      },
+      "gemma4-cpu": {
+        "old_ms": 703.5523222222223,
+        "new_ms": 715.4952999999999,
+        "ratio_new_old": 1.0169752517340216,
+        "n": [
+          90,
+          90
+        ]
+      },
+      "gemma4-gpu": {
+        "old_ms": 170.9418,
+        "new_ms": 173.84616666666668,
+        "ratio_new_old": 1.0169903830816494,
+        "n": [
+          30,
+          30
+        ]
+      }
+    },
+    "decode_tokens_per_s": {
+      "gemma4-e2b-cpu": {
+        "0707c3b": 33.333333333333336,
+        "4afbfcd": 34.699999999999996,
+        "ratio_new_old": 1.0409999999999997
+      },
+      "gemma4-e2b-gpu": {
+        "0707c3b": 86.2,
+        "4afbfcd": 86.03333333333335,
+        "ratio_new_old": 0.9980665119876257
+      },
+      "bonsai2-27b-pq2-cpu": {
+        "0707c3b": 9.0,
+        "4afbfcd": 8.299999999999999,
+        "ratio_new_old": 0.922222222222222
+      },
+      "bonsai2-27b-pq2-gpu": {
+        "0707c3b": 18.7,
+        "4afbfcd": 18.133333333333333,
+        "ratio_new_old": 0.9696969696969697
+      }
+    },
+    "significant": [
+      "bonsai2-27b-pq2-cpu"
+    ],
+    "complete": true
+  },
+  "p2": {
+    "combinations": {
+      "bonsai2-cpu": {
+        "ratio_fp32_auto": 0.9981766768934652,
+        "ci95": [
+          0.9772421474349217,
+          1.0230664603095156
+        ],
+        "n": 30
+      },
+      "bonsai2-gpu": {
+        "ratio_fp32_auto": 0.9952847619128323,
+        "ci95": [
+          0.9845595199544676,
+          1.0050559147628708
+        ],
+        "n": 30
+      },
+      "gemma4-cpu": {
+        "ratio_fp32_auto": 0.9980698794356702,
+        "ci95": [
+          0.9308431920125163,
+          1.074733389900495
+        ],
+        "n": 30
+      },
+      "gemma4-gpu": {
+        "ratio_fp32_auto": 1.006100485069784,
+        "ci95": [
+          1.003856714455318,
+          1.0083889141776474
+        ],
+        "n": 30
+      }
+    },
+    "adopt_fp32_kv": true
+  },
+  "contract": "original",
+  "overhead": {
+    "bonsai2-cpu": {
+      "ratio_runtime_direct": 1.0071478025010905,
+      "ci95": [
+        0.9967520931157787,
+        1.018668550580743
+      ],
+      "gate": "PASS",
+      "n": 30,
+      "preparation_ms_p50": 0.14,
+      "total_ms_p50": 14570.479,
+      "total_ms_p95": 15086.679,
+      "setup": {
+        "wrapper_open_ms": 61.958,
+        "direct_open_ms": 33.374
+      },
+      "selected_rows": "supported"
+    },
+    "bonsai2-gpu": {
+      "ratio_runtime_direct": 0.9964653964030316,
+      "ci95": [
+        0.9742041847747217,
+        1.020914123850917
+      ],
+      "gate": "INCONCLUSIVE",
+      "n": 30,
+      "preparation_ms_p50": 0.125,
+      "total_ms_p50": 1494.716,
+      "total_ms_p95": 1657.017,
+      "setup": {
+        "wrapper_open_ms": 74.976,
+        "direct_open_ms": 36.949
+      },
+      "selected_rows": "supported"
+    },
+    "gemma4-cpu": {
+      "ratio_runtime_direct": 1.0032044733827559,
+      "ci95": [
+        0.9711608669086611,
+        1.041288053507162
+      ],
+      "gate": "INCONCLUSIVE",
+      "n": 30,
+      "preparation_ms_p50": 0.178,
+      "total_ms_p50": 870.918,
+      "total_ms_p95": 1158.48,
+      "setup": {
+        "wrapper_open_ms": 6.204,
+        "direct_open_ms": 5.244
+      },
+      "selected_rows": "not_applicable_unsupported"
+    },
+    "gemma4-gpu": {
+      "ratio_runtime_direct": 0.9909671852062135,
+      "ci95": [
+        0.9612220462900222,
+        1.011530038373822
+      ],
+      "gate": "PASS",
+      "n": 30,
+      "preparation_ms_p50": 0.168,
+      "total_ms_p50": 181.371,
+      "total_ms_p95": 260.146,
+      "setup": {
+        "wrapper_open_ms": 19.537,
+        "direct_open_ms": 9.617
+      },
+      "selected_rows": "supported"
+    }
+  },
+  "overhead_fp32": {
+    "bonsai2-cpu": {
+      "ratio_runtime_direct": 0.9914045825729256,
+      "ci95": [
+        0.9715154286725031,
+        1.0101944548456945
+      ],
+      "gate": "PASS",
+      "n": 30,
+      "preparation_ms_p50": 0.136,
+      "total_ms_p50": 13084.885,
+      "total_ms_p95": 15070.208,
+      "setup": {
+        "wrapper_open_ms": 58.366,
+        "direct_open_ms": 32.142
+      },
+      "selected_rows": "supported"
+    },
+    "bonsai2-gpu": {
+      "ratio_runtime_direct": 0.9955956891777349,
+      "ci95": [
+        0.989786274962677,
+        1.0013792957111005
+      ],
+      "gate": "PASS",
+      "n": 30,
+      "preparation_ms_p50": 0.13,
+      "total_ms_p50": 1361.174,
+      "total_ms_p95": 1448.841,
+      "setup": {
+        "wrapper_open_ms": 76.779,
+        "direct_open_ms": 40.927
+      },
+      "selected_rows": "supported"
+    },
+    "gemma4-cpu": {
+      "ratio_runtime_direct": 1.0032910597722637,
+      "ci95": [
+        0.9959364802991818,
+        1.0106084108400086
+      ],
+      "gate": "PASS",
+      "n": 30,
+      "preparation_ms_p50": 0.169,
+      "total_ms_p50": 812.164,
+      "total_ms_p95": 923.955,
+      "setup": {
+        "wrapper_open_ms": 6.844,
+        "direct_open_ms": 12.644
+      },
+      "selected_rows": "not_applicable_unsupported"
+    },
+    "gemma4-gpu": {
+      "ratio_runtime_direct": 1.0002927512788204,
+      "ci95": [
+        0.9955081725335704,
+        1.0046886796126622
+      ],
+      "gate": "PASS",
+      "n": 30,
+      "preparation_ms_p50": 0.117,
+      "total_ms_p50": 180.919,
+      "total_ms_p95": 185.458,
+      "setup": {
+        "wrapper_open_ms": 15.752,
+        "direct_open_ms": 8.374
+      },
+      "selected_rows": "supported"
+    }
+  }
+}

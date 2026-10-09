@@ -1,0 +1,5 @@
+build/dec/wheel/geistr-0.2.0-py3-none-macosx_27_0_arm64.whl
+Processing ./build/dec/wheel/geistr-0.2.0-py3-none-macosx_27_0_arm64.whl
+Installing collected packages: geistr
+Successfully installed geistr-0.2.0
+{"python_profile": "gemma4", "backend": "cpu", "owned_results": true, "lifetime_cancel_recovery": true, "bindings_layout": true}

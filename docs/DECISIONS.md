@@ -111,7 +111,8 @@ The engine is the Makefile's pin (`GEIST_REF`). The recorded validation evidence
 produced on engine `5dd7e1747df86092a320e638c66993afd409e3b6` and are kept as
 recorded; the x86 CPU records (`*-x86.jsonl`, `manifest.json` → `x86_cpu`) on
 engine `0707c3b1c9e547c909d200331a0750b4ff8e8cbe` (#94). Evidence is
-not re-established for later pins until it is recorded again.
+not re-established for later pins until it is recorded again. The Apple records of #17
+(`validation/apple-17`, `manifest.json` → `apple_17`) are on engine `4afbfcd`.
 Required EXPERIMENTAL engine symbols are availability/support/mode probes,
 create/score/destroy, error access, tokenization and resource observation
 (`geistr_decision_reset` clears only the wrapper's state: every score starts
@@ -238,8 +239,14 @@ winner gate only where the reference's top-two gap is at least 3 logits) is
 proposed there and needs a decision before Gemma numerical acceptance or
 release eligibility.
 
-`docs/DECISION_EVIDENCE_PLAN.json` freezes the development comparison and pending
-performance gate. No paired overhead verdict, complete Apple lifecycle verdict,
+Apple at engine `4afbfcd` (#17, [DECISION_EVIDENCE_17.md](DECISION_EVIDENCE_17.md)):
+wrapper/CLI/Python controls and the paired 2 % overhead gate PASS on NEON and Metal for
+both models; Gemma numerics FAIL on `order` on every backend, full precision included
+(geistlib#728); the lifecycle passes on Metal and fails on NEON (geistlib#729).
+Decisions use FP32 KV (measured free). Quality: a development pilot only.
+
+`docs/DECISION_EVIDENCE_PLAN.json` freezes the development comparison;
+`docs/DECISION_EVIDENCE_PLAN_17.json` the Apple runs. No paired overhead verdict, complete Apple lifecycle verdict,
 MMLU quality eligibility, calibration, universal speed multiplier or Jev
 -equivalence is claimed. The three toy questions are not an MMLU population.
 Bonsai native numerical/held-out evidence stays owned by geistlib#587. Independent

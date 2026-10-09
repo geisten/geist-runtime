@@ -1,0 +1,3 @@
+{"task":"scalar","profile":"bonsai2","backend":"cpu_scalar","kv":"fp32","engine":"4afbfcd730d041992608fab2a4c1797442dce7f6","fixture":0,"best_index":0,"logits":[19.8065777,11.9108963]}
+{"task":"scalar","profile":"bonsai2","backend":"cpu_scalar","kv":"fp32","engine":"4afbfcd730d041992608fab2a4c1797442dce7f6","fixture":1,"best_index":0,"logits":[17.2529316,16.9912796]}
+{"task":"scalar","profile":"bonsai2","backend":"cpu_scalar","kv":"fp32","engine":"4afbfcd730d041992608fab2a4c1797442dce7f6","fixture":2,"best_index":1,"logits":[14.7310972,17.7878933,12.6453857,17.1401939]}

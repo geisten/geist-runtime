@@ -36,18 +36,50 @@ def numerical(plan, fixture, reference, actual):
     verdict = 'FAIL' if any((r['logits'] == 'FAIL' or r['selection'] == 'FAIL' for r in reports)) else 'INCONCLUSIVE' if any((r['selection'] == 'INCONCLUSIVE' for r in reports)) else 'PASS'
     return {'scope': 'three independent numerical development fixtures; not MMLU quality', 'verdict': verdict, 'cases': reports}
 
+def numerical_94(plan17, fixture, reference, actual):
+    """#17's contract (#94): the winner where the oracle's top-two gap is wide
+    enough, and an envelope per candidate; thresholds from the frozen plan."""
+    contract = plan17['independent_numeric_94']
+    envelope = float(contract['envelope'].split('<=')[1].split()[0])
+    min_gap = float(contract['winner_gate'].split('>=')[1].split()[0])
+    expected = [row for row in actual if row.get('mode') == 1 and 'logits' in row]
+    require(len(expected) == len(reference['outputs']) == len(fixture['cases']) == 3, 'evidence invariant failed')
+    reports = []
+    for index, (case, ref, observed) in enumerate(zip(fixture['cases'], reference['outputs'], expected)):
+        require(observed['fixture'] == index and len(ref['logits']) == len(observed['logits']), 'evidence invariant failed')
+        require(all(math.isfinite(x) for x in ref['logits'] + observed['logits']), 'evidence invariant failed')
+        error = [abs(x - y) for x, y in zip(ref['logits'], observed['logits'])]
+        top = sorted(ref['logits'], reverse=True)
+        gap = top[0] - top[1]
+        gated = gap >= min_gap
+        selection = ('PASS' if ref['best_index'] == observed['best_index'] else 'FAIL') if gated else 'NOT_GATED'
+        reports.append({'fixture': case['id'], 'reference_gap': gap, 'max_absolute_error': max(error),
+                        'envelope': 'PASS' if max(error) <= envelope else 'FAIL', 'selection': selection})
+    verdict = 'FAIL' if any(r['envelope'] == 'FAIL' or r['selection'] == 'FAIL' for r in reports) else 'PASS'
+    return {'scope': 'three independent numerical development fixtures under the #94 contract; not MMLU quality',
+            'contract': '94', 'verdict': verdict, 'cases': reports}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--plan', type=Path, required=True)
     parser.add_argument('--fixture', type=Path, required=True)
     parser.add_argument('--reference', type=Path, required=True)
     parser.add_argument('--actual', type=Path, required=True)
+    parser.add_argument('--plan-17', type=Path, help="#17's plan: check under its #94 contract instead")
     args = parser.parse_args()
     reference = json.loads(args.reference.read_text())
     require(reference['plan_sha256'] == sha(args.plan), 'changed numerical contract')
-    require(reference['actual_sha256'] == sha(args.actual), 'changed actual raw outputs')
     rows = [json.loads(line) for line in args.actual.read_text().splitlines() if line.startswith('{')]
-    report = numerical(json.loads(args.plan.read_text()), json.loads(args.fixture.read_text()), reference, rows)
+    if args.plan_17:  # the oracle is unchanged; the new plan names the original one it extends
+        plan17 = json.loads(args.plan_17.read_text())
+        require(plan17['extends']['plan_sha256'] == sha(args.plan), 'changed numerical contract')
+        report = numerical_94(plan17, json.loads(args.fixture.read_text()), reference, rows)
+        report['actual_sha256'] = sha(args.actual)
+        report['plan_17_sha256'] = sha(args.plan_17)
+    else:
+        require(reference['actual_sha256'] == sha(args.actual), 'changed actual raw outputs')
+        report = numerical(json.loads(args.plan.read_text()), json.loads(args.fixture.read_text()), reference, rows)
     print(json.dumps(report, indent=2))
     return 0 if report['verdict'] == 'PASS' else 1
 if __name__ == '__main__':

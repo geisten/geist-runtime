@@ -1,0 +1,12 @@
+{"profile":"bonsai2","backend":"metal","mode":1,"fixture":0,"native_ids":true,"direct_bit_identical":true,"model_calls":1}
+{"profile":"bonsai2","backend":"metal","mode":1,"fixture":0,"best_index":0,"logits":[19.8064804,11.9125957]}
+{"profile":"bonsai2","backend":"metal","mode":1,"fixture":1,"native_ids":true,"direct_bit_identical":true,"model_calls":1}
+{"profile":"bonsai2","backend":"metal","mode":1,"fixture":1,"best_index":0,"logits":[17.2527351,16.9910221]}
+{"profile":"bonsai2","backend":"metal","mode":1,"fixture":2,"native_ids":true,"direct_bit_identical":true,"model_calls":1}
+{"profile":"bonsai2","backend":"metal","mode":1,"fixture":2,"best_index":1,"logits":[14.7311153,17.7871819,12.6450415,17.1406517]}
+{"profile":"bonsai2","backend":"metal","mode":2,"fixture":0,"native_ids":true,"direct_bit_identical":true,"model_calls":1}
+{"profile":"bonsai2","backend":"metal","mode":2,"fixture":0,"best_index":0,"logits":[19.8064804,11.9125957]}
+{"profile":"bonsai2","backend":"metal","mode":2,"fixture":1,"native_ids":true,"direct_bit_identical":true,"model_calls":1}
+{"profile":"bonsai2","backend":"metal","mode":2,"fixture":1,"best_index":0,"logits":[17.2527351,16.9910221]}
+{"profile":"bonsai2","backend":"metal","mode":2,"fixture":2,"native_ids":true,"direct_bit_identical":true,"model_calls":1}
+{"profile":"bonsai2","backend":"metal","mode":2,"fixture":2,"best_index":1,"logits":[14.7311153,17.7871819,12.6450415,17.1406517]}

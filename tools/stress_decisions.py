@@ -13,18 +13,35 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import time
 import geistr
 
 def require(condition, message):
-    if not condition:
-        raise ValueError(message)
+    if not condition:  # which check: its line in this file
+        raise ValueError(f'{message} (stress_decisions.py:{sys._getframe(1).f_lineno})')
+
+def chat_works(chat):
+    """Ordinary chat keeps working: it generates. A thinking model's first
+    tokens are hidden reasoning, so the visible text may be empty (#17)."""
+    chat.ask('Reply OK.')
+    return chat.stats['output_tokens'] >= 1
+
 
 def rss():
     result = subprocess.run(['ps', '-o', 'rss=', '-p', str(os.getpid())], capture_output=True, text=True, check=True)
     return int(result.stdout.strip()) * 1024
 
 def main():
+    records = []
+    try:
+        run(records)
+    except (ValueError, AssertionError) as exc:  # every failure is evidence: FAIL with what was observed
+        print(json.dumps({'schema': 1, 'verdict': 'FAIL', 'error': str(exc), 'records': records}, indent=2))
+        raise SystemExit(1)
+
+
+def run(records):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--model', required=True)
     ap.add_argument('--plan', type=Path, required=True)
@@ -40,7 +57,7 @@ def main():
     require(fixture['artifact_sha256'] == plan['artifact_sha256'], 'evidence invariant failed')
     largest = max(fixture['cases'], key=lambda case: len(case['ids']))
     config = json.dumps({'schema': 1, 'models': [{'sha256': plan['artifact_sha256'], 'enabled': True, 'profile': plan['profile'], 'mode': plan['mode']}]}).encode()
-    records, started = ([], time.monotonic())
+    started = time.monotonic()
     for cycle in range(plan['cycles']):
         with geistr.DecisionConfig(config) as cfg:
             with geistr.open(args.model, decision_config=cfg, processor=plan['processor'], threads=6, context=512) as model:
@@ -48,7 +65,7 @@ def main():
                     with model.decision() as primary, model.decision() as secondary:
                         expected = primary.score(largest['question'], largest['options'], context=largest['context'])
                         require(secondary.score(largest['question'], largest['options'], context=largest['context']).logits == expected.logits, 'evidence invariant failed')
-                        require(chat.ask('Reply OK.'), 'evidence invariant failed')
+                        require(chat_works(chat), 'ordinary chat produced no token')
                         chat.rewind(0)
                         primary.cancel()
                         try:
@@ -61,7 +78,7 @@ def main():
                         require(baseline['live_allocations'] == 8, 'evidence invariant failed')
                         for index in range(plan['requests']):
                             if index % 10 == 0:
-                                require(chat.ask('Reply OK.'), 'evidence invariant failed')
+                                require(chat_works(chat), 'ordinary chat produced no token')
                                 chat.rewind(0)
                                 try:
                                     primary.score('Q', [('same', 'a'), ('same', 'b')])
@@ -91,12 +108,18 @@ def main():
                             records.append({'cycle': cycle, 'index': index, 'rss_bytes': resident, **observed, 'model_calls': result.model_calls})
                     cleanup = model.decision_resources
                     require(cleanup['live_allocations'] == cleanup['live_bytes'] == 0, 'evidence invariant failed')
-                    resident = rss()
-                    require(resident <= plan['rss_cleanup_max_bytes'], 'evidence invariant failed')
+                    resident = rss()  # the model is still loaded: its budget is the max (#17 plan amendment)
+                    require(resident <= plan['rss_max_bytes'], 'evidence invariant failed')
                     if plan['processor'] == 'gpu':
                         require(cleanup['provider_known'], 'evidence invariant failed')
-                        require(cleanup['provider_allocated_bytes'] <= plan['metal_cleanup_max_bytes'], 'evidence invariant failed')
+                        require(cleanup['provider_allocated_bytes'] <= plan['metal_max_bytes'], 'evidence invariant failed')
                     records.append({'cycle': cycle, 'phase': 'decision_cleanup', 'rss_bytes': resident, **cleanup})
+        closed = rss()  # model and config closed: what the cycle left behind
+        require(closed <= plan['rss_cleanup_max_bytes'], f'RSS {closed} after the model closed, budget {plan["rss_cleanup_max_bytes"]}')
+        records.append({'cycle': cycle, 'phase': 'model_closed', 'rss_bytes': closed,
+                        'metal_after_close': 'not observable (no loaded model to ask)'})
+    closed = [r['rss_bytes'] for r in records if r.get('phase') == 'model_closed']
+    require(closed[-1] - closed[0] <= 64 << 20, 'retained growth across cycles')
     print(json.dumps({'schema': 1, 'scope': 'lifecycle only; no numeric/quality eligibility', 'plan_sha256': hashlib.sha256(raw_plan).hexdigest(), 'elapsed_seconds': time.monotonic() - started, 'verdict': 'PASS', 'records': records}, indent=2))
 if __name__ == '__main__':
     main()
