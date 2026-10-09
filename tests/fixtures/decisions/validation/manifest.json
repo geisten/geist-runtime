@@ -493,6 +493,30 @@
    },
    "apple-17/scalar-gemma4.jsonl": {
     "sha256": "e71eb3d06111142d4983131b6fc9104d576fd38f0303be243372ae538201ad05"
+   },
+   "apple-17/followup-12f77e8/lifecycle-bonsai2-cpu.json": {
+    "sha256": "fb9bc9c731a49c7840cbfe506ba86048a64e5b4ed8c4445563a83625bbc170dd"
+   },
+   "apple-17/followup-12f77e8/lifecycle-gemma4-cpu.json": {
+    "sha256": "ca54e11470d59cd338bfe24bf757c849e6e73cd4c7dea39196988774802125ef"
+   }
+  },
+  "followup_12f77e8": {
+   "engine_revision": "12f77e80503ce3278fcab714bf7a5b6e55d923c1",
+   "scope": "declared follow-up after geistlib#731 (#729); the #17 records above stay as recorded on 4afbfcd",
+   "lifecycle": {
+    "gemma4-cpu": {
+     "verdict": "FAIL",
+     "error": "RSS 1413480448 after the model closed, budget 1073741824 (stress_decisions.py:118)",
+     "requests": 100,
+     "rss_max_bytes_observed": 4460888064
+    },
+    "bonsai2-cpu": {
+     "verdict": "FAIL",
+     "error": "RSS 1644150784 after the model closed, budget 1073741824 (stress_decisions.py:118)",
+     "requests": 100,
+     "rss_max_bytes_observed": 9745809408
+    }
    }
   }
  }

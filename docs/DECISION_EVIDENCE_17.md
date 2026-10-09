@@ -89,6 +89,13 @@ cancel) × 3 model create-use-destroy cycles:
 | Gemma, NEON | FAIL | 1.43 GB RSS after the model closed (budget 1 GiB); four cycles: 1.38, 1.40, 1.40, 1.40, so retained once, not growing |
 | Bonsai, NEON | FAIL | 13.7 GB RSS after load, 14.8 GB after a decision (budget 11.9 GB): the weights are held about twice |
 
+**Follow-up on engine `12f77e8`** (geistlib#731 fixed the double residency, #729):
+Bonsai on NEON now completes all 100 requests within the budget (RSS at most 9.75 GB,
+was 13.7 GB after load), and Gemma stays at 4.46 GB. Both still fail only the check after
+the model closes: 1.64 GB and 1.41 GB against 1 GiB. That is macOS malloc's large-block
+cache (`vmmap`: "Malloc Large (empty)"; 0.04 GB with `MallocLargeCache=0`), flat across
+cycles, not a leak. Records in `apple-17/followup-12f77e8/`.
+
 Runtime allocations were constant per request and zero after every decision closed
 in all runs that got that far. Two reruns are declared: the first runs' chat check
 required visible text, which a thinking model (Bonsai) hides; it now checks generated
