@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.3.0
+
+### New
+
+- **Your files:** `geistr index <folder>`, then `geistr chat --files <folder>`
+  (or `/files` in a chat, `geistr run --files`): each question gets the most
+  relevant passages of your text, Markdown and PDF files. Embeddings with
+  BitNet-embedding 0.6B, also over HTTP (`/v1/embeddings`, `/api/embed`) (#91).
+- **Tool calling** in `geistr serve --http` for Qwen3 models: OpenAI `tools` /
+  `tool_calls` and Ollama `tools`, streamed too (#92).
+- **Images** for Gemma 4 E2B over HTTP (`image_url` data URLs, Ollama `images`);
+  `geistr pull gemma4-e2b` also fetches its vision tower (#92).
+- **First run:** `geistr chat` with no model installed suggests one for this
+  computer and downloads it on Enter (#89).
+- **Threads:** one engine thread per physical core by default, so a shared CPU
+  no longer slows geistr down badly; `geistr config threads N` and `--threads N` (#93).
+
+### Engine
+
+- geistlib `4afbfcd` (from `b682ef8`): the context window on a GPU is sized
+  from the device's free memory (#88), the thread setting works on x86, and
+  cpu_x86 / cpu_neon activation-scale fixes (geistlib#697, #698).
+
+### Fixes
+
+- `geistr serve`: SIGTERM ends the running answer at once; a data folder too
+  long for a socket path uses a private runtime folder (#100).
+- `geistr catalog` rows align, and fit 120 columns; `geistr config --help`
+  lists every key; `geistr decide --help`; one fewer token after Ctrl-C in
+  `geistr run`; speeds recorded under a `.gguf` path count only for that
+  same file (#100).
+
+### Decisions (EXPERIMENTAL)
+
+- Decisions use an FP32 KV cache, as the independent reference; measured free
+  on Apple (#17).
+- Apple evidence on the current engine (#17, `docs/DECISION_EVIDENCE_17.md`):
+  configuration and the 2 % overhead gate pass; Gemma numerics and the CPU
+  lifecycle do not yet (geistlib#728, #729). Still default-off.
+
 ## 0.2.0
 
 ### geistr chat
