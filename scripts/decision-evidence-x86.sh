@@ -1,7 +1,7 @@
 #!/bin/sh
 # decision-evidence-x86.sh [out dir] — #94's x86 CPU decision evidence on the
-# current engine pin, run by the decision-evidence workflow on the self-hosted
-# x86 runner: Gemma 4 E2B's wrapper/direct-engine records, the CLI and the
+# current engine pin, run by the decision-evidence workflow of
+# git.geisten.net/geisten-hw/geist-runtime-hw on the self-hosted x86 runner: Gemma 4 E2B's wrapper/direct-engine records, the CLI and the
 # Python controls (DECISION=1, cpu_x86), with the host, the engine and the
 # binaries' hashes. Under the runner's machine lock, like the GPU tests.
 set -eu
