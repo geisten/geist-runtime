@@ -281,7 +281,15 @@ SAN := -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recove
 sanitize:
 	$(MAKE) BUILD=$(BUILD)/san CFLAGS="-O1 -g $(SAN)" CXXFLAGS="-O1 -g $(SAN)" LDFLAGS="$(SAN)" test
 
+# Line coverage of src/ and tools/geistr/ over the unit, real, embedding and CLI tests
+# (tools/coverage.py; GCOV="xcrun llvm-cov gcov" on macOS, gcov-14 with gcc-14).
+GCOV ?= gcov
+coverage:
+	rm -rf $(BUILD)/cov
+	$(MAKE) BUILD=$(BUILD)/cov CFLAGS="-O0 -g --coverage" CXXFLAGS="-O0 -g --coverage" LDFLAGS="--coverage" test test-real test-embed test-geistr
+	python3 tools/coverage.py $(BUILD)/cov --gcov "$(GCOV)" --out $(BUILD)/cov/coverage.md
+
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: install uninstall core all test sanitize clean runtime test-real test-embed fetch-embed-model chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python FORCE
+.PHONY: install uninstall core all test sanitize coverage clean runtime test-real test-embed fetch-embed-model chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python FORCE
