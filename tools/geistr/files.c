@@ -4,6 +4,7 @@
  * catalog's embedding model; the index lives in the data folder (0600) and is
  * brought up to date by file hash. A question gets the nearest chunks before
  * it, with their files. Nothing leaves the computer. */
+#define _XOPEN_SOURCE 700 /* realpath (musl declares it only for XSI) */
 #include "files.h"
 #include "cli.h"
 #include <dirent.h>
