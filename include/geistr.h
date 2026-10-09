@@ -37,7 +37,7 @@ extern "C" {
 #endif
 
 #define GEISTR_VERSION_MAJOR 0
-#define GEISTR_VERSION_MINOR 2
+#define GEISTR_VERSION_MINOR 3
 #define GEISTR_VERSION_PATCH 0
 
 /* Every call that can fail returns geistr_status: ignoring it is a warning
@@ -48,7 +48,7 @@ extern "C" {
 #define GEISTR_NODISCARD
 #endif
 
-/* "0.2.0" — the library's version, which may be newer than this header's. */
+/* "0.3.0" — the library's version, which may be newer than this header's. */
 const char *geistr_version(void);
 
 /* ------------------------------------------------------------------------ */
