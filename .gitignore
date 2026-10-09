@@ -2,3 +2,4 @@ build/
 geistlib/
 
 __pycache__/
+*.gcov

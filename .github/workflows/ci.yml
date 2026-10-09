@@ -154,6 +154,52 @@ jobs:
             build/wheel/
           if-no-files-found: ignore
 
+  # Line coverage of src/ and tools/geistr/ (make coverage, tools/coverage.py):
+  # the report goes to the job summary and an artifact. Not part of ci-ok.
+  coverage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      CC: gcc-14
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: deps
+        timeout-minutes: 12
+        run: sh scripts/apt-need.sh gcc-14 curl-config:libcurl4-openssl-dev
+      - name: engine
+        run: make runtime
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: geistlib/gguf_artifacts/smollm2-360m-instruct-q8_0.gguf
+          key: geist-model-smollm2-360m-q8-48ab3034d0dd
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: geistlib/gguf_artifacts/Qwen3-0.6B-Q8_0.gguf
+          key: geist-model-qwen3-0.6b-q8-9465e63a22ad
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: geistlib/gguf_artifacts/bitnet-embeddings-0.6b-bf16-i2_s.gguf
+          key: geist-model-bitnet-embed-0.6b-c89c64f05a2d
+      - name: models (from the catalog, SHA-verified)
+        run: |
+          make fetch-model fetch-embed-model
+          sh scripts/fetch-model.sh models/catalog.json qwen3-0.6b geistlib/gguf_artifacts
+      - name: make coverage
+        env:
+          GEIST_TEST_MODEL_THINKING: geistlib/gguf_artifacts/Qwen3-0.6B-Q8_0.gguf
+          GEISTR_TEST_TOOLS_MODEL: geistlib/gguf_artifacts/Qwen3-0.6B-Q8_0.gguf
+          GEISTR_TEST_EMBED_MODEL: geistlib/gguf_artifacts/bitnet-embeddings-0.6b-bf16-i2_s.gguf
+        run: make coverage GCOV=gcov-14 PULL=1 2>&1 | tail -60
+      - name: report
+        if: always()
+        run: test -f build/cov/coverage.md && cat build/cov/coverage.md >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: coverage
+          path: build/cov/coverage.md
+          if-no-files-found: ignore
+
   # #10: the one required check. Branch protection names this job, so the
   # matrix can change without touching the protection rules.
 
