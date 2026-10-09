@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.1
+
+### Engine
+
+- geistlib `d53560d` (from `4afbfcd`). On the CPU each weight is resident
+  once: Bonsai 2 27B uses 7.2 GB instead of 13.7, Qwen3.8 27B 15.0 GB instead
+  of 27.6 (geistlib#729). A closed CPU model returns its memory: 0.03–0.18 GB
+  stay instead of 1.4 (geistlib#733). Outputs are unchanged.
+
+### Decisions (EXPERIMENTAL)
+
+- The numeric reference is always the latest llama.cpp release
+  (`tools/llama_oracle.py`, now v0.6.0); the old Prism revision computed
+  Gemma 4 differently (geistlib#728).
+- The #94 contract is in force: Gemma passes on cpu_x86, cpu_neon and Metal
+  at the current engine (#17, #94, `docs/DECISION_EVIDENCE_17.md`).
+- A `decision-evidence` workflow records the x86 evidence on demand.
+
 ## 0.3.0
 
 ### New
