@@ -70,8 +70,9 @@ echo "Summarize: …" | geistr run qwen3-0.6b
 
 ## Models
 
-`geistr catalog` lists the models geistr knows, marks what is installed (✓),
-what is available (↓) and whether each fits your RAM (⚠/✗), with the speed
+`geistr catalog` lists the models geistr knows, the best suited to this
+computer first (installed or not does not move a row), marks what is installed
+(✓), what is available (↓) and whether each fits your RAM (⚠/✗), with the speed
 measured here on ⚙ CPU and ⚡ GPU.
 
 | model | download | RAM |

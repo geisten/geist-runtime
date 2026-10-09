@@ -64,7 +64,7 @@ $(BUILD)/test_window: tests/test_window.c src/window.h | $(BUILD)
 $(BUILD)/test_catalog: tests/test_catalog.c $(TEXT)
 	$(CC) $(CFLAGS) $< $(TEXT) $(LDFLAGS) $(LDLIBS) -o $@
 
-$(BUILD)/test_fit: tests/test_fit.c $(TEXT)
+$(BUILD)/test_fit: tests/test_fit.c tests/fit_golden.h $(TEXT)
 	$(CC) $(CFLAGS) $< $(TEXT) $(LDFLAGS) $(LDLIBS) -o $@
 
 $(BUILD)/test_decision_config: tests/test_decision_config.c $(LIB)

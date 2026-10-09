@@ -277,6 +277,47 @@ static void api(const geistr_catalog *c) {
     CHECK(!geistr_ranking_best(nullptr) && !geistr_ranking_count(nullptr) && !geistr_ranking_get(nullptr, 0));
 }
 
+/* The bundled catalog's ranking for fixed computers: a change in the catalog
+ * or the ranking that moves a row shows here (update the golden on purpose).
+ * Nothing installed or measured; GEISTR_PRINT_RANKING=1 prints the orders. */
+static void golden(const geistr_catalog *c) {
+    static const struct {
+        const char   *name;
+        geistr_device d;
+        const char   *order[24]; /* ending with nullptr */
+    } profiles[] = {
+#include "fit_golden.h"
+    };
+    for (size_t p = 0; p < sizeof profiles / sizeof *profiles; p++) {
+        geistr_ranking *r = nullptr;
+        CHECK(geistr_rank(c, &profiles[p].d, nullptr, nullptr, &r) == GEISTR_OK);
+        bool   show = getenv("GEISTR_PRINT_RANKING");
+        size_t k    = 0;
+        if (show)
+            printf("%s:", profiles[p].name);
+        for (; r && k < geistr_ranking_count(r); k++) {
+            const char *id = geistr_ranking_get(r, k)->entry->id;
+            if (show && getenv("GEISTR_PRINT_RANKING")[0] == '2') {
+                const geistr_fit *f = geistr_ranking_get(r, k);
+                printf("\n  %-18s verdict %d %-16s resource %d %-14s passed %u/%u", id, f->verdict, f->reason, f->resource,
+                       f->resource_reason, f->passed, f->total);
+            } else if (show)
+                printf(" %s", id);
+            else if (!profiles[p].order[k] || strcmp(id, profiles[p].order[k])) {
+                fprintf(stderr, "ranking %s, row %zu: %s, golden %s\n", profiles[p].name, k, id,
+                        profiles[p].order[k] ? profiles[p].order[k] : "(end)");
+                failures++;
+                break;
+            }
+        }
+        if (show)
+            putchar('\n');
+        else
+            CHECK(k == geistr_catalog_count(c) && !profiles[p].order[k]); /* every model, once */
+        geistr_ranking_free(r);
+    }
+}
+
 int main(int argc, char **argv) {
     geistr_catalog *c = load(argc > 1 ? argv[1] : "models/catalog.json");
     CHECK(c);
@@ -287,6 +328,8 @@ int main(int argc, char **argv) {
     estimates();
     ranking();
     api(c);
+    if (argc < 2) /* the golden is the bundled catalog's */
+        golden(c);
     geistr_catalog_free(c);
     if (failures)
         fprintf(stderr, "test_fit: %d failures\n", failures);
