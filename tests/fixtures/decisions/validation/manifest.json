@@ -515,6 +515,21 @@
    },
    "apple-17/contract-94-12f77e8/records-gemma4-gpu.jsonl": {
     "sha256": "d220c07ba6cb0752d49a8e696de8ff1d53cb93722044066bd6eae79fa0362a12"
+   },
+   "apple-17/followup-d53560d/diagnosis.json": {
+    "sha256": "4142b9730e389c6cf44bba7fa7fc5c4e5df5f20e04e3cf8b2dddac6981f1e1c9"
+   },
+   "apple-17/followup-d53560d/lifecycle-bonsai2-cpu.json": {
+    "sha256": "8edb9b6d79df51492c0bb4630ef2db419c4b60275520b11c4d17b576ee854aa8"
+   },
+   "apple-17/followup-d53560d/lifecycle-bonsai2-gpu.json": {
+    "sha256": "6c83e24fa70af705bf2e6fe43a70c8cf4f7b08681525bb35796927a62d1381d7"
+   },
+   "apple-17/followup-d53560d/lifecycle-gemma4-cpu.json": {
+    "sha256": "10454dc83b19101ad66c42ac35aef8f6483c81107d12eb743415ba357a1556f5"
+   },
+   "apple-17/followup-d53560d/lifecycle-gemma4-gpu.json": {
+    "sha256": "659fd34f1d0b843710a053e57539365b251d20e722a757f53a7ada3b4a9bc928"
    }
   },
   "followup_12f77e8": {
@@ -623,6 +638,57 @@
     }
    }
   },
-  "independent_gemma_numeric_verdict": "PASS"
+  "independent_gemma_numeric_verdict": "PASS",
+  "followup_d53560d": {
+   "engine_revision": "d53560d743ccbee1652aafc338405071d79f9f18",
+   "scope": "declared follow-up after geistlib#734 (#733)",
+   "lifecycle": {
+    "gemma4-cpu": {
+     "verdict": "PASS",
+     "error": null,
+     "requests": 300,
+     "rss_max_bytes_observed": 4516315136,
+     "rss_after_close_bytes": [
+      502251520,
+      544915456,
+      561119232
+     ]
+    },
+    "bonsai2-cpu": {
+     "verdict": "FAIL",
+     "error": "retained growth across cycles (stress_decisions.py:122)",
+     "requests": 300,
+     "rss_max_bytes_observed": 9847635968,
+     "rss_after_close_bytes": [
+      780189696,
+      805126144,
+      849674240
+     ]
+    },
+    "gemma4-gpu": {
+     "verdict": "PASS",
+     "error": null,
+     "requests": 300,
+     "rss_max_bytes_observed": 817823744,
+     "rss_after_close_bytes": [
+      204472320,
+      205783040,
+      205914112
+     ]
+    },
+    "bonsai2-gpu": {
+     "verdict": "PASS",
+     "error": null,
+     "requests": 300,
+     "rss_max_bytes_observed": 2975760384,
+     "rss_after_close_bytes": [
+      74235904,
+      75710464,
+      75382784
+     ]
+    }
+   },
+   "diagnosis": "bonsai2-cpu fails only the growth check (+70 MB over 3 cycles, limit 64 MiB); growth slows to +1-10 MB per cycle and macOS leaks finds 0 leaks in the engine and the runtime path: allocator warm-up"
+  }
  }
 }

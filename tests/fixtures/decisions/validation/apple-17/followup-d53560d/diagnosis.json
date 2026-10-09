@@ -1,0 +1,40 @@
+{
+  "scope": "diagnostics after the lifecycle run, not evidence",
+  "bonsai2_cpu_rss_after_close_mb_7_cycles": [
+    686,
+    706,
+    732,
+    739,
+    740,
+    742,
+    752
+  ],
+  "gemma4_cpu_rss_after_close_mb_5_cycles": {
+    "open_only": [
+      190,
+      191,
+      205,
+      208,
+      209
+    ],
+    "with_chat": [
+      219,
+      232,
+      233,
+      236,
+      236
+    ],
+    "with_10_decisions": [
+      291,
+      291,
+      293,
+      293,
+      311
+    ]
+  },
+  "macos_leaks": {
+    "engine_only_gemma4_cpu_3_cycles": "0 leaks for 0 total leaked bytes",
+    "runtime_decision_and_chat_gemma4_cpu (test_decision_real)": "0 leaks for 0 total leaked bytes"
+  },
+  "reading": "growth slows from +20-26 MB to +1-10 MB per cycle: allocator warm-up (malloc, Python), no leak found"
+}

@@ -14,7 +14,7 @@ hashes and the analysis are in `tests/fixtures/decisions/validation/apple-17/` a
 | Configuration correctness: native IDs, wrapper = direct engine (bit-identical), CLI, Python, error/cancel/recovery, feature-off | **PASS**, both models, NEON and Metal |
 | Runtime overhead, scoring phase, paired 2 % gate | **PASS**, all four model × backend combinations |
 | Gemma numerics against the independent llama.cpp oracle | **PASS** under the #94 contract (in force since 2026-10-09) against the latest llama.cpp (v0.6.0), engine `12f77e8`, NEON and Metal: same option on every fixture, logits within 1.3–2.4. The original contract (atol 0.10) still fails and is reported only |
-| Lifecycle, 100 requests × 3 cycles, frozen memory budgets | Metal **PASS** (both models); CPU **FAIL** (geistlib#729) |
+| Lifecycle, 100 requests × 3 cycles, frozen memory budgets | engine `d53560d`: **PASS** ×3; Bonsai NEON fails only the growth check (+70 MB vs 64 MiB, allocator warm-up, 0 leaks) |
 | Quality | development pilot only; **not eligible** |
 
 The feature stays EXPERIMENTAL and default-off. Nothing here claims quality
@@ -116,6 +116,21 @@ was 13.7 GB after load), and Gemma stays at 4.46 GB. Both still fail only the ch
 the model closes: 1.64 GB and 1.41 GB against 1 GiB. That is macOS malloc's large-block
 cache (`vmmap`: "Malloc Large (empty)"; 0.04 GB with `MallocLargeCache=0`), flat across
 cycles, not a leak. Records in `apple-17/followup-12f77e8/`.
+
+**Follow-up on engine `d53560d`** (geistlib#734: weight-sized buffers on `mmap`, #733):
+
+| | result | RSS max | after close, cycles 1–3 |
+|---|---|---|---|
+| Gemma, NEON | **PASS** | 4.52 GB | 0.50, 0.55, 0.56 GB |
+| Bonsai, NEON | FAIL (growth only) | 9.85 GB | 0.78, 0.81, 0.85 GB |
+| Gemma, Metal | **PASS** | 0.82 GB | 0.20, 0.21, 0.21 GB |
+| Bonsai, Metal | **PASS** | 2.98 GB | 0.07, 0.08, 0.08 GB |
+
+Bonsai on NEON now passes every budget and fails only the growth check: +70 MB over three
+cycles against 64 MiB. Diagnostics (`followup-d53560d/diagnosis.json`, not evidence): over
+seven cycles the growth slows from +20–26 MB to +1–10 MB per cycle, and macOS `leaks` finds
+0 leaks in the engine and in the runtime's chat and decision path. That is allocator
+warm-up (malloc, Python), not a leak; the frozen check stays FAIL.
 
 Runtime allocations were constant per request and zero after every decision closed
 in all runs that got that far. Two reruns are declared: the first runs' chat check
