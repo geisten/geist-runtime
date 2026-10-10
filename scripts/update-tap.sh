@@ -9,8 +9,8 @@ sum() { awk -v f="geistr-$1.tar.gz" '$2 == f { print $1 }' "$sums" | grep . || {
 mkdir -p "$tap/Formula"
 cat > "$tap/Formula/geistr.rb" <<RB
 class Geistr < Formula
-  desc "Run language models on your own computer"
-  homepage "https://www.geisten.net"
+  desc "Local LLM chat, model catalog and service on the geist engine (GGUF)"
+  homepage "https://github.com/geisten/geist-runtime"
   version "$version"
   license "Apache-2.0"
 
@@ -20,15 +20,14 @@ class Geistr < Formula
       sha256 "$(sum macos-arm64)"
     end
   end
-
   on_linux do
-    on_intel do
-      url "$base/geistr-linux-amd64.tar.gz"
-      sha256 "$(sum linux-amd64)"
-    end
     on_arm do
       url "$base/geistr-linux-arm64.tar.gz"
       sha256 "$(sum linux-arm64)"
+    end
+    on_intel do
+      url "$base/geistr-linux-amd64.tar.gz"
+      sha256 "$(sum linux-amd64)"
     end
   end
 
@@ -36,8 +35,19 @@ class Geistr < Formula
     bin.install "geistr"
   end
 
+  def caveats
+    <<~EOS
+      Install a model and chat:
+        geistr catalog
+        geistr pull smollm2-360m
+        geistr chat smollm2-360m
+      The OpenAI and Ollama APIs (replacing geist-serve):
+        geistr serve smollm2-360m --http
+    EOS
+  end
+
   test do
-    assert_match version.to_s, shell_output("#{bin}/geistr --version")
+    assert_match "geistr #{version}", shell_output("#{bin}/geistr --version")
   end
 end
 RB
