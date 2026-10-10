@@ -70,12 +70,16 @@ def listing():
     return {m['id']: m for m in doc['models']}
 
 
+def link_or_copy(src, dst):  # a copy where the two are on different file systems (a container's /tmp)
+    try:
+        os.link(src, dst)
+    except OSError:
+        subprocess.run(['cp', src, dst], check=True)
+
+
 def install_models():  # ref as itself, wrong with the right size and wrong bytes; once
     if not os.path.exists(os.path.join(models, ref_file)):
-        try:
-            os.link(model_path, os.path.join(models, ref_file))
-        except OSError:
-            subprocess.run(['cp', model_path, models], check=True)
+        link_or_copy(model_path, os.path.join(models, ref_file))
         with open(os.path.join(models, 'wrong.gguf'), 'wb') as f:
             f.write(tiny)
 
@@ -950,7 +954,7 @@ def section_pull():
         os.makedirs(first_models)
         with open(first_catalog, 'w') as f:
             json.dump({**catalog, 'models': [catalog['models'][0]]}, f)  # ref alone: the one to recommend
-        os.link(model_path, os.path.join(www, ref_file))
+        link_or_copy(model_path, os.path.join(www, ref_file))
         first = ['--models', first_models, '--catalog', first_catalog]
         first_env = {**env, 'GEISTEN_HOME': os.path.join(tmp, 'home-first'), 'TERM': 'xterm'}
         r = subprocess.run([geistr, 'chat', *first], input='', capture_output=True, text=True, env=first_env)
