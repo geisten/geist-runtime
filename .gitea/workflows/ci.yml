@@ -13,6 +13,9 @@ on:
 permissions:
   contents: read
 
+env:
+  GEIST_REPO: ${{ vars.GEIST_REPO || 'https://git.geisten.net/geisten/geistlib.git' }}  # the engine from Gitea; the Makefile default is GitHub
+
 defaults:
   run:
     shell: bash  # -eo pipefail: a step piped into tee still fails

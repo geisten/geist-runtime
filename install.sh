@@ -1,16 +1,16 @@
 #!/bin/sh
-# install.sh — geistr for this computer from a GitHub release:
-#   curl -fsSL https://raw.githubusercontent.com/geisten/geist-runtime/main/install.sh | sh
+# install.sh — geistr for this computer from a release on www.geisten.net:
+#   curl -fsSL https://www.geisten.net/geistr/install.sh | sh
 # GEISTR_VERSION=v0.1.0 picks a release (default: the latest);
 # PREFIX=~/.local installs to ~/.local/bin (default: /usr/local, with sudo if needed).
 set -eu
-repo=geisten/geist-runtime
+site=https://www.geisten.net/geistr
 case "$(uname -s)-$(uname -m)" in
     Linux-x86_64)               target=linux-amd64 ;;
     Linux-aarch64 | Linux-arm64) target=linux-arm64 ;;
     Darwin-arm64)               target=macos-arm64 ;;
     *)
-        echo "geistr: no release for $(uname -s) $(uname -m); build it: https://github.com/$repo#install" >&2
+        echo "geistr: no release for $(uname -s) $(uname -m); build it: https://github.com/geisten/geist-runtime#install" >&2
         exit 1
         ;;
 esac
@@ -18,9 +18,9 @@ version=${GEISTR_VERSION:-latest}
 if [ -n "${GEISTR_BASE_URL:-}" ]; then # tests: a local server
     base=$GEISTR_BASE_URL
 elif [ "$version" = latest ]; then
-    base=https://github.com/$repo/releases/latest/download
+    base=$site/releases/latest
 else
-    base=https://github.com/$repo/releases/download/$version
+    base=$site/releases/$version
 fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
