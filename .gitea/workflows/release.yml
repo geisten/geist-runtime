@@ -6,8 +6,8 @@ name: release
 # Run by hand (Actions → release → Run workflow): builds and tests the
 # archives and keeps them as workflow artifacts; nothing is published.
 # A pushed tag vX.Y.Z (= geistr --version) also uploads the archives and
-# SHA256SUMS to www.geisten.net/geistr/releases/vX.Y.Z/; a maintainer points
-# "latest" there by hand (the publish step).
+# SHA256SUMS to www.geisten.net/download/geistr/vX.Y.Z/, checks them over HTTPS and
+# points "latest" there.
 
 on:
   workflow_dispatch:
@@ -111,15 +111,27 @@ jobs:
         run: |
           version=$(sed -n 's/.*return "\([0-9.]*\)";.*/\1/p' src/runtime.c | head -1)
           test "v$version" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} but geistr_version() is $version"; exit 1; }
-      - name: upload to www.geisten.net (releases/<tag>/; "latest" is switched by hand)
+      - name: upload to www.geisten.net/download/geistr/<tag>/, then "latest"
+        # Org secret DOWNLOAD_SSH_KEY (as geistlib's release): rsync-only, write-only into
+        # /var/www/htdocs/www.geisten.net/download (rrsync), so paths are relative to it.
         env:
-          SSH_KEY: ${{ secrets.RELEASE_SSH_KEY }}
-          DEST: ${{ vars.RELEASE_DEST }}  # user@host:/path/to/geistr
+          DOWNLOAD_SSH_KEY: ${{ secrets.DOWNLOAD_SSH_KEY }}
         run: |
-          cd dist && sha256sum geistr-*.tar.gz > SHA256SUMS && cat SHA256SUMS
-          install -m 600 /dev/null "$RUNNER_TEMP/key" && printf '%s\n' "$SSH_KEY" > "$RUNNER_TEMP/key"
-          ssh_cmd="ssh -i $RUNNER_TEMP/key -o StrictHostKeyChecking=accept-new"
-          rsync -e "$ssh_cmd" -R geistr-*.tar.gz SHA256SUMS "$DEST/releases/$GITHUB_REF_NAME/" 2>/dev/null \
-            || { $ssh_cmd "${DEST%%:*}" "mkdir -p '${DEST#*:}/releases/$GITHUB_REF_NAME'" \
-                 && rsync -e "$ssh_cmd" geistr-*.tar.gz SHA256SUMS "$DEST/releases/$GITHUB_REF_NAME/"; }
-          rsync -e "$ssh_cmd" ../install.sh "$DEST/install.sh"
+          set -eu
+          command -v rsync >/dev/null || { sudo apt-get -qq update && sudo apt-get -qq install -y rsync >/dev/null; }
+          cd dist && sha256sum geistr-*.tar.gz > SHA256SUMS && cat SHA256SUMS && cd ..
+          mkdir -p ~/.ssh && umask 077
+          printf '%s\n' "$DOWNLOAD_SSH_KEY" > ~/.ssh/download_key
+          echo "www.geisten.net ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO66CjOfnd/GIiCFyqhGxLudBXi/mCD0IA8DBbbZ2O2i" > ~/.ssh/known_hosts_download
+          ssh_cmd="ssh -F /dev/null -i $HOME/.ssh/download_key -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts_download"
+          mkdir -p "stage/geistr/$GITHUB_REF_NAME" && cp dist/* "stage/geistr/$GITHUB_REF_NAME/"
+          cp install.sh stage/geistr/install.sh
+          chmod -R u=rwX,go=rX stage
+          rsync -rlt --chmod=Du=rwx,Dgo=rx -e "$ssh_cmd" stage/ germar@www.geisten.net:
+          base=https://www.geisten.net/download/geistr/$GITHUB_REF_NAME
+          for f in SHA256SUMS geistr-linux-amd64.tar.gz geistr-linux-arm64.tar.gz geistr-macos-arm64.tar.gz; do
+            curl -fsS -o "/tmp/$f" "$base/$f"
+          done
+          (cd /tmp && sha256sum -c --ignore-missing SHA256SUMS) && cmp /tmp/SHA256SUMS dist/SHA256SUMS
+          rm -rf stage && mkdir -p stage/geistr && ln -s "$GITHUB_REF_NAME" stage/geistr/latest
+          rsync -rlt -e "$ssh_cmd" stage/ germar@www.geisten.net:

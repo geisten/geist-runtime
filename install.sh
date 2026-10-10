@@ -1,10 +1,10 @@
 #!/bin/sh
 # install.sh — geistr for this computer from a release on www.geisten.net:
-#   curl -fsSL https://www.geisten.net/geistr/install.sh | sh
+#   curl -fsSL https://www.geisten.net/download/geistr/install.sh | sh
 # GEISTR_VERSION=v0.1.0 picks a release (default: the latest);
 # PREFIX=~/.local installs to ~/.local/bin (default: /usr/local, with sudo if needed).
 set -eu
-site=https://www.geisten.net/geistr
+site=https://www.geisten.net/download/geistr
 case "$(uname -s)-$(uname -m)" in
     Linux-x86_64)               target=linux-amd64 ;;
     Linux-aarch64 | Linux-arm64) target=linux-arm64 ;;
@@ -18,9 +18,9 @@ version=${GEISTR_VERSION:-latest}
 if [ -n "${GEISTR_BASE_URL:-}" ]; then # tests: a local server
     base=$GEISTR_BASE_URL
 elif [ "$version" = latest ]; then
-    base=$site/releases/latest
+    base=$site/latest
 else
-    base=$site/releases/$version
+    base=$site/$version
 fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM

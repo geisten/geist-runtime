@@ -16,7 +16,7 @@ or the GPU.
 ## Install
 
 ```sh
-curl -fsSL https://www.geisten.net/geistr/install.sh | sh
+curl -fsSL https://www.geisten.net/download/geistr/install.sh | sh
 ```
 
 Or with [Homebrew](https://brew.sh):
@@ -32,8 +32,8 @@ downloads the latest release, checks it against `SHA256SUMS` and puts
 Without sudo, or a specific release:
 
 ```sh
-curl -fsSL https://www.geisten.net/geistr/install.sh | PREFIX=~/.local sh
-curl -fsSL https://www.geisten.net/geistr/install.sh | GEISTR_VERSION=v0.1.1 sh
+curl -fsSL https://www.geisten.net/download/geistr/install.sh | PREFIX=~/.local sh
+curl -fsSL https://www.geisten.net/download/geistr/install.sh | GEISTR_VERSION=v0.1.1 sh
 ```
 
 <details>
