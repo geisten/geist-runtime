@@ -70,12 +70,16 @@ def listing():
     return {m['id']: m for m in doc['models']}
 
 
+def link_or_copy(src, dst):  # a copy where the two are on different file systems (a container's /tmp)
+    try:
+        os.link(src, dst)
+    except OSError:
+        subprocess.run(['cp', src, dst], check=True)
+
+
 def install_models():  # ref as itself, wrong with the right size and wrong bytes; once
     if not os.path.exists(os.path.join(models, ref_file)):
-        try:
-            os.link(model_path, os.path.join(models, ref_file))
-        except OSError:
-            subprocess.run(['cp', model_path, models], check=True)
+        link_or_copy(model_path, os.path.join(models, ref_file))
         with open(os.path.join(models, 'wrong.gguf'), 'wb') as f:
             f.write(tiny)
 
@@ -808,7 +812,9 @@ def section_bench():
     assert len(engine) == 40 and rows[-1][6] == 'bench', rows[-1]  # the geistlib commit, the source
     assert all(r[6] == 'answer' for r in rows[:before]), rows[:before]  # chats and runs above
     with open(speeds, 'a') as f:  # a model recorded by path counts for its catalog entry
-        f.write(f'{model_path}\tcpu\t1000.0\t0.1\t0\t{engine}\n' * 11)
+        # by the installed file's path: models/ may be on another file system
+        # than model_path (a container's /tmp), where install_models copies
+        f.write(f'{os.path.join(models, ref_file)}\tcpu\t1000.0\t0.1\t0\t{engine}\n' * 11)
         f.write(f'ref\tcpu\t5.0\t0.1\t0\tanother-engine\n' * 11)  # not this engine's: ignored
         elsewhere = os.path.join(tmp, 'elsewhere', os.path.basename(model_path))  # the same name, another file
         os.makedirs(os.path.dirname(elsewhere), exist_ok=True)
@@ -948,7 +954,7 @@ def section_pull():
         os.makedirs(first_models)
         with open(first_catalog, 'w') as f:
             json.dump({**catalog, 'models': [catalog['models'][0]]}, f)  # ref alone: the one to recommend
-        os.link(model_path, os.path.join(www, ref_file))
+        link_or_copy(model_path, os.path.join(www, ref_file))
         first = ['--models', first_models, '--catalog', first_catalog]
         first_env = {**env, 'GEISTEN_HOME': os.path.join(tmp, 'home-first'), 'TERM': 'xterm'}
         r = subprocess.run([geistr, 'chat', *first], input='', capture_output=True, text=True, env=first_env)

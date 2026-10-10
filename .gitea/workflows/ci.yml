@@ -1,0 +1,248 @@
+# Gitea copy of .github/workflows/ci.yml (development happens on
+# git.geisten.net; github.com/geisten/geist-runtime is the public mirror).
+# Runners of the geisten org: ubuntu-24.04 = desktop (docker, 4 parallel),
+# ubuntu-24.04-arm = Pi 5 (docker, one job at a time under the board lock),
+# macos-15 = the M1 Max (host). geist-vulkan = the desktop host (RTX 2080 Ti, the gpu job).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  GEIST_REPO: ${{ vars.GEIST_REPO || 'https://git.geisten.net/geisten/geistlib.git' }}  # the engine from Gitea; the Makefile default is GitHub
+  # geistlib is private on Gitea: git rewrites only its URL to carry the token (secret GEISTLIB_TOKEN, read:repository), nothing is written to disk
+  GIT_CONFIG_COUNT: 1
+  GIT_CONFIG_KEY_0: url.https://oauth2:${{ secrets.GEISTLIB_TOKEN }}@git.geisten.net/geisten/geistlib.insteadOf
+  GIT_CONFIG_VALUE_0: https://git.geisten.net/geisten/geistlib
+
+defaults:
+  run:
+    shell: bash  # -eo pipefail: a step piped into tee still fails
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            cc: gcc-14
+            cxx: g++-14
+          - runner: ubuntu-24.04
+            cc: clang-18
+            cxx: clang++-18
+          - runner: ubuntu-24.04-arm
+            cc: gcc-14
+            cxx: g++-14
+          - runner: macos-15
+            cc: clang
+            cxx: clang++
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: deps (linux)
+        if: runner.os == 'Linux'
+        timeout-minutes: 12
+        run: sh scripts/apt-need.sh gcc-14 g++-14 clang-18
+      - name: build and test
+        run: mkdir -p build/logs && make test 2>&1 | tee build/logs/test.log
+      - name: sanitizers (ASan, UBSan; leaks on Linux)
+        run: make sanitize 2>&1 | tee build/logs/sanitize.log
+      - name: evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: evidence-test-${{ matrix.runner }}-${{ matrix.cc }}
+          path: |
+            build/logs/
+            build/*.txt
+          if-no-files-found: ignore
+
+  # #4: the real runtime on the pinned geistlib, against the reference model.
+  real:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            cc: gcc-14
+          # no ubuntu-24.04-arm: the Pi has 4 GB and test_real needs 3.2 GB of
+          # its own; macos-15 runs the real model on arm64
+          - runner: macos-15
+            cc: clang
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      CC: ${{ matrix.cc }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: deps (linux)
+        if: runner.os == 'Linux'
+        timeout-minutes: 12
+        run: sh scripts/apt-need.sh gcc-14 curl-config:libcurl4-openssl-dev
+      - name: deps (macos)
+        if: runner.os == 'macOS'
+        run: brew install libomp
+      # The engine checkout first: the model cache restores into it.
+      - name: engine and runtime
+        run: mkdir -p build/logs && make runtime 2>&1 | tee build/logs/runtime.log
+      - name: compile optional decision bridge (on)
+        run: make runtime DECISION=1 2>&1 | tee build/logs/decision-on.log
+      - name: restore feature-off engine for ordinary regression tests
+        run: make runtime DECISION=0 2>&1 | tee build/logs/decision-off.log
+      - name: cache reference model
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: geistlib/gguf_artifacts/smollm2-360m-instruct-q8_0.gguf
+          key: geist-model-smollm2-360m-q8-48ab3034d0dd
+      - name: fetch reference model (SmolLM2 from the catalog, SHA-verified)
+        run: make fetch-model
+      # #96: a thinking model's second answer (earlier reasoning leaves the
+      # history); test_real runs this case when the model is there.
+      - name: cache thinking model (Qwen3 0.6B)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: geistlib/gguf_artifacts/Qwen3-0.6B-Q8_0.gguf
+          key: geist-model-qwen3-0.6b-q8-9465e63a22ad
+      - name: fetch thinking model (Qwen3 0.6B from the catalog, SHA-verified)
+        run: sh scripts/fetch-model.sh models/catalog.json qwen3-0.6b geistlib/gguf_artifacts
+      - name: real runtime tests
+        env:
+          GEIST_TEST_MODEL_THINKING: geistlib/gguf_artifacts/Qwen3-0.6B-Q8_0.gguf
+        run: make test-real 2>&1 | tee build/logs/test-real.log
+      - name: cache embedding model (BitNet-embedding 0.6B)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: geistlib/gguf_artifacts/bitnet-embeddings-0.6b-bf16-i2_s.gguf
+          key: geist-model-bitnet-embed-0.6b-c89c64f05a2d
+      - name: fetch embedding model (from the catalog, SHA-verified)
+        run: make fetch-embed-model
+      # #91: geistr_embed: the model card's vector, retrieval, threads
+      - name: embeddings
+        run: make test-embed 2>&1 | tee build/logs/test-embed.log
+      - name: real runtime tests (ASan, UBSan; leaks on Linux)
+        run: make BUILD=build/san CFLAGS="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all" LDFLAGS="-fsanitize=address,undefined" test-real 2>&1 | tee build/logs/test-real-asan.log
+      # #11: the CLI against the reference model, with and without the download module.
+      - name: geistr CLI
+        env:
+          GEISTR_TEST_TOOLS_MODEL: geistlib/gguf_artifacts/Qwen3-0.6B-Q8_0.gguf  # #92: tool calls
+          GEISTR_TEST_EMBED_MODEL: geistlib/gguf_artifacts/bitnet-embeddings-0.6b-bf16-i2_s.gguf  # #91: embeddings
+        run: make test-geistr PULL=1 2>&1 | tee build/logs/test-geistr.log
+      # #9: the Python package. pip install the wheel into a fresh venv; the
+      # 10-line example and the tests. Linux: auditwheel makes it manylinux
+      # (bundles libgomp), and the repaired wheel runs the example again.
+      - name: python wheel
+        run: make test-python 2>&1 | tee build/logs/test-python.log
+      - name: manylinux wheel (linux)
+        if: runner.os == 'Linux'
+        run: |
+          python3 -m venv /tmp/tools && /tmp/tools/bin/pip install -q auditwheel patchelf
+          PATH=/tmp/tools/bin:$PATH auditwheel repair build/wheel/geistr-*.whl -w build/wheelhouse  # patchelf from the venv
+          python3 -m venv /tmp/clean && /tmp/clean/bin/pip install -q build/wheelhouse/geistr-*.whl
+          cd /tmp && /tmp/clean/bin/python "$GITHUB_WORKSPACE/examples/chat.py" "$GITHUB_WORKSPACE/geistlib/gguf_artifacts/smollm2-360m-instruct-q8_0.gguf"
+      - name: macOS wheel
+        if: runner.os == 'macOS'
+        run: mkdir -p build/wheelhouse && cp build/wheel/geistr-*.whl build/wheelhouse/
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: geistr-wheel-${{ matrix.runner }}
+          path: build/wheelhouse/geistr-*.whl
+      - name: evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: evidence-real-${{ matrix.runner }}
+          path: |
+            build/logs/
+            build/wheel/
+          if-no-files-found: ignore
+
+  # Line coverage of src/ and tools/geistr/ (make coverage, tools/coverage.py):
+  # the report goes to the job summary and an artifact. Not part of ci-ok.
+  coverage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      CC: gcc-14
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: deps
+        timeout-minutes: 12
+        run: sh scripts/apt-need.sh gcc-14 curl-config:libcurl4-openssl-dev
+      - name: engine
+        run: make runtime
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: geistlib/gguf_artifacts/smollm2-360m-instruct-q8_0.gguf
+          key: geist-model-smollm2-360m-q8-48ab3034d0dd
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: geistlib/gguf_artifacts/Qwen3-0.6B-Q8_0.gguf
+          key: geist-model-qwen3-0.6b-q8-9465e63a22ad
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: geistlib/gguf_artifacts/bitnet-embeddings-0.6b-bf16-i2_s.gguf
+          key: geist-model-bitnet-embed-0.6b-c89c64f05a2d
+      - name: models (from the catalog, SHA-verified)
+        run: |
+          make fetch-model fetch-embed-model
+          sh scripts/fetch-model.sh models/catalog.json qwen3-0.6b geistlib/gguf_artifacts
+      - name: make coverage
+        env:
+          GEIST_TEST_MODEL_THINKING: geistlib/gguf_artifacts/Qwen3-0.6B-Q8_0.gguf
+          GEISTR_TEST_TOOLS_MODEL: geistlib/gguf_artifacts/Qwen3-0.6B-Q8_0.gguf
+          GEISTR_TEST_EMBED_MODEL: geistlib/gguf_artifacts/bitnet-embeddings-0.6b-bf16-i2_s.gguf
+        run: make coverage GCOV=gcov-14 PULL=1 2>&1 | tail -60
+      - name: report
+        if: always()
+        run: test -f build/cov/coverage.md && cat build/cov/coverage.md >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: coverage
+          path: build/cov/coverage.md
+          if-no-files-found: ignore
+
+  # #10: the one required check. Branch protection names this job, so the
+  # matrix can change without touching the protection rules.
+
+  # #112: the GPU. The self-hosted runner with the RTX 2080 Ti (Vulkan); models
+  # in its own folder (GEIST_CI_MODELS, else ~/geist-ci-models), fetched once.
+  # Only branches of this repository run here, never forks: the runner runs the
+  # PR's code. Not part of ci-ok: a runner that is offline must not block merges.
+  gpu:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: geist-vulkan
+    timeout-minutes: 60
+    env:
+      OMP_NUM_THREADS: 16  # a busy CPU slows the engine's threads badly (#93)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: GPU tests (under the machine's GPU lock)
+        run: mkdir -p build/logs && sh scripts/test-gpu.sh 2>&1 | tee build/logs/test-gpu.log
+      - name: evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: evidence-gpu
+          path: build/logs/
+
+  ci-ok:
+    if: always()
+    needs: [test, real]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: every platform passed
+        run: |
+          echo "test: ${{ needs.test.result }}, real: ${{ needs.real.result }}"
+          test "${{ needs.test.result }}" = success && test "${{ needs.real.result }}" = success

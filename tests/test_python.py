@@ -51,7 +51,10 @@ json.dump({"schema": 2, "revision": 1, "models": [entry, {**entry, "id": "other"
 listing = geistr.catalog(folder=folder, catalog_file=catalog_file)
 assert [m.state for m in listing] == ["available", "available"] and listing[0].resource == "fits"
 order = [m.id for m in listing]  # the ranking, as geistr catalog lists it
-os.link(model, os.path.join(folder, os.path.basename(model)))
+try:
+    os.link(model, os.path.join(folder, os.path.basename(model)))
+except OSError:  # another file system (a container's /tmp): a copy
+    subprocess.run(["cp", model, folder], check=True)
 listing = geistr.catalog(folder=folder, catalog_file=catalog_file)
 assert [m.id for m in listing] == order, listing  # installing moves no row
 ref = next(m for m in listing if m.id == "ref")

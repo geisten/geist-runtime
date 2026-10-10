@@ -195,10 +195,14 @@ const char *conv_last_question(const struct conversation *c, int *bytes) {
  * the next chat continues the newest and, once it writes, removes it. */
 
 void conv_file_new(struct conversation *c) {
-    struct timespec t;
+    static long long last; /* two files within one millisecond (/clear right after a write) */
+    struct timespec  t;
     clock_gettime(CLOCK_REALTIME, &t);
-    snprintf(c->file, sizeof c->file, "%s/chats/%lld%03ld-%ld.jsonl", data_dir, (long long) t.tv_sec,
-             t.tv_nsec / 1000000, (long) getpid());
+    long long ms = (long long) t.tv_sec * 1000 + t.tv_nsec / 1000000;
+    if (ms <= last)
+        ms = last + 1; /* still unique and in order within this process */
+    last = ms;
+    snprintf(c->file, sizeof c->file, "%s/chats/%lld-%ld.jsonl", data_dir, ms, (long) getpid());
 }
 
 void conv_store(struct conversation *c) {
