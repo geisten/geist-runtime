@@ -1,0 +1,43 @@
+#!/bin/sh
+# update-tap.sh TAG SUMS TAPDIR — write TAPDIR/Formula/geistr.rb for release TAG
+# from its SHA256SUMS (archives at www.geisten.net/download/geistr/TAG/).
+set -eu
+tag=$1 sums=$2 tap=$3
+version=${tag#v}
+base=https://www.geisten.net/download/geistr/$tag
+sum() { awk -v f="geistr-$1.tar.gz" '$2 == f { print $1 }' "$sums" | grep . || { echo "update-tap: no $1 in $sums" >&2; exit 1; }; }
+mkdir -p "$tap/Formula"
+cat > "$tap/Formula/geistr.rb" <<RB
+class Geistr < Formula
+  desc "Run language models on your own computer"
+  homepage "https://www.geisten.net"
+  version "$version"
+  license "Apache-2.0"
+
+  on_macos do
+    on_arm do
+      url "$base/geistr-macos-arm64.tar.gz"
+      sha256 "$(sum macos-arm64)"
+    end
+  end
+
+  on_linux do
+    on_intel do
+      url "$base/geistr-linux-amd64.tar.gz"
+      sha256 "$(sum linux-amd64)"
+    end
+    on_arm do
+      url "$base/geistr-linux-arm64.tar.gz"
+      sha256 "$(sum linux-arm64)"
+    end
+  end
+
+  def install
+    bin.install "geistr"
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/geistr --version")
+  end
+end
+RB
