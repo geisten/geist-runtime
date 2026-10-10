@@ -1,0 +1,125 @@
+name: release
+
+# geistr binaries for install.sh: a fully static Linux build per architecture
+# (musl, scripts/build-static.sh) and macOS arm64 (system libraries only).
+#
+# Run by hand (Actions → release → Run workflow): builds and tests the
+# archives and keeps them as workflow artifacts; nothing is published.
+# A pushed tag vX.Y.Z (= geistr --version) also uploads the archives and
+# SHA256SUMS to www.geisten.net/geistr/releases/vX.Y.Z/; a maintainer points
+# "latest" there by hand (the publish step).
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+env:
+  GEIST_REPO: ${{ vars.GEIST_REPO || 'https://git.geisten.net/geisten/geistlib.git' }}  # the engine from Gitea; the Makefile default is GitHub
+  # geistlib is private on Gitea: git rewrites only its URL to carry the token (secret GEISTLIB_TOKEN, read:repository), nothing is written to disk
+  GIT_CONFIG_COUNT: 1
+  GIT_CONFIG_KEY_0: url.https://oauth2:${{ secrets.GEISTLIB_TOKEN }}@git.geisten.net/geisten/geistlib.insteadOf
+  GIT_CONFIG_VALUE_0: https://git.geisten.net/geisten/geistlib
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: ubuntu-24.04, target: linux-amd64, qemu: qemu-x86_64, old_cpu: Nehalem}
+          - {runner: ubuntu-24.04-arm, target: linux-arm64, qemu: qemu-aarch64, old_cpu: cortex-a72}
+    name: ${{ matrix.target }} (musl, static)
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: build in Alpine
+        run: docker run --rm -e GEIST_REPO -e GIT_CONFIG_COUNT -e GIT_CONFIG_KEY_0 -e GIT_CONFIG_VALUE_0 -v "$PWD:/src" -w /src alpine:3.21 sh scripts/build-static.sh
+      - name: no dynamic dependencies; it downloads (HTTPS, SHA-256) and answers
+        run: |
+          info=$(file build/static/geistr) && echo "$info"
+          grep -q 'statically linked' <<<"$info"
+          export GEISTEN_HOME="$RUNNER_TEMP/h"
+          build/static/geistr pull smollm2-360m
+          answer=$(build/static/geistr run smollm2-360m 'What is the capital of France? One word.')
+          echo "$answer" && grep -qi paris <<<"$answer"
+      - name: on a CPU below the baseline it says so, instead of dying
+        run: |
+          sudo apt-get install -y -q qemu-user >/dev/null
+          set +e
+          out=$(${{ matrix.qemu }} -cpu ${{ matrix.old_cpu }} build/static/geistr --version 2>&1); rc=$?
+          set -e
+          echo "$out (exit $rc)"
+          test $rc -eq 1 && grep -q 'this CPU lacks' <<<"$out"
+      - name: archive
+        run: |
+          mkdir -p dist && cp build/static/geistr LICENSE THIRD_PARTY_LICENSES dist/
+          tar -C dist -czf geistr-${{ matrix.target }}.tar.gz geistr LICENSE THIRD_PARTY_LICENSES
+      - uses: actions/upload-artifact@v3
+        with:
+          name: geistr-${{ matrix.target }}
+          path: geistr-${{ matrix.target }}.tar.gz
+
+  macos:
+    name: macos-arm64
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: build
+        run: |
+          brew install libomp
+          make geistr
+          strip build/geistr
+      - name: only system libraries, and it answers
+        run: |
+          otool -L build/geistr
+          other=$(otool -L build/geistr | tail -n +2 | awk '{print $1}' | grep -v -E '^(/usr/lib/|/System/)' || true)
+          test -z "$other" || { echo "not a system library: $other"; exit 1; }
+          make fetch-model
+          answer=$(GEISTEN_HOME="$RUNNER_TEMP/h" build/geistr run \
+            geistlib/gguf_artifacts/smollm2-360m-instruct-q8_0.gguf 'What is the capital of France? One word.')
+          echo "$answer" && grep -qi paris <<<"$answer"
+      - name: archive
+        run: |
+          mkdir -p dist && cp build/geistr LICENSE THIRD_PARTY_LICENSES dist/
+          tar -C dist -czf geistr-macos-arm64.tar.gz geistr LICENSE THIRD_PARTY_LICENSES
+      - uses: actions/upload-artifact@v3
+        with:
+          name: geistr-macos-arm64
+          path: geistr-macos-arm64.tar.gz
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v3
+        with:
+          path: dist
+          merge-multiple: true
+      - name: the tag is the version geistr reports
+        run: |
+          version=$(sed -n 's/.*return "\([0-9.]*\)";.*/\1/p' src/runtime.c | head -1)
+          test "v$version" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} but geistr_version() is $version"; exit 1; }
+      - name: upload to www.geisten.net (releases/<tag>/; "latest" is switched by hand)
+        env:
+          SSH_KEY: ${{ secrets.RELEASE_SSH_KEY }}
+          DEST: ${{ vars.RELEASE_DEST }}  # user@host:/path/to/geistr
+        run: |
+          cd dist && sha256sum geistr-*.tar.gz > SHA256SUMS && cat SHA256SUMS
+          install -m 600 /dev/null "$RUNNER_TEMP/key" && printf '%s\n' "$SSH_KEY" > "$RUNNER_TEMP/key"
+          ssh_cmd="ssh -i $RUNNER_TEMP/key -o StrictHostKeyChecking=accept-new"
+          rsync -e "$ssh_cmd" -R geistr-*.tar.gz SHA256SUMS "$DEST/releases/$GITHUB_REF_NAME/" 2>/dev/null \
+            || { $ssh_cmd "${DEST%%:*}" "mkdir -p '${DEST#*:}/releases/$GITHUB_REF_NAME'" \
+                 && rsync -e "$ssh_cmd" geistr-*.tar.gz SHA256SUMS "$DEST/releases/$GITHUB_REF_NAME/"; }
+          rsync -e "$ssh_cmd" ../install.sh "$DEST/install.sh"
