@@ -7,10 +7,16 @@ name: release
 # archives and keeps them as workflow artifacts; nothing is published.
 # A pushed tag vX.Y.Z (= geistr --version) also uploads the archives and
 # SHA256SUMS to www.geisten.net/download/geistr/vX.Y.Z/, checks them over HTTPS and
-# points "latest" there.
+# points "latest" there. Run by hand with the input `tag` (an existing vX.Y.Z), it
+# publishes that tag the same way, e.g. to repeat a release that failed after the build.
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Publish this existing tag (vX.Y.Z) with the workflow as it is on the chosen branch; empty: build only'
+        required: false
+        default: ''
   push:
     tags: ['v*']
 
@@ -18,6 +24,7 @@ permissions:
   contents: read
 
 env:
+  TAG: ${{ inputs.tag || github.ref_name }}  # the tag pushed, or the one dispatched
   GEIST_REPO: ${{ vars.GEIST_REPO || 'https://git.geisten.net/geisten/geistlib.git' }}  # the engine from Gitea; the Makefile default is GitHub
   # geistlib is private on Gitea: git rewrites only its URL to carry the token (secret GEISTLIB_TOKEN, read:repository), nothing is written to disk
   GIT_CONFIG_COUNT: 1
@@ -40,6 +47,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - name: build in Alpine
         run: docker run --rm -e GEIST_REPO -e GIT_CONFIG_COUNT -e GIT_CONFIG_KEY_0 -e GIT_CONFIG_VALUE_0 -v "$PWD:/src" -w /src alpine:3.21 sh scripts/build-static.sh
       - name: no dynamic dependencies; it downloads (HTTPS, SHA-256) and answers
@@ -72,6 +81,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - name: build
         run: |
           brew install libomp
@@ -96,21 +107,25 @@ jobs:
           path: geistr-macos-arm64.tar.gz
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
     needs: [linux, macos]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: actions/download-artifact@v3
         with:
           path: dist
           merge-multiple: true
+      - name: one directory per artifact (download-artifact v3) -> dist/*.tar.gz
+        run: find dist -mindepth 2 -name 'geistr-*.tar.gz' -exec mv {} dist/ \; && find dist -mindepth 1 -type d -empty -delete && ls dist
       - name: the tag is the version geistr reports
         run: |
           version=$(sed -n 's/.*return "\([0-9.]*\)";.*/\1/p' src/runtime.c | head -1)
-          test "v$version" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} but geistr_version() is $version"; exit 1; }
+          test "v$version" = "${TAG}" || { echo "tag ${TAG} but geistr_version() is $version"; exit 1; }
       - name: upload to www.geisten.net/download/geistr/<tag>/, then "latest"
         # Org secret DOWNLOAD_SSH_KEY (as geistlib's release): rsync-only, write-only into
         # /var/www/htdocs/www.geisten.net/download (rrsync), so paths are relative to it.
@@ -124,16 +139,16 @@ jobs:
           printf '%s\n' "$DOWNLOAD_SSH_KEY" > ~/.ssh/download_key
           echo "www.geisten.net ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO66CjOfnd/GIiCFyqhGxLudBXi/mCD0IA8DBbbZ2O2i" > ~/.ssh/known_hosts_download
           ssh_cmd="ssh -F /dev/null -i $HOME/.ssh/download_key -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts_download"
-          mkdir -p "stage/geistr/$GITHUB_REF_NAME" && cp dist/* "stage/geistr/$GITHUB_REF_NAME/"
+          mkdir -p "stage/geistr/$TAG" && cp dist/* "stage/geistr/$TAG/"
           cp install.sh stage/geistr/install.sh
           chmod -R u=rwX,go=rX stage
           rsync -rlt --chmod=Du=rwx,Dgo=rx -e "$ssh_cmd" stage/ germar@www.geisten.net:
-          base=https://www.geisten.net/download/geistr/$GITHUB_REF_NAME
+          base=https://www.geisten.net/download/geistr/$TAG
           for f in SHA256SUMS geistr-linux-amd64.tar.gz geistr-linux-arm64.tar.gz geistr-macos-arm64.tar.gz; do
             curl -fsS -o "/tmp/$f" "$base/$f"
           done
           (cd /tmp && sha256sum -c --ignore-missing SHA256SUMS) && cmp /tmp/SHA256SUMS dist/SHA256SUMS
-          rm -rf stage && mkdir -p stage/geistr && ln -s "$GITHUB_REF_NAME" stage/geistr/latest
+          rm -rf stage && mkdir -p stage/geistr && ln -s "$TAG" stage/geistr/latest
           rsync -rlt -e "$ssh_cmd" stage/ germar@www.geisten.net:
       - name: update the Homebrew tap (github.com/geisten/homebrew-tap, Formula/geistr.rb)
         env:
@@ -141,14 +156,14 @@ jobs:
         run: |
           set -eu
           git clone -q "https://x-access-token:$TAP_TOKEN@github.com/geisten/homebrew-tap.git" tap
-          sh scripts/update-tap.sh "$GITHUB_REF_NAME" dist/SHA256SUMS tap
+          sh scripts/update-tap.sh "$TAG" dist/SHA256SUMS tap
           cd tap
           git add Formula/geistr.rb
           git diff --cached --quiet && { echo "tap already current"; exit 0; }
-          git -c user.name="geisten release" -c user.email="release@geisten.net" commit -q -m "geistr ${GITHUB_REF_NAME#v}"
+          git -c user.name="geisten release" -c user.email="release@geisten.net" commit -q -m "geistr ${TAG#v}"
           # straight to main; if main is protected, a branch and a pull request, as the tap's earlier updates
           git push -q origin HEAD:main || {
-            git push -q origin "HEAD:refs/heads/geistr-${GITHUB_REF_NAME#v}"
+            git push -q origin "HEAD:refs/heads/geistr-${TAG#v}"
             curl -fsS -X POST -H "Authorization: Bearer $TAP_TOKEN" https://api.github.com/repos/geisten/homebrew-tap/pulls \
-              -d "{\"title\":\"geistr ${GITHUB_REF_NAME#v}\",\"head\":\"geistr-${GITHUB_REF_NAME#v}\",\"base\":\"main\"}" >/dev/null
+              -d "{\"title\":\"geistr ${TAG#v}\",\"head\":\"geistr-${TAG#v}\",\"base\":\"main\"}" >/dev/null
           }
