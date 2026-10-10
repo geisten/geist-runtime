@@ -107,6 +107,8 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: one directory per artifact (download-artifact v3) -> dist/*.tar.gz
+        run: find dist -mindepth 2 -name 'geistr-*.tar.gz' -exec mv {} dist/ \; && find dist -mindepth 1 -type d -empty -delete && ls dist
       - name: the tag is the version geistr reports
         run: |
           version=$(sed -n 's/.*return "\([0-9.]*\)";.*/\1/p' src/runtime.c | head -1)
