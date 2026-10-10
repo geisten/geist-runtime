@@ -36,6 +36,14 @@
 #include <sys/sysctl.h>
 #endif
 
+/* A cancelled prefill stops within one chunk. ASan slows a chunk severalfold,
+ * and a CI host may run other jobs beside this one (3.4 s seen with four). */
+#if defined(__SANITIZE_ADDRESS__)
+#define CANCEL_MS 6000
+#else
+#define CANCEL_MS 1500
+#endif
+
 
 /* GEIST_TEST_PROCESSOR=gpu|cpu: every model here opens on that processor
  * (the GPU job, #112); otherwise the runtime chooses (auto). */
@@ -347,7 +355,7 @@ int main(void) {
         pthread_join(th, nullptr);
         const double took2 = now_ms() - t_send;
         printf("  long prefill (%zu chars): %s after %.0f ms\n", big, geistr_status_text(s), took2);
-        CHECK(s == GEISTR_CANCELLED && took2 < 1500, "a long prefill is cancelled promptly");
+        CHECK(s == GEISTR_CANCELLED && took2 < CANCEL_MS, "a long prefill is cancelled promptly");
         if (s == GEISTR_CANCELLED)
             CHECK(geistr_chat_length(pc) == 0, "a cancelled send leaves the conversation unchanged");
         CHECK(ask(pc, 1, &next, again, sizeof again) == GEISTR_OK && again[0], "usable after a cancelled prefill");

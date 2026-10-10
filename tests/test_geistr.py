@@ -808,7 +808,9 @@ def section_bench():
     assert len(engine) == 40 and rows[-1][6] == 'bench', rows[-1]  # the geistlib commit, the source
     assert all(r[6] == 'answer' for r in rows[:before]), rows[:before]  # chats and runs above
     with open(speeds, 'a') as f:  # a model recorded by path counts for its catalog entry
-        f.write(f'{model_path}\tcpu\t1000.0\t0.1\t0\t{engine}\n' * 11)
+        # by the installed file's path: models/ may be on another file system
+        # than model_path (a container's /tmp), where install_models copies
+        f.write(f'{os.path.join(models, ref_file)}\tcpu\t1000.0\t0.1\t0\t{engine}\n' * 11)
         f.write(f'ref\tcpu\t5.0\t0.1\t0\tanother-engine\n' * 11)  # not this engine's: ignored
         elsewhere = os.path.join(tmp, 'elsewhere', os.path.basename(model_path))  # the same name, another file
         os.makedirs(os.path.dirname(elsewhere), exist_ok=True)
