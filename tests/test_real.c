@@ -36,9 +36,10 @@
 #include <sys/sysctl.h>
 #endif
 
-/* A cancelled prefill stops within one chunk. ASan slows a chunk severalfold,
- * and a CI host may run other jobs beside this one (3.4 s seen with four). */
-#if defined(__SANITIZE_ADDRESS__)
+/* A cancelled prefill stops within one chunk. ASan and -O0 (the coverage
+ * build) slow a chunk severalfold, and a CI host may run other jobs beside
+ * this one (3.4 s seen with four). */
+#if defined(__SANITIZE_ADDRESS__) || !defined(__OPTIMIZE__)
 #define CANCEL_MS 6000
 #else
 #define CANCEL_MS 1500
