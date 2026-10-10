@@ -2,7 +2,7 @@
 # git.geisten.net; github.com/geisten/geist-runtime is the public mirror).
 # Runners of the geisten org: ubuntu-24.04 = desktop (docker, 4 parallel),
 # ubuntu-24.04-arm = Pi 5 (docker, one job at a time under the board lock),
-# macos-15 = the M1 Max (host). The GPU job is in geisten-hw/geist-runtime-hw.
+# macos-15 = the M1 Max (host). geist-vulkan = the desktop host (RTX 2080 Ti, the gpu job).
 name: ci
 
 on:
@@ -210,6 +210,27 @@ jobs:
 
   # #10: the one required check. Branch protection names this job, so the
   # matrix can change without touching the protection rules.
+
+  # #112: the GPU. The self-hosted runner with the RTX 2080 Ti (Vulkan); models
+  # in its own folder (GEIST_CI_MODELS, else ~/geist-ci-models), fetched once.
+  # Only branches of this repository run here, never forks: the runner runs the
+  # PR's code. Not part of ci-ok: a runner that is offline must not block merges.
+  gpu:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: geist-vulkan
+    timeout-minutes: 60
+    env:
+      OMP_NUM_THREADS: 16  # a busy CPU slows the engine's threads badly (#93)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: GPU tests (under the machine's GPU lock)
+        run: mkdir -p build/logs && sh scripts/test-gpu.sh 2>&1 | tee build/logs/test-gpu.log
+      - name: evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: evidence-gpu
+          path: build/logs/
 
   ci-ok:
     if: always()
