@@ -135,3 +135,20 @@ jobs:
           (cd /tmp && sha256sum -c --ignore-missing SHA256SUMS) && cmp /tmp/SHA256SUMS dist/SHA256SUMS
           rm -rf stage && mkdir -p stage/geistr && ln -s "$GITHUB_REF_NAME" stage/geistr/latest
           rsync -rlt -e "$ssh_cmd" stage/ germar@www.geisten.net:
+      - name: update the Homebrew tap (github.com/geisten/homebrew-tap, Formula/geistr.rb)
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}  # GitHub token: contents + pull requests write on geisten/homebrew-tap only
+        run: |
+          set -eu
+          git clone -q "https://x-access-token:$TAP_TOKEN@github.com/geisten/homebrew-tap.git" tap
+          sh scripts/update-tap.sh "$GITHUB_REF_NAME" dist/SHA256SUMS tap
+          cd tap
+          git add Formula/geistr.rb
+          git diff --cached --quiet && { echo "tap already current"; exit 0; }
+          git -c user.name="geisten release" -c user.email="release@geisten.net" commit -q -m "geistr ${GITHUB_REF_NAME#v}"
+          # straight to main; if main is protected, a branch and a pull request, as the tap's earlier updates
+          git push -q origin HEAD:main || {
+            git push -q origin "HEAD:refs/heads/geistr-${GITHUB_REF_NAME#v}"
+            curl -fsS -X POST -H "Authorization: Bearer $TAP_TOKEN" https://api.github.com/repos/geisten/homebrew-tap/pulls \
+              -d "{\"title\":\"geistr ${GITHUB_REF_NAME#v}\",\"head\":\"geistr-${GITHUB_REF_NAME#v}\",\"base\":\"main\"}" >/dev/null
+          }
