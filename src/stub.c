@@ -30,7 +30,7 @@
 #define TOKEN_BYTES 3u
 
 const char *geistr_version(void) {
-    return "0.3.1-stub";
+    return "0.3.2-stub";
 }
 
 static void put_error(char *error, size_t cap, const char *text) {

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.2
+
+### Release
+
+- Releases are built on git.geisten.net's runners and published at
+  https://www.geisten.net/download/geistr/ (`install.sh` installs from there);
+  the Homebrew tap is updated by the release itself. GitHub is a mirror.
+- The catalog lists models in ranking order, every download is pinned to a
+  commit, and a weekly check compares size and SHA-256.
+- Chat file names stay unique within one millisecond.
+
 ## 0.3.1
 
 ### Engine
