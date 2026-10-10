@@ -68,8 +68,8 @@ jobs:
         include:
           - runner: ubuntu-24.04
             cc: gcc-14
-          - runner: ubuntu-24.04-arm
-            cc: gcc-14
+          # no ubuntu-24.04-arm: the Pi has 4 GB and test_real needs 3.2 GB of
+          # its own; macos-15 runs the real model on arm64
           - runner: macos-15
             cc: clang
     runs-on: ${{ matrix.runner }}
@@ -139,7 +139,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           python3 -m venv /tmp/tools && /tmp/tools/bin/pip install -q auditwheel patchelf
-          /tmp/tools/bin/auditwheel repair build/wheel/geistr-*.whl -w build/wheelhouse
+          PATH=/tmp/tools/bin:$PATH auditwheel repair build/wheel/geistr-*.whl -w build/wheelhouse  # patchelf from the venv
           python3 -m venv /tmp/clean && /tmp/clean/bin/pip install -q build/wheelhouse/geistr-*.whl
           cd /tmp && /tmp/clean/bin/python "$GITHUB_WORKSPACE/examples/chat.py" "$GITHUB_WORKSPACE/geistlib/gguf_artifacts/smollm2-360m-instruct-q8_0.gguf"
       - name: macOS wheel
