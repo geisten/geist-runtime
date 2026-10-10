@@ -52,7 +52,7 @@ jobs:
           echo "$answer" && grep -qi paris <<<"$answer"
       - name: on a CPU below the baseline it says so, instead of dying
         run: |
-          sudo apt-get install -y -q qemu-user >/dev/null
+          sh scripts/apt-need.sh ${{ matrix.qemu }}:qemu-user
           set +e
           out=$(${{ matrix.qemu }} -cpu ${{ matrix.old_cpu }} build/static/geistr --version 2>&1); rc=$?
           set -e
