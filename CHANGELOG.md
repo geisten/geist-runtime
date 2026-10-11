@@ -4,6 +4,9 @@
 
 ### Fixes
 
+- `install.sh`: a release that is not on the server (`GEISTR_VERSION=…`) is
+  reported as "no release …" instead of curl's bare 404 (#148).
+
 - `geistr serve`: SIGTERM and, over HTTP, a client that goes away now end a
   long prompt that is still being processed. Before, the service finished it
   first (minutes for a prompt near the context size) (#146).

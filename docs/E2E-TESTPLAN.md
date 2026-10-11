@@ -75,7 +75,7 @@ Rules that keep agent runs reliable:
 | ID | Steps | Expected | Agent check |
 |---|---|---|---|
 | A1 | `curl -fsSL https://www.geisten.net/download/geistr/install.sh \| PREFIX=$T sh` | downloads the latest release, checks `SHA256SUMS`, installs `$T/bin/geistr`; a note if `$T/bin` is not on PATH | `$T/bin/geistr --version` prints `geistr X.Y.Z · catalog revision N · engine abcdef0` |
-| A2 | same with `GEISTR_VERSION=v0.1.1` | installs exactly that release | `--version` shows 0.1.1 |
+| A2 | same with `GEISTR_VERSION=` the current release; then with `v0.0.1` | installs exactly that release; an unknown one: "geistr: no release v0.0.1 at …", exit 1, nothing installed (#148) | `--version`; exit code, no `curl:` text |
 | A3 | `brew install geisten/tap/geistr`, later `brew upgrade geistr` | installs or upgrades to the latest release | `brew test geistr` passes; `--version` matches the release |
 | A4 | install.sh against a release whose archive was altered (or a test server with a wrong `SHA256SUMS`) | "does not match SHA256SUMS; nothing installed", exit ≠ 0 | target binary unchanged |
 | A5 | run the binary on an unsupported CPU (x86-64 without AVX2, or ARM without dotprod) | geistr says the CPU is unsupported and exits; no crash | exit code ≠ 0, message on stderr |

@@ -1050,6 +1050,9 @@ def section_install_sh():
     os.unlink(os.path.join(prefix, 'bin', 'geistr'))
     r = subprocess.run(['sh', here], capture_output=True, text=True, env={**env, 'GEISTR_BASE_URL': url, 'PREFIX': prefix})
     assert r.returncode == 1 and 'does not match' in r.stderr and not os.path.exists(os.path.join(prefix, 'bin', 'geistr')), r.stderr
+    r = subprocess.run(['sh', here], capture_output=True, text=True,  # an unknown release: said so, nothing installed
+                       env={**env, 'GEISTR_BASE_URL': url + '/v9.9.9', 'GEISTR_VERSION': 'v9.9.9', 'PREFIX': prefix})
+    assert r.returncode == 1 and 'no release v9.9.9' in r.stderr and 'curl:' not in r.stderr and not os.path.exists(os.path.join(prefix, 'bin', 'geistr')), r.stderr
     server.shutdown()
     print('install.sh: the archive for this computer, SHA256SUMS checked, a mismatch installs nothing passed')
 
