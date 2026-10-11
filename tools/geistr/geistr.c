@@ -10,7 +10,7 @@
  *   geistr config [key [value]]      settings, remembered between runs (geistr.conf)
  *   geistr bench [model…]            measure tokens/s on CPU and GPU (shown by catalog)
  *   geistr bench --compare [A [B]]   two engines' bench speeds side by side, the change in %
- *   geistr serve <model> [--socket=PATH] [--chats N] [--http[=ADDR:PORT]]
+ *   geistr serve <model> [--socket=PATH] [--chats N] [--http[=ADDR:PORT]] [--max-request=MiB]
  *                                    the model as a service on a Unix socket (service.h)
  *   geistr chat --socket[=PATH]      chat with that service
  *   geistr decide <model> --config FILE --question TEXT --option ID DESC…
@@ -98,7 +98,7 @@ static int usage(void) {
           "                                     intro resume history resume_tokens threads\n"
           "       geistr bench [model…]          tokens/s on ⚙ CPU and ⚡ GPU, shown in geistr catalog\n"
           "       geistr bench --compare [A [B]] two geistlib commits' bench speeds and the change in %\n"
-          "       geistr serve <model> [--socket=PATH] [--chats N] [--http[=ADDR:PORT]]\n"
+          "       geistr serve <model> [--socket=PATH] [--chats N] [--http[=ADDR:PORT]] [--max-request=MiB]\n"
           "                                       (--http: OpenAI and Ollama APIs, default 127.0.0.1:11434)\n"
           "       geistr chat --socket[=PATH]\n"
           "       geistr decide <model> --config FILE --question TEXT --option ID DESC [--option ID DESC…]\n"
@@ -425,7 +425,8 @@ static void on_stop(int signal) {
     stopping = 1;
 }
 
-static int serve(const char *name, const char *processor, const char *socket, const char *http, size_t chats) {
+static int serve(const char *name, const char *processor, const char *socket, const char *http, size_t chats,
+                 size_t max_request) {
     struct session x;
     serving = true; /* an embedding model too (#91) */
     int rc  = session_open(&x, name, processor, 0, true);
@@ -436,7 +437,7 @@ static int serve(const char *name, const char *processor, const char *socket, co
     sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
     struct svc_options o = {.model = x.model, .reasoning = x.reasoning, .name = x.name, .socket = socket,
-                            .http = http, .chats = chats, .stop = &stopping, .embedding = x.embedding};
+                            .http = http, .chats = chats, .max_request = max_request, .stop = &stopping, .embedding = x.embedding};
     rc = service_run(&o) ? ERROR : OK;
     geistr_model_close(x.model);
     return rc;
@@ -586,6 +587,7 @@ int main(int argc, char **argv) {
     const char *processor = nullptr, *socket = nullptr, *http = nullptr;
     bool        fresh     = false; /* chat --new */
     long        chats = 2;
+    long        max_request = 16; /* serve --max-request=MiB */
     long        threads_opt = 0; /* --threads N: this run's engine threads, over the setting */
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--models") && i + 1 < argc)
@@ -608,6 +610,11 @@ int main(int argc, char **argv) {
             char *end;
             threads_opt = strtol(argv[++i], &end, 10);
             if (*end || threads_opt < 1 || threads_opt > 1024)
+                return usage();
+        } else if (!strncmp(argv[i], "--max-request=", 14)) {
+            char *end;
+            max_request = strtol(argv[i] + 14, &end, 10);
+            if (*end || max_request < 1 || max_request > 1024)
                 return usage();
         } else if (!strcmp(argv[i], "--chats") && i + 1 < argc) {
             char *end;
@@ -684,7 +691,7 @@ int main(int argc, char **argv) {
         socket = socket_path;
     }
     if (!strcmp(command, "serve") && n == 2)
-        return serve(args[1], processor, socket, http, (size_t) chats);
+        return serve(args[1], processor, socket, http, (size_t) chats, (size_t) max_request << 20);
     if (!strcmp(command, "chat") && socket)
         return n == 1 ? chat("", processor, socket, fresh) : usage();
     if (!strcmp(command, "chat") && n == 1) { /* the last model, else the geisten app's */

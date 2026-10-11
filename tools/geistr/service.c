@@ -19,7 +19,6 @@
 #include <time.h>
 #include <unistd.h>
 
-#define REQUEST_MAX (16u << 20)
 
 /* ---- socket I/O ---------------------------------------------------------- */
 
@@ -438,7 +437,7 @@ int service_run(const struct svc_options *o) {
             http_serve(o, pool, client, loopback);
             continue;
         }
-        char       *request = read_line(client, REQUEST_MAX);
+        char       *request = read_line(client, o->max_request);
         FILE       *out     = fdopen(client, "w"); /* closes client */
         struct json j       = {};
         if (!out)

@@ -5,7 +5,7 @@ name: release
 #
 # Run by hand (Actions → release → Run workflow): builds and tests the
 # archives and keeps them as workflow artifacts; nothing is published.
-# A pushed tag vX.Y.Z (= geistr --version) also uploads the archives and
+# A pushed tag vX.Y.Z (= geistr --version) also uploads the archives, the Python wheels and
 # SHA256SUMS to www.geisten.net/download/geistr/vX.Y.Z/, checks them over HTTPS and
 # points "latest" there. Run by hand with the input `tag` (an existing vX.Y.Z), it
 # publishes that tag the same way, e.g. to repeat a release that failed after the build.
@@ -106,9 +106,57 @@ jobs:
           name: geistr-macos-arm64
           path: geistr-macos-arm64.tar.gz
 
+  # The Python wheels (#152): glibc/manylinux for Linux (built on the runner,
+  # repaired with auditwheel, so tagged with the runner's glibc: ubuntu-24.04
+  # gives manylinux_2_39) and macOS arm64. Each is installed into a clean venv and
+  # answers once before it is kept.
+  wheels:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: ubuntu-24.04, cc: gcc-14}
+          - {runner: ubuntu-24.04-arm, cc: gcc-14}
+          - {runner: macos-15, cc: clang}
+    name: wheel ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    env:
+      CC: ${{ matrix.cc }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: deps (linux)
+        if: runner.os == 'Linux'
+        run: sh scripts/apt-need.sh gcc-14
+      - name: deps (macos)
+        if: runner.os == 'macOS'
+        run: brew install libomp
+      - name: the wheel installs into a fresh venv; the example and the tests
+        run: make fetch-model && make test-python
+      - name: manylinux (linux), then a clean venv answers
+        if: runner.os == 'Linux'
+        run: |
+          python3 -m venv /tmp/tools && /tmp/tools/bin/pip install -q auditwheel patchelf
+          PATH=/tmp/tools/bin:$PATH auditwheel repair build/wheel/geistr-*.whl -w build/wheelhouse
+          python3 -m venv /tmp/clean && /tmp/clean/bin/pip install -q build/wheelhouse/geistr-*.whl
+          cd /tmp && /tmp/clean/bin/python "$GITHUB_WORKSPACE/examples/chat.py" "$GITHUB_WORKSPACE/geistlib/gguf_artifacts/smollm2-360m-instruct-q8_0.gguf"
+      - name: macOS wheel
+        if: runner.os == 'macOS'
+        run: mkdir -p build/wheelhouse && cp build/wheel/geistr-*.whl build/wheelhouse/
+      - name: the wheel is this release
+        run: |
+          v=$(ls build/wheelhouse/geistr-*.whl | head -1 | sed 's|.*/geistr-\([0-9.]*\)-.*|\1|')
+          test "v$v" = "${TAG}" || { echo "tag ${TAG} but the wheel is $v"; exit 1; }
+      - uses: actions/upload-artifact@v3
+        with:
+          name: geistr-wheel-${{ matrix.runner }}
+          path: build/wheelhouse/geistr-*.whl
+
   release:
     if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
-    needs: [linux, macos]
+    needs: [linux, macos, wheels]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -121,7 +169,7 @@ jobs:
           path: dist
           merge-multiple: true
       - name: one directory per artifact (download-artifact v3) -> dist/*.tar.gz
-        run: find dist -mindepth 2 -name 'geistr-*.tar.gz' -exec mv {} dist/ \; && find dist -mindepth 1 -type d -empty -delete && ls dist
+        run: find dist -mindepth 2 \( -name 'geistr-*.tar.gz' -o -name 'geistr-*.whl' \) -exec mv {} dist/ \; && find dist -mindepth 1 -type d -empty -delete && ls dist
       - name: the tag is the version geistr reports
         run: |
           version=$(sed -n 's/.*return "\([0-9.]*\)";.*/\1/p' src/runtime.c | head -1)
@@ -134,7 +182,7 @@ jobs:
         run: |
           set -eu
           command -v rsync >/dev/null || { sudo apt-get -qq update && sudo apt-get -qq install -y rsync >/dev/null; }
-          cd dist && sha256sum geistr-*.tar.gz > SHA256SUMS && cat SHA256SUMS && cd ..
+          cd dist && sha256sum geistr-*.tar.gz geistr-*.whl > SHA256SUMS && cat SHA256SUMS && cd ..
           mkdir -p ~/.ssh && umask 077
           printf '%s\n' "$DOWNLOAD_SSH_KEY" > ~/.ssh/download_key
           echo "www.geisten.net ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO66CjOfnd/GIiCFyqhGxLudBXi/mCD0IA8DBbbZ2O2i" > ~/.ssh/known_hosts_download
@@ -144,12 +192,22 @@ jobs:
           chmod -R u=rwX,go=rX stage
           rsync -rlt --chmod=Du=rwx,Dgo=rx -e "$ssh_cmd" stage/ germar@www.geisten.net:
           base=https://www.geisten.net/download/geistr/$TAG
-          for f in SHA256SUMS geistr-linux-amd64.tar.gz geistr-linux-arm64.tar.gz geistr-macos-arm64.tar.gz; do
+          for f in SHA256SUMS $(cd dist && ls geistr-*.tar.gz geistr-*.whl); do
             curl -fsS -o "/tmp/$f" "$base/$f"
           done
           (cd /tmp && sha256sum -c --ignore-missing SHA256SUMS) && cmp /tmp/SHA256SUMS dist/SHA256SUMS
           rm -rf stage && mkdir -p stage/geistr && ln -s "$TAG" stage/geistr/latest
           rsync -rlt -e "$ssh_cmd" stage/ germar@www.geisten.net:
+      - name: publish the wheels to PyPI (when the secret PYPI_TOKEN is set)
+        # Without the secret the wheels are on the release page only (pip install <URL>).
+        env:
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}  # a PyPI API token, project scope "geistr"
+        run: |
+          set -eu
+          if [ -z "${PYPI_TOKEN:-}" ]; then echo "PYPI_TOKEN is not set: the wheels are on the release page only"; exit 0; fi
+          python3 -m venv /tmp/twine && /tmp/twine/bin/pip install -q twine
+          /tmp/twine/bin/twine check dist/geistr-*.whl
+          TWINE_USERNAME=__token__ TWINE_PASSWORD="$PYPI_TOKEN" /tmp/twine/bin/twine upload --skip-existing dist/geistr-*.whl
       - name: update the Homebrew tap (github.com/geisten/homebrew-tap, Formula/geistr.rb)
         env:
           TAP_TOKEN: ${{ secrets.TAP_TOKEN }}  # GitHub token: contents + pull requests write on geisten/homebrew-tap only

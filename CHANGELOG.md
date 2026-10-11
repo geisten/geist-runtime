@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### New
+
+- `geistr serve --max-request=MiB`: the size of one request (default 16, as
+  before); a larger one is refused at once, naming the flag (#147).
+
 ### Fixes
 
 - Ranking: a model with no quality data that is short of memory (under the
@@ -9,7 +14,8 @@
   quality. On an 8 GB PC `bonsai2-27b-pq2` no longer comes before
   `qwen3-0.6b`; on a 16 GB Mac `bonsai2-27b-pq2` and `qwen38-27b-q4` follow the
   small models (#136).
-
+- `install.sh`: a release that is not on the server (`GEISTR_VERSION=…`) is
+  reported as "no release …" instead of curl's bare 404 (#148).
 - `geistr serve`: SIGTERM and, over HTTP, a client that goes away now end a
   long prompt that is still being processed. Before, the service finished it
   first (minutes for a prompt near the context size) (#146).
@@ -46,6 +52,10 @@
 ## 0.3.0
 
 ### New
+
+- Python wheels (macOS arm64, Linux x86_64/arm64) are built by the release
+  workflow, listed in `SHA256SUMS`, put next to the archives, and uploaded to
+  PyPI when the release has the token (#152).
 
 - **Your files:** `geistr index <folder>`, then `geistr chat --files <folder>`
   (or `/files` in a chat, `geistr run --files`): each question gets the most
