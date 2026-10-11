@@ -25,8 +25,11 @@ fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
 echo "downloading geistr-$target ($version)"
-curl -fsSL "$base/geistr-$target.tar.gz" -o "$tmp/geistr-$target.tar.gz"
-curl -fsSL "$base/SHA256SUMS" -o "$tmp/SHA256SUMS"
+if ! curl -fsL "$base/geistr-$target.tar.gz" -o "$tmp/geistr-$target.tar.gz" ||
+    ! curl -fsL "$base/SHA256SUMS" -o "$tmp/SHA256SUMS"; then
+    echo "geistr: no release $version at $base (leave GEISTR_VERSION unset for the latest)" >&2
+    exit 1
+fi
 expected=$(grep " geistr-$target.tar.gz\$" "$tmp/SHA256SUMS" | cut -d' ' -f1)
 if command -v sha256sum >/dev/null; then
     actual=$(sha256sum "$tmp/geistr-$target.tar.gz" | cut -d' ' -f1)
