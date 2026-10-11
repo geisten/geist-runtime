@@ -21,7 +21,6 @@
 #include <unistd.h>
 
 #define HEAD_MAX (64u << 10)
-#define BODY_MAX (16u << 20)
 
 /* ---- listening ----------------------------------------------------------- */
 
@@ -77,7 +76,7 @@ struct request {
 };
 
 /* Read one request; 0, or the HTTP status to answer with. */
-static int read_request(int fd, struct request *r) {
+static int read_request(int fd, struct request *r, size_t body_max) {
     char  *head = malloc(HEAD_MAX + 1), *end = nullptr;
     size_t n    = 0;
     while (head && !end && n < HEAD_MAX) {
@@ -113,7 +112,7 @@ static int read_request(int fd, struct request *r) {
     }
     if (!status && chunked)
         status = 411; /* a body needs Content-Length */
-    if (!status && (r->length < 0 || r->length > BODY_MAX))
+    if (!status && (r->length < 0 || (size_t) r->length > body_max))
         status = 413;
     if (!status) {
         r->path[strcspn(r->path, "?")] = 0;
@@ -1014,7 +1013,7 @@ static void embeddings(const struct svc_options *o, FILE *out, const struct json
 
 void http_serve(const struct svc_options *o, struct held *pool, int client, bool loopback) {
     struct request r      = {};
-    int            status = read_request(client, &r);
+    int            status = read_request(client, &r, o->max_request);
     FILE          *out    = fdopen(client, "w"); /* closes client */
     if (!out) {
         close(client);
@@ -1024,7 +1023,11 @@ void http_serve(const struct svc_options *o, struct held *pool, int client, bool
     bool get = !strcmp(r.method, "GET"), post = !strcmp(r.method, "POST"), openai = !strncmp(r.path, "/v1/", 4);
     bool chat = !strcmp(r.path, "/v1/chat/completions") || !strcmp(r.path, "/api/chat");
     bool embed = !strcmp(r.path, "/v1/embeddings") || !strcmp(r.path, "/api/embed");
-    if (status)
+    if (status == 413) {
+        char why[96];
+        snprintf(why, sizeof why, "the request is over the limit of %zu MiB (geistr serve --max-request=MiB)", o->max_request >> 20);
+        error_json(out, status, openai, why, nullptr);
+    } else if (status)
         error_json(out, status, openai, reason(status), nullptr);
     else if (loopback && !host_is_loopback(r.host))
         error_json(out, 403, openai, "Host is not this computer (DNS rebinding?)", nullptr);

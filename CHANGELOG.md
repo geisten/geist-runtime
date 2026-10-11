@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### New
+
+- `geistr serve --max-request=MiB`: the size of one request (default 16, as
+  before); a larger one is refused at once, naming the flag (#147).
+
 ### Fixes
 
 - A model file that is a symlink is not used (the hash never follows links);

@@ -39,6 +39,7 @@ struct svc_options {
     const char      *socket; /* path */
     const char      *http;   /* ADDR:PORT for the HTTP API, or nullptr */
     size_t           chats;  /* conversations kept, ≥ 1 */
+    size_t           max_request; /* bytes of one request: the HTTP body, a socket line */
     volatile sig_atomic_t *stop;
     bool             embedding; /* an embedding model (#91): /v1/embeddings, no chats */
 };

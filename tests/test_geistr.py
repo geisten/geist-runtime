@@ -529,6 +529,34 @@ def section_serve():
     s.close()
     assert service.wait(30) == 0 and time.time() - t0 < 5 and not os.path.exists(sock2), time.time() - t0
     assert 'done' not in reply, reply[:200]  # cut off in the prefill: no answer
+    # --max-request: a request over the limit is refused at once, naming the flag (#147)
+    home = tempfile.mkdtemp(prefix='gr-mr-')
+    port = 20000 + os.getpid() % 20000
+    service = subprocess.Popen([geistr, 'serve', 'ref', '--max-request=1', f'--http=127.0.0.1:{port}', '--cpu', *base],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, env={**env, 'GEISTEN_HOME': home})
+    sock3 = os.path.join(home, 'geistr.sock')
+    deadline = time.time() + 120
+    while not os.path.exists(sock3):
+        assert service.poll() is None and time.time() < deadline, service.stderr.read()
+        time.sleep(0.1)
+    time.sleep(0.5)
+    t0 = time.time()
+    c = unix.create_connection(('127.0.0.1', port))
+    c.sendall(b'POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2000000\r\n\r\n')
+    reply = c.recv(400); c.close()
+    assert reply.startswith(b'HTTP/1.1 413') and b'--max-request' in reply and b'1 MiB' in reply, reply
+    s = unix.socket(unix.AF_UNIX); s.connect(sock3)
+    try:  # the service answers and hangs up before the whole line is sent
+        s.sendall(b'{"op":"chat","messages":[{"role":"user","content":"' + b'x' * 2000000 + b'"}]}\n')
+        refused = s.makefile(encoding='utf-8').readline()
+        assert not refused or json.loads(refused).get('status') == 'invalid', refused
+    except (BrokenPipeError, ConnectionResetError):
+        pass
+    s.close()
+    assert time.time() - t0 < 5, time.time() - t0
+    service.send_signal(signal.SIGTERM)
+    assert service.wait(30) == 0
+    assert geistr_run('serve', 'ref', '--max-request=0').returncode == 2
     print('geistr serve / chat --socket: protocol, 0600 socket, cache hit, rewind, two clients, disconnect, context, SIGTERM mid-answer and mid-prefill, long data folder passed')
 
 # ---- serve --http: the OpenAI and Ollama APIs --------------------------------
