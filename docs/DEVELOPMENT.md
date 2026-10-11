@@ -101,8 +101,12 @@ the tests.
 `for` over `send()` early, or Ctrl-C, stops the answer; the chat goes on.
 Failures raise `geistr.GeistrError` with `.status` ("io", "context", …).
 `geistr.catalog(installed=True)` lists the same models as `geistr catalog`.
-CI builds wheels for macOS arm64 and Linux x86_64/arm64 (manylinux via
-auditwheel) and runs `examples/chat.py` from a fresh `pip install`.
+CI builds wheels for macOS arm64 and Linux x86_64 (manylinux via
+auditwheel) and runs `examples/chat.py` from a fresh `pip install`. The release
+workflow builds them for macOS arm64 and Linux x86_64/arm64, checks that the
+wheel's version is the tag, attaches them to the release folder on
+www.geisten.net and, if the secret `PYPI_TOKEN` is set, uploads them to PyPI.
+Linux wheels carry the glibc of their runner (manylinux_2_39 on ubuntu-24.04).
 
 The optional fixed-option decision contract (#13) is documented in
 [DECISIONS.md](DECISIONS.md). It is default-off and EXPERIMENTAL;
