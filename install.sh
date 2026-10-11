@@ -27,7 +27,7 @@ trap 'rm -rf "$tmp"' EXIT INT TERM
 echo "downloading geistr-$target ($version)"
 if ! curl -fsL "$base/geistr-$target.tar.gz" -o "$tmp/geistr-$target.tar.gz" ||
     ! curl -fsL "$base/SHA256SUMS" -o "$tmp/SHA256SUMS"; then
-    echo "geistr: no release $version at $base (only the current release is kept; GEISTR_VERSION=latest)" >&2
+    echo "geistr: no release $version at $base (leave GEISTR_VERSION unset for the latest)" >&2
     exit 1
 fi
 expected=$(grep " geistr-$target.tar.gz\$" "$tmp/SHA256SUMS" | cut -d' ' -f1)

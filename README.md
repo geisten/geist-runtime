@@ -29,8 +29,8 @@ Both work on Linux (x86_64, arm64) and macOS (Apple Silicon). The script
 downloads the latest release, checks it against `SHA256SUMS` and puts
 `geistr` in `/usr/local/bin`.
 
-Without sudo, or a specific release (the server keeps the current release; an
-older one that is gone is reported as "no release …"):
+Without sudo, or a specific release (a release that is not on the server is
+reported as "no release …"; releases before 0.3.2 never were):
 
 ```sh
 curl -fsSL https://www.geisten.net/download/geistr/install.sh | PREFIX=~/.local sh
