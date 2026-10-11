@@ -294,7 +294,9 @@ file stays until the new one is verified).
 
 geistr is built on **geist-runtime**, an embeddable model runner on
 [geistlib](https://github.com/geisten/geistlib) with one C API
-([`include/geistr.h`](include/geistr.h)) and a Python package:
+([`include/geistr.h`](include/geistr.h)) and a Python package
+(`pip install geistr`; every release also has its wheels at
+`https://www.geisten.net/download/geistr/vX.Y.Z/`):
 
 ```python
 import geistr

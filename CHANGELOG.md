@@ -41,6 +41,10 @@
 
 ### New
 
+- Python wheels (macOS arm64, Linux x86_64/arm64) are built by the release
+  workflow, listed in `SHA256SUMS`, put next to the archives, and uploaded to
+  PyPI when the release has the token (#152).
+
 - **Your files:** `geistr index <folder>`, then `geistr chat --files <folder>`
   (or `/files` in a chat, `geistr run --files`): each question gets the most
   relevant passages of your text, Markdown and PDF files. Embeddings with
