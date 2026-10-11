@@ -4,6 +4,10 @@
 
 ### Fixes
 
+- A model file that is a symlink is not used (the hash never follows links);
+  `geistr catalog` and `geistr run` now say so and how to fix it, and
+  `geistr pull` tells when it replaces a link (#151).
+
 - `geistr serve`: SIGTERM and, over HTTP, a client that goes away now end a
   long prompt that is still being processed. Before, the service finished it
   first (minutes for a prompt near the context size) (#146).

@@ -132,6 +132,14 @@ static void install_states(const char *dir) {
     CHECK(geistr_catalog_check(tiny, dir, true, &state) == GEISTR_OK && state == GEISTR_INSTALL_MISMATCH);
     rmdir(path);
 
+    /* A symlink is never an installed model (the hash opens with O_NOFOLLOW), even to a good file (#151). */
+    char shared[512];
+    snprintf(shared, sizeof shared, "%s/shared.gguf", dir);
+    write_file(shared, "GGUF tiny model bytes");
+    CHECK(symlink(shared, path) == 0);
+    CHECK(geistr_catalog_check(tiny, dir, true, &state) == GEISTR_OK && state == GEISTR_INSTALL_MISMATCH);
+    unlink(path), unlink(shared);
+
     /* a vision tower is checked like a model; other file kinds are not (#92) */
     geistr_catalog_entry tower = *tiny;
     tower.file                 = "vision_tower.safetensors";
