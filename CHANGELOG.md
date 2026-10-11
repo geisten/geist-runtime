@@ -9,6 +9,11 @@
 
 ### Fixes
 
+- Ranking: a model with no quality data that is short of memory (under the
+  recommended RAM) ranks behind models that fit and have a measured, imperfect
+  quality. On an 8 GB PC `bonsai2-27b-pq2` no longer comes before
+  `qwen3-0.6b`; on a 16 GB Mac `bonsai2-27b-pq2` and `qwen38-27b-q4` follow the
+  small models (#136).
 - A model file that is a symlink is not used (the hash never follows links);
   `geistr catalog` and `geistr run` now say so and how to fix it, and
   `geistr pull` tells when it replaces a link (#151).
