@@ -283,10 +283,23 @@ struct candidate {
     double         seconds; /* per typical answer; < 0 unknown */
     bool           installed;
     bool           embedding; /* no chat: after every chat model (#91) */
+    bool           limited;    /* under the recommended memory */
+    bool           unreliable; /* measured, and below the reliability bar */
+    bool           no_quality; /* no reference test at all */
 };
 
-static int verdict_rank(geistr_verdict v) {
-    return v == GEISTR_VERDICT_GOOD ? 0 : v == GEISTR_VERDICT_USABLE ? 1 : v == GEISTR_VERDICT_UNKNOWN ? 2 : 3;
+/* Good, usable, unknown (a figure missing; quality unknown too, when memory
+ * is not tight), measured but imperfect and fitting, quality unknown in tight
+ * memory, the rest (unavailable, too slow). A guess about a model in tight
+ * memory does not outrank one that fits and has a measured, imperfect quality
+ * (#136). */
+static int verdict_rank(const struct candidate *c) {
+    switch (c->verdict) {
+    case GEISTR_VERDICT_GOOD: return 0;
+    case GEISTR_VERDICT_USABLE: return 1;
+    case GEISTR_VERDICT_UNKNOWN: return c->limited && c->no_quality ? 4 : 2;
+    default: return c->unreliable && !c->limited ? 3 : 5;
+    }
 }
 
 /* app_candidate_better: verdict, known quality, installed, pass rate (within
@@ -294,8 +307,8 @@ static int verdict_rank(geistr_verdict v) {
 static bool better(struct candidate a, struct candidate b) {
     if (a.embedding != b.embedding)
         return b.embedding;
-    if (verdict_rank(a.verdict) != verdict_rank(b.verdict))
-        return verdict_rank(a.verdict) < verdict_rank(b.verdict);
+    if (verdict_rank(&a) != verdict_rank(&b))
+        return verdict_rank(&a) < verdict_rank(&b);
     if ((a.rate >= 0) != (b.rate >= 0))
         return a.rate >= 0;
     if (a.installed != b.installed)
@@ -395,9 +408,11 @@ geistr_status geistr_rank(const geistr_catalog *catalog, const geistr_device *de
         f->estimated_from = estimated ? measured[fastest > 0 ? 1 : 0] : 0;
 
         double           rate      = f->total ? (double) f->passed / f->total : -1;
-        struct candidate candidate = {f->verdict, rate, seconds, f->installed, m->embedding};
+        const bool limited = f->resource == GEISTR_RESOURCE_LIMITED, unreliable = f->reason && !strcmp(f->reason, "unreliable"),
+                   no_quality = f->total == 0;
+        struct candidate candidate = {f->verdict, rate, seconds, f->installed, m->embedding, limited, unreliable, no_quality};
         /* Suitability order ignores installed: stable insertion. */
-        struct candidate fit = {f->verdict, rate, seconds, false, m->embedding};
+        struct candidate fit = {f->verdict, rate, seconds, false, m->embedding, limited, unreliable, no_quality};
         size_t           at  = i;
         while (at > 0 && better(fit, ranked[at - 1]))
             ranked[at] = ranked[at - 1], r->order[at] = r->order[at - 1], --at;
