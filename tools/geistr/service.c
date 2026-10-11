@@ -195,12 +195,13 @@ static void *watch_run(void *arg) {
     struct watch *w = arg;
     char          b;
     while (!atomic_load(&w->done)) {
-        const bool closed = w->fd >= 0 && recv(w->fd, &b, 1, MSG_PEEK | MSG_DONTWAIT) == 0; /* EOF */
+        struct pollfd p      = {.fd = w->fd, .events = POLLIN};
+        const bool    closed = w->fd >= 0 && poll(&p, 1, 0) > 0 && recv(w->fd, &b, 1, MSG_PEEK) == 0; /* EOF */
         if (closed)
             atomic_store(&w->gone, true);
         if (closed || *w->stop)
             geistr_chat_cancel(w->chat);
-        usleep(50000);
+        nanosleep(&(struct timespec) {.tv_nsec = 50000000}, nullptr);
     }
     return nullptr;
 }
