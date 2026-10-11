@@ -40,6 +40,9 @@ wait_for() { for i in $(seq 1 180); do screen | grep -qE "$1" && return; sleep 1
 type 'Say hi.'; key Enter; wait_for 'tok/s'
 ```
 
+In zsh define `tmux` helpers as functions (`T() { tmux -L e2e "$@"; }`), not as a
+variable holding the command and its flags: zsh does not split `$T`.
+
 Rules that keep agent runs reliable:
 
 - **Wait for state, not for time.** Before the next step, wait for the prompt
@@ -57,6 +60,8 @@ Rules that keep agent runs reliable:
 - **Wait for the idle prompt**, not for a count of lines: `/clear` and
   scrolling change counts. Idle means the last non-empty line is
   `^(⚡|⚙)( NN%)? >$`.
+- **Ports:** `--http` defaults to 11434, the Ollama port. Use `--http=127.0.0.1:18434`
+  so a running Ollama is not the one answering.
 - **One tmux server per tester** (`tmux -L <name>`), when several agents test
   at once, so they don't close each other's sessions.
 - **Short paths for the service:** a Unix socket path holds about 100 bytes,
@@ -212,6 +217,21 @@ permission file (see [docs/DECISIONS.md](DECISIONS.md)).
 | K2 | without permission (`enabled: false`) | refused ("disabled"), exit 1, nothing on stdout | exit code |
 | K3 | a duplicate option id; `--mode auto` | usage error, exit 2 | exit code |
 | K4 | `geistr catalog --decision-config FILE --json` | the `decision` object per model | `jq` |
+
+## L. Since 0.1.2: files, tools, images, embeddings, first run, threads, ranking
+
+| ID | Steps | Expected | Agent check |
+|---|---|---|---|
+| L1 | `geistr chat --models $(mktemp -d)` with no model, on a terminal (Enter) and without one | a suggestion for this computer (`fits`); with a tty, Enter downloads it; without, the `geistr pull` line and exit 0 | stdout, exit 0 |
+| L2 | `geistr config threads 4`, `geistr run … --threads 2`, then `geistr config threads 0` | stored; accepted; default = physical cores | `geistr config` |
+| L3 | `geistr index <folder>` (2 text/Markdown files, one PDF), `geistr run qwen3-0.6b "<question about one file>" --files <folder>`; `/files <folder>` and `/files off` in a chat | the answer uses that file's content; `sources:` names the files used | stdout has the fact |
+| L4 | `geistr serve qwen3-0.6b --http=127.0.0.1:18434`; `/v1/chat/completions` with a `tools` array; the same streamed; Ollama `/api/chat` with `tools` | `finish_reason: tool_calls`, a call with JSON arguments; streamed deltas | `jq '.choices[0].message.tool_calls[0].function.name'` |
+| L5 | `geistr pull gemma4-e2b` (fetches `vision_tower.safetensors`), serve it, send an `image_url` data URL of a solid red PNG; Ollama `images` | the answer names the colour; a non-vision model answers with a clear error | content contains "red" |
+| L6 | `geistr serve bitnet-embed-0.6b --http`; `/v1/embeddings` with two inputs; `/api/embed`; the same against a chat model | 2 vectors of 1024 numbers; a chat model: 400 "not an embedding model" | `jq` |
+| L7 | `geistr catalog` on a small computer (8 GB, Pi 5) and on a large one | models in ranking order; the first line fits this computer; unknown-speed models do not outrank measured, reliable small ones (#136) | order of ids |
+| L8 | `geistr serve … --http` while another server holds 11434 | "cannot listen on …: Address already in use", exit 1 | exit code |
+| L9 | `geistr serve … --http=127.0.0.1:18434`; POST a prompt of about 3/4 of the context (`'word ' * N`); (a) SIGTERM after 5 s; (b) in a new run, close the client after 5 s and send a short request | (a) exit 0 in < 5 s, socket removed, the client gets an error (#146); (b) the short request is answered in < 10 s | timings; `make test-geistr ONLY=serve,http` pins both |
+| L10 | a request far beyond the context (400 000 words) | 400 `context_length_exceeded` in < 5 s | status, time |
 
 ## Report
 
