@@ -157,6 +157,9 @@ int geistr_pull(const geistr_catalog_entry *m, const char *dir) {
     geistr_install state = GEISTR_INSTALL_MISMATCH;
     char           old[4300];
     snprintf(old, sizeof old, "%s.old", target);
+    struct stat link_st;
+    if (lstat(target, &link_st) == 0 && S_ISLNK(link_st.st_mode))
+        fprintf(stderr, "geistr: %s is a symlink; the downloaded file replaces the link (its target is not touched)\n", target);
     const bool aside = rename(target, old) == 0;
     if (!aside && errno != ENOENT) {
         fprintf(stderr, "geistr: cannot replace %s: %s\n", target, strerror(errno));

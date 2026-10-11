@@ -685,8 +685,12 @@ geistr_status geistr_catalog_check(const geistr_catalog_entry *m, const char *di
     geistr_status status = geistr_sha256_file(path, sum);
     if (status != GEISTR_OK)
         return status;
-    if (strcmp(sum, m->sha256) || !stamp(path, m, after) || strcmp(before, after)) {
+    if (!stamp(path, m, after) || strcmp(before, after)) {
         *out = GEISTR_INSTALL_MISMATCH;
+        return GEISTR_OK;
+    }
+    if (strcmp(sum, m->sha256)) {
+        *out = GEISTR_INSTALL_CORRUPT;
         return GEISTR_OK;
     }
     *out = GEISTR_INSTALL_OK;

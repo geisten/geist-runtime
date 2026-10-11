@@ -123,7 +123,7 @@ static void install_states(const char *dir) {
     sleep(1); /* coarse-ctime file systems */
     write_file(path, "GGUF tiny model BYTES");
     CHECK(geistr_catalog_check(tiny, dir, false, &state) == GEISTR_OK && state == GEISTR_INSTALL_UNVERIFIED);
-    CHECK(geistr_catalog_check(tiny, dir, true, &state) == GEISTR_OK && state == GEISTR_INSTALL_MISMATCH);
+    CHECK(geistr_catalog_check(tiny, dir, true, &state) == GEISTR_OK && state == GEISTR_INSTALL_CORRUPT);
     write_file(path, "short");
     CHECK(geistr_catalog_check(tiny, dir, false, &state) == GEISTR_OK && state == GEISTR_INSTALL_MISMATCH);
     /* A folder of that name is not an installed model. */
@@ -131,6 +131,14 @@ static void install_states(const char *dir) {
     CHECK(mkdir(path, 0700) == 0);
     CHECK(geistr_catalog_check(tiny, dir, true, &state) == GEISTR_OK && state == GEISTR_INSTALL_MISMATCH);
     rmdir(path);
+
+    /* A symlink is never an installed model (the hash opens with O_NOFOLLOW), even to a good file (#151). */
+    char shared[512];
+    snprintf(shared, sizeof shared, "%s/shared.gguf", dir);
+    write_file(shared, "GGUF tiny model bytes");
+    CHECK(symlink(shared, path) == 0);
+    CHECK(geistr_catalog_check(tiny, dir, true, &state) == GEISTR_OK && state == GEISTR_INSTALL_MISMATCH);
+    unlink(path), unlink(shared);
 
     /* a vision tower is checked like a model; other file kinds are not (#92) */
     geistr_catalog_entry tower = *tiny;
