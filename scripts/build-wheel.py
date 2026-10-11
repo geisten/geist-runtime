@@ -32,6 +32,7 @@ files = {
 Name: geistr
 Version: {version}
 Summary: Run language models in your Python process (geist-runtime)
+Description-Content-Type: text/markdown
 Home-page: https://github.com/geisten/geist-runtime
 License: see LICENSE
 Requires-Python: >=3.9

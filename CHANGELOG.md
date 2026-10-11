@@ -12,7 +12,8 @@
 - A model file that is a symlink is not used (the hash never follows links);
   `geistr catalog` and `geistr run` now say so and how to fix it, and
   `geistr pull` tells when it replaces a link (#151).
-
+- `install.sh`: a release that is not on the server (`GEISTR_VERSION=…`) is
+  reported as "no release …" instead of curl's bare 404 (#148).
 - `geistr serve`: SIGTERM and, over HTTP, a client that goes away now end a
   long prompt that is still being processed. Before, the service finished it
   first (minutes for a prompt near the context size) (#146).
@@ -49,6 +50,10 @@
 ## 0.3.0
 
 ### New
+
+- Python wheels (macOS arm64, Linux x86_64/arm64) are built by the release
+  workflow, listed in `SHA256SUMS`, put next to the archives, and uploaded to
+  PyPI when the release has the token (#152).
 
 - **Your files:** `geistr index <folder>`, then `geistr chat --files <folder>`
   (or `/files` in a chat, `geistr run --files`): each question gets the most

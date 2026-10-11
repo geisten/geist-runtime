@@ -29,11 +29,12 @@ Both work on Linux (x86_64, arm64) and macOS (Apple Silicon). The script
 downloads the latest release, checks it against `SHA256SUMS` and puts
 `geistr` in `/usr/local/bin`.
 
-Without sudo, or a specific release:
+Without sudo, or a specific release (a release that is not on the server is
+reported as "no release …"; releases before 0.3.2 never were):
 
 ```sh
 curl -fsSL https://www.geisten.net/download/geistr/install.sh | PREFIX=~/.local sh
-curl -fsSL https://www.geisten.net/download/geistr/install.sh | GEISTR_VERSION=v0.1.1 sh
+curl -fsSL https://www.geisten.net/download/geistr/install.sh | GEISTR_VERSION=v0.3.2 sh
 ```
 
 <details>
@@ -295,7 +296,9 @@ file stays until the new one is verified).
 
 geistr is built on **geist-runtime**, an embeddable model runner on
 [geistlib](https://github.com/geisten/geistlib) with one C API
-([`include/geistr.h`](include/geistr.h)) and a Python package:
+([`include/geistr.h`](include/geistr.h)) and a Python package
+(`pip install geistr`; every release also has its wheels at
+`https://www.geisten.net/download/geistr/vX.Y.Z/`):
 
 ```python
 import geistr
