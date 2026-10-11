@@ -86,7 +86,8 @@ typedef enum geistr_install {
     GEISTR_INSTALL_MISSING = 0, /* no file of that name */
     GEISTR_INSTALL_UNVERIFIED,  /* right size, no receipt, not hashed (hash == false) */
     GEISTR_INSTALL_OK,          /* SHA-256 matches: installed */
-    GEISTR_INSTALL_MISMATCH,    /* wrong size or hash, or not a regular file: never load it */
+    GEISTR_INSTALL_MISMATCH,    /* wrong size, not a regular file, or changed while hashed: never load it */
+    GEISTR_INSTALL_CORRUPT,     /* the right size, but the SHA-256 differs: damaged or tampered; never load it */
 } geistr_install;
 
 /* Is entry's file in models_dir installed? With hash, a file without a valid

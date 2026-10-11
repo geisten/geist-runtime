@@ -258,7 +258,7 @@ static int catalog(bool installed_only, bool available_only, bool json) {
             if ((installed_only && !installed) || (available_only && installed))
                 continue;
             if (json) {
-                static const char *const states[]    = {"available", "unverified", "installed", "mismatch"};
+                static const char *const states[]    = {"available", "unverified", "installed", "mismatch", "corrupt"};
                 static const char *const resources[] = {"fits", "limited", "unavailable"};
                 printf("%s{\"id\":", first ? "" : ",");
                 json_write(stdout, m->id);
@@ -288,6 +288,7 @@ static int catalog(bool installed_only, bool available_only, bool json) {
                 char        size[16];
                 const char *mark = installed                             ? "✓"
                                    : state[i] == GEISTR_INSTALL_MISMATCH ? "⟳"
+                                   : state[i] == GEISTR_INSTALL_CORRUPT  ? "✗"
                                                                          : "↓";
                 char        label[160];
                 bool quant = m->quantization && !strstr(m->name, m->quantization);
@@ -299,6 +300,8 @@ static int catalog(bool installed_only, bool available_only, bool json) {
                     printf("  ⟳ a symlink, not used: copy the file or use a hard link");
                 else if (state[i] == GEISTR_INSTALL_MISMATCH)
                     printf("  ⟳ not this catalog's file: geistr pull");
+                else if (state[i] == GEISTR_INSTALL_CORRUPT)
+                    printf("  ✗ checksum differs (damaged file?): geistr pull %s", m->id);
                 else if (f->resource != GEISTR_RESOURCE_FITS)
                     printf("  %s %s", f->resource == GEISTR_RESOURCE_UNAVAILABLE ? "✗" : "⚠",
                            limit_text(f->resource_reason));
@@ -345,7 +348,8 @@ int resolve(const char *model, char *path, size_t cap, geistr_reasoning *reasoni
             if (state != GEISTR_INSTALL_OK) {
                 fprintf(stderr,
                         state == GEISTR_INSTALL_MISSING ? "geistr: %s is not installed; geistr pull %s\n"
-                                                        : "geistr: %s does not match the catalog; geistr pull %s\n",
+                        : state == GEISTR_INSTALL_CORRUPT ? "geistr: %s is damaged (its checksum differs from the catalog's); geistr pull %s\n"
+                                                          : "geistr: %s does not match the catalog; geistr pull %s\n",
                         model, model);
                 geistr_catalog_free(c);
                 return ERROR;
@@ -469,7 +473,7 @@ static int pull_all(void) {
     for (size_t i = 0; i < geistr_catalog_count(c) && rc != CANCELLED; i++) {
         const geistr_catalog_entry *m     = geistr_catalog_get(c, i);
         geistr_install              state = install_state(m, true);
-        if (state == GEISTR_INSTALL_MISMATCH) {
+        if (state == GEISTR_INSTALL_MISMATCH || state == GEISTR_INSTALL_CORRUPT) {
             int one = geistr_pull(m, models_dir);
             rc      = one == OK ? rc : one;
             updated += one == OK;

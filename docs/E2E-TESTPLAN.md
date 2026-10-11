@@ -89,7 +89,7 @@ Rules that keep agent runs reliable:
 | B2 | `geistr catalog --json` | schema 1: `schema`, `models_dir`, per model `id`, `sha256`, `state`, `resource`, `tokens_per_s` | `jq '.schema==1 and (.models\|length)>0'` |
 | B3 | `geistr pull smollm2-360m` | progress, verify, ✓ in `geistr catalog` | `catalog --installed` lists it |
 | B4 | interrupt `geistr pull qwen3-0.6b` with Ctrl-C halfway, run it again | it resumes (doesn't restart at 0), verifies | the `.part` file grew; final ✓ |
-| B5 | corrupt a byte of an installed model file | `catalog` marks it (mismatch); `run` refuses with "does not match the catalog; geistr pull …" | exit 1 |
+| B5 | corrupt a byte of an installed model file | `catalog` marks it `✗ checksum differs (damaged file?)` (JSON state `corrupt`; a file of another size is `⟳`/`mismatch`); `run` refuses with "is damaged …; geistr pull …" (#149) | exit 1 |
 | B6 | `geistr pull` with no id after a catalog update that replaced a file | the ⟳ model is downloaded again; the old file stays until the new one is verified | — |
 | B7 | `geistr catalog --installed`, `--available` | only those rows | — |
 

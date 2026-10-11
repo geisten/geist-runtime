@@ -123,7 +123,7 @@ static void install_states(const char *dir) {
     sleep(1); /* coarse-ctime file systems */
     write_file(path, "GGUF tiny model BYTES");
     CHECK(geistr_catalog_check(tiny, dir, false, &state) == GEISTR_OK && state == GEISTR_INSTALL_UNVERIFIED);
-    CHECK(geistr_catalog_check(tiny, dir, true, &state) == GEISTR_OK && state == GEISTR_INSTALL_MISMATCH);
+    CHECK(geistr_catalog_check(tiny, dir, true, &state) == GEISTR_OK && state == GEISTR_INSTALL_CORRUPT);
     write_file(path, "short");
     CHECK(geistr_catalog_check(tiny, dir, false, &state) == GEISTR_OK && state == GEISTR_INSTALL_MISMATCH);
     /* A folder of that name is not an installed model. */
