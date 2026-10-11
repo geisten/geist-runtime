@@ -145,7 +145,8 @@ jobs:
       - name: macOS wheel
         if: runner.os == 'macOS'
         run: mkdir -p build/wheelhouse && cp build/wheel/geistr-*.whl build/wheelhouse/
-      - name: the wheel is this release
+      - name: the wheel is this release (for a tag; a build-only run has the branch name)
+        if: startsWith(env.TAG, 'v')
         run: |
           v=$(ls build/wheelhouse/geistr-*.whl | head -1 | sed 's|.*/geistr-\([0-9.]*\)-.*|\1|')
           test "v$v" = "${TAG}" || { echo "tag ${TAG} but the wheel is $v"; exit 1; }
