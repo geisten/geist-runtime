@@ -743,7 +743,7 @@ static void openai_chat(const struct svc_options *o, struct held *pool, FILE *ou
                              .usage   = json_bool(j, json_field(j, options, "include_usage"), false)};
     snprintf(a.id, sizeof a.id, "chatcmpl-%x%x", (unsigned) a.created, ++serial);
     a.hold.tools = tools >= 0;
-    svc_chat(o, pool, &r, &(struct svc_sink) {&a, openai_part, openai_done, openai_error, openai_alive});
+    svc_chat(o, pool, &r, &(struct svc_sink) {&a, openai_part, openai_done, openai_error, openai_alive, fileno(a.out)});
     free(a.hold.text);
     svc_free_request(&r);
 }
@@ -897,7 +897,7 @@ static void ollama_chat(const struct svc_options *o, struct held *pool, FILE *ou
                        .model  = o->name,
                        .stream = json_bool(j, json_field(j, 0, "stream"), true),
                        .hold   = {.tools = tools >= 0}};
-    svc_chat(o, pool, &r, &(struct svc_sink) {&a, ollama_part, ollama_done, ollama_error, ollama_alive});
+    svc_chat(o, pool, &r, &(struct svc_sink) {&a, ollama_part, ollama_done, ollama_error, ollama_alive, fileno(a.out)});
     free(a.hold.text);
     svc_free_request(&r);
 }
