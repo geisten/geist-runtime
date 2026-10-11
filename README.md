@@ -231,7 +231,8 @@ embed (400). Not supported yet: more than one model per service.
 
 Without `--http`, `geistr serve` listens on a Unix socket only (owner only,
 0600), and `geistr chat --socket` chats through it. `--chats N` sets how many
-conversations the service keeps (default 2). The socket protocol is one
+conversations the service keeps (default 2), `--max-request=MiB` the size of one
+request (default 16): a larger one is refused at once (HTTP 413). The socket protocol is one
 JSON object per line, documented in
 [`tools/geistr/service.h`](tools/geistr/service.h):
 
@@ -269,7 +270,7 @@ threads, `--models DIR` another model folder.
 | `geistr pull` | update the installed models after a geistr update |
 | `geistr run <model> [prompt…]` | one answer to stdout; the prompt from stdin if none |
 | `geistr chat [<model>] [--new]` | interactive; without a model the last one |
-| `geistr serve <model> [--http[=ADDR:PORT]] [--socket=PATH] [--chats N]` | the model as a service |
+| `geistr serve <model> [--http[=ADDR:PORT]] [--socket=PATH] [--chats N] [--max-request=MiB]` | the model as a service |
 | `geistr chat --socket[=PATH]` | chat with that service |
 | `geistr config [key [value]]` | settings |
 | `geistr bench [model…]` | tokens/s on CPU and GPU (default: every installed model) |
