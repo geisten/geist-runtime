@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### New
+
+- `geistr serve --max-request=MiB`: the size of one request (default 16, as
+  before); a larger one is refused at once, naming the flag (#147).
+
 ### Fixes
 
 - `geistr catalog` tells a damaged model file (right size, other SHA-256: `✗`,
