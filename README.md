@@ -287,8 +287,9 @@ Every complete answer records its speed in `speed.tsv` in the data folder;
 
 `brew upgrade geistr`, or run the install command again. The model list
 ships inside geistr, so new models come with a new geistr. Afterwards `geistr catalog` marks installed
-models whose file changed with ⟳, and `geistr pull` fetches them (the old
-file stays until the new one is verified).
+models whose file changed with ⟳ and a file of the right size with another
+checksum (damaged?) with ✗, and `geistr pull` fetches them (the old file stays
+until the new one is verified).
 
 ## Python and C
 

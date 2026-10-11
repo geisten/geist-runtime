@@ -65,7 +65,7 @@ release's `SHA256SUMS` and installs to `$PREFIX/bin`.
 
 - `geistr catalog --json` is schema 1: `schema`, `models_dir`, and per model
   `id`, `name`, `quantization`, `file`, `url`, `sha256`, `bytes`,
-  `recommended_ram_gib`, `state` (available, unverified, installed, mismatch),
+  `recommended_ram_gib`, `state` (available, unverified, installed, mismatch, corrupt),
   `resource` (fits, limited, unavailable), `resource_reason`, `tokens_per_s`
   (`cpu`, `gpu`: measured here, or null).
 - `speed.tsv` in the data folder is only appended to, so it keeps the history
