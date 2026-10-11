@@ -160,6 +160,14 @@ static geistr_catalog *decide_catalog(const char *directory, const char *file) {
     return load_catalog();
 }
 
+/* The model's file is a symlink: never used (the hash does not follow links, #151). */
+static bool is_symlink(const geistr_catalog_entry *m) {
+    char        path[4096];
+    struct stat st;
+    return snprintf(path, sizeof path, "%s/%s", models_dir, m->file) < (int) sizeof path && lstat(path, &st) == 0 &&
+           S_ISLNK(st.st_mode);
+}
+
 /* Installed state; hashes once per new or changed file (then a receipt). */
 static geistr_install install_state(const geistr_catalog_entry *m, bool quiet) {
     geistr_install state = GEISTR_INSTALL_MISSING;
@@ -288,7 +296,9 @@ static int catalog(bool installed_only, bool available_only, bool json) {
                 printf("%s %-18s %-36s %8s", mark, m->id, label, size_text(m->bytes, size));
                 speed_bar("⚙", local[i].cpu.rate, reference_rate(m, "cpu"), max, bar, tty);
                 speed_bar("⚡", local[i].gpu.rate, reference_rate(m, "gpu"), max, bar, tty);
-                if (state[i] == GEISTR_INSTALL_MISMATCH)
+                if (state[i] == GEISTR_INSTALL_MISMATCH && is_symlink(m))
+                    printf("  ⟳ a symlink, not used: copy the file or use a hard link");
+                else if (state[i] == GEISTR_INSTALL_MISMATCH)
                     printf("  ⟳ not this catalog's file: geistr pull");
                 else if (state[i] == GEISTR_INSTALL_CORRUPT)
                     printf("  ✗ checksum differs (damaged file?): geistr pull %s", m->id);
@@ -330,6 +340,11 @@ int resolve(const char *model, char *path, size_t cap, geistr_reasoning *reasoni
             *embedding = m->embedding;
         if (!is_path) {
             geistr_install state = install_state(m, false);
+            if (state != GEISTR_INSTALL_OK && is_symlink(m)) {
+                fprintf(stderr, "geistr: %s is a symlink; geistr does not follow links: copy the file or use a hard link\n", model);
+                geistr_catalog_free(c);
+                return ERROR;
+            }
             if (state != GEISTR_INSTALL_OK) {
                 fprintf(stderr,
                         state == GEISTR_INSTALL_MISSING ? "geistr: %s is not installed; geistr pull %s\n"

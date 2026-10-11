@@ -150,6 +150,14 @@ def section_catalog():
     shown = [m['id'] for m in json.loads(bundled_run('--json'))['models']]
     assert sorted(shown) == sorted(m['id'] for m in bundled['models']) and len(shown) == len(set(shown)), shown
     assert [line.split()[1] for line in bundled_run().splitlines() if line[:1] in '✓↓⟳✗'] == shown
+    # a symlink to a good file is not used, and says so (#151)
+    linked = os.path.join(tmp, 'linked-models'); os.makedirs(linked, exist_ok=True)
+    if not os.path.islink(os.path.join(linked, 'tiny.gguf')):
+        os.symlink(os.path.join(www, 'tiny.gguf'), os.path.join(linked, 'tiny.gguf'))
+    sub = lambda *a: subprocess.run([geistr, *a, '--models', linked, '--catalog', catalog_path], capture_output=True, text=True, env=env, timeout=120)
+    assert 'symlink' in sub('catalog').stdout
+    r = sub('run', 'tiny', 'hi')
+    assert r.returncode == 1 and 'is a symlink' in r.stderr and 'hard link' in r.stderr, r.stderr
     print('geistr catalog: states, receipts, --json schema, filters passed')
 
 # ---- exit codes ------------------------------------------------------------

@@ -9,6 +9,9 @@
 
 ### Fixes
 
+- A model file that is a symlink is not used (the hash never follows links);
+  `geistr catalog` and `geistr run` now say so and how to fix it, and
+  `geistr pull` tells when it replaces a link (#151).
 - `geistr catalog` tells a damaged model file (right size, other SHA-256: `✗`,
   JSON state `corrupt`) from one that is not this catalog's file (`⟳`, `mismatch`);
   `geistr run` says "is damaged" and `geistr pull` repairs both (#149).
