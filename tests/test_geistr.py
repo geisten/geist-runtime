@@ -64,7 +64,7 @@ def listing():
     for m in doc['models']:
         assert set(m) == set(types), m
         assert all(isinstance(m[k], t) for k, t in types.items()), m
-        assert m['state'] in ('available', 'unverified', 'installed', 'mismatch')
+        assert m['state'] in ('available', 'unverified', 'installed', 'mismatch', 'corrupt')
         assert m['resource'] in ('fits', 'limited', 'unavailable')
         assert set(m['tokens_per_s']) == {'cpu', 'gpu'} and all(v is None or v > 0 for v in m['tokens_per_s'].values())
     return {m['id']: m for m in doc['models']}
@@ -130,10 +130,10 @@ def section_catalog():
     assert states['huge']['resource'] == 'unavailable' and states['huge']['resource_reason'] in ('ram', 'disk')
     install_models()
     states = listing()
-    assert states['ref']['state'] == 'installed' and states['wrong']['state'] == 'mismatch', states
+    assert states['ref']['state'] == 'installed' and states['wrong']['state'] == 'corrupt', states  # the right size, other bytes
     assert list(states) == order and text_ids() == order, (list(states), order)  # installing moves no row
     text = geistr_run('catalog').stdout
-    assert '✓ ref' in text and '↓ tiny' in text and '⟳ wrong' in text and '✗' in text.split('huge')[1], text
+    assert '✓ ref' in text and '↓ tiny' in text and '✗ wrong' in text and 'checksum differs' in text and '✗' in text.split('huge')[1], text
     r = geistr_run('pull', binary=nonet)  # update: wrong is not this catalog's file, so it would be downloaded again
     assert r.returncode == 1 and 'no download module' in r.stderr, r.stderr
     r = geistr_run('--version')
@@ -159,7 +159,7 @@ def section_run():
     r = geistr_run('run', 'tiny', 'hi')
     assert r.returncode == 1 and 'geistr pull tiny' in r.stderr, r.stderr
     r = geistr_run('run', 'wrong', 'hi')
-    assert r.returncode == 1 and 'does not match' in r.stderr, r.stderr
+    assert r.returncode == 1 and 'damaged' in r.stderr and 'geistr pull wrong' in r.stderr, r.stderr
 
     # ---- run: by id, by path, prompt from stdin ------------------------------------
     r = geistr_run('run', 'ref', 'What is the capital of France? Answer in one word.')
