@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- `geistr serve`: SIGTERM and, over HTTP, a client that goes away now end a
+  long prompt that is still being processed. Before, the service finished it
+  first (minutes for a prompt near the context size) (#146).
+
 ## 0.3.2
 
 ### Release

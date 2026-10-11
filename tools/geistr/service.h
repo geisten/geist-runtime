@@ -65,13 +65,17 @@ void svc_free_request(struct svc_request *r);
  * answer stops); then neither done nor error follows. done gets the whole
  * answer; error's status is GEISTR_INVALID, GEISTR_CONTEXT or another
  * (the service failed). alive, if set, comes when the request is accepted
- * and about once a second of hidden reasoning; false: the client is gone. */
+ * and about once a second of hidden reasoning; false: the client is gone.
+ * fd, if >= 0, is the client's connection: while the prompt is processed
+ * (which can take minutes) it is watched for the peer closing it, and that,
+ * like the service's stop flag, cancels the work (#146). */
 struct svc_sink {
     void *ctx;
     bool (*part)(void *ctx, const char *text, size_t len);
     void (*done)(void *ctx, const geistr_stats *stats, const char *answer);
     void (*error)(void *ctx, geistr_status status, const char *text);
     bool (*alive)(void *ctx);
+    int  fd;
 };
 
 struct held; /* the conversations the service keeps */

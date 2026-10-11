@@ -5,6 +5,9 @@
 #include "json.h"
 #include <errno.h>
 #include <poll.h>
+#include <signal.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -178,6 +181,31 @@ static void reply_error(FILE *out, const char *status, const char *text) {
     fputs("}\n", out);
 }
 
+/* While geistr_chat_send processes the prompt (minutes for a huge one) nothing
+ * else runs in this thread: a watcher cancels it when the service is told to
+ * stop or the client closes its connection (#146). Cancel is an atomic store. */
+struct watch {
+    geistr_chat                 *chat;
+    int                          fd; /* the client; -1: not watched */
+    const volatile sig_atomic_t *stop;
+    atomic_bool                  done, gone;
+};
+
+static void *watch_run(void *arg) {
+    struct watch *w = arg;
+    char          b;
+    while (!atomic_load(&w->done)) {
+        struct pollfd p      = {.fd = w->fd, .events = POLLIN};
+        const bool    closed = w->fd >= 0 && poll(&p, 1, 0) > 0 && recv(w->fd, &b, 1, MSG_PEEK) == 0; /* EOF */
+        if (closed)
+            atomic_store(&w->gone, true);
+        if (closed || *w->stop)
+            geistr_chat_cancel(w->chat);
+        nanosleep(&(struct timespec) {.tv_nsec = 50000000}, nullptr);
+    }
+    return nullptr;
+}
+
 void svc_chat(const struct svc_options *o, struct held *pool, const struct svc_request *r,
               const struct svc_sink *out) {
     static uint64_t       clock;
@@ -244,8 +272,21 @@ void svc_chat(const struct svc_options *o, struct held *pool, const struct svc_r
         out->error(out->ctx, GEISTR_INVALID, geistr_chat_error(c->chat)); /* no vision, not an image */
         return;
     }
-    if (s == GEISTR_OK)
-        s = geistr_chat_send(c->chat, n - keep, m + keep);
+    if (s == GEISTR_OK) {
+        struct watch w = {.chat = c->chat, .fd = out->fd, .stop = o->stop};
+        pthread_t    t;
+        const bool   watching = pthread_create(&t, nullptr, watch_run, &w) == 0;
+        s                     = geistr_chat_send(c->chat, n - keep, m + keep);
+        atomic_store(&w.done, true);
+        if (watching)
+            pthread_join(t, nullptr);
+        if (s == GEISTR_CANCELLED && atomic_load(&w.gone))
+            return; /* nobody to tell */
+        if (s == GEISTR_CANCELLED && *o->stop) {
+            out->error(out->ctx, s, "the service is stopping");
+            return;
+        }
+    }
     if (s != GEISTR_OK) {
         out->error(out->ctx, s, geistr_chat_error(c->chat));
         return;
@@ -330,7 +371,7 @@ static void chat_request(const struct svc_options *o, struct held *pool, FILE *o
         ok                    = r.messages[k].role && r.messages[k].content;
     }
     if (ok)
-        svc_chat(o, pool, &r, &(struct svc_sink) {out, line_part, line_done, line_error, nullptr});
+        svc_chat(o, pool, &r, &(struct svc_sink) {out, line_part, line_done, line_error, nullptr, -1}); /* ponytail: a unix client half-closes after its line (nc), so EOF is not "gone" there */
     else
         reply_error(out, "invalid", "messages: a list of messages, each with role and content");
     svc_free_request(&r);

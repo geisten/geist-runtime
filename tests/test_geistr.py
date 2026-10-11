@@ -502,7 +502,26 @@ def section_serve():
         time.sleep(0.1)
     service.send_signal(signal.SIGTERM)
     assert service.wait(30) == 0
-    print('geistr serve / chat --socket: protocol, 0600 socket, cache hit, rewind, two clients, disconnect, context, SIGTERM mid-answer, long data folder passed')
+    # SIGTERM while a long prompt is processed (prefill): the service ends at once, not after the prompt (#146)
+    home = tempfile.mkdtemp(prefix='gr-pf-')
+    service = subprocess.Popen([geistr, 'serve', 'ref', '--cpu', *base], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                               text=True, env={**env, 'GEISTEN_HOME': home})
+    sock2 = os.path.join(home, 'geistr.sock')
+    deadline = time.time() + 120
+    while not os.path.exists(sock2):
+        assert service.poll() is None and time.time() < deadline, service.stderr.read()
+        time.sleep(0.1)
+    ctx = info['context']
+    s = unix.socket(unix.AF_UNIX); s.connect(sock2)
+    s.sendall((json.dumps({'op': 'chat', 'messages': [{'role': 'user', 'content': 'word ' * (ctx * 3 // 4)}]}) + '\n').encode())
+    time.sleep(0.5)
+    t0 = time.time()
+    service.send_signal(signal.SIGTERM)
+    reply = s.makefile(encoding='utf-8').read()
+    s.close()
+    assert service.wait(30) == 0 and time.time() - t0 < 5 and not os.path.exists(sock2), time.time() - t0
+    assert 'done' not in reply, reply[:200]  # cut off in the prefill: no answer
+    print('geistr serve / chat --socket: protocol, 0600 socket, cache hit, rewind, two clients, disconnect, context, SIGTERM mid-answer and mid-prefill, long data folder passed')
 
 # ---- serve --http: the OpenAI and Ollama APIs --------------------------------
 def section_http():
@@ -603,6 +622,17 @@ def section_http():
     t0 = time.time()
     assert call('POST', '/api/chat', {'messages': [{'role': 'user', 'content': 'Hi'}], 'stream': False,
                 'options': {'num_predict': 2}})[0] == 200 and time.time() - t0 < 60
+    # a client that goes away while a long prompt is processed frees the service at once (#146)
+    s = unix.socket(unix.AF_UNIX); s.connect(sock); s.sendall(b'{"op":"info"}\n')
+    ctx = json.loads(s.makefile(encoding='utf-8').readline())['context']; s.close()
+    big = json.dumps({'model': 'ref', 'messages': [{'role': 'user', 'content': 'word ' * (ctx * 3 // 4)}]}).encode()
+    c = unix.create_connection(('127.0.0.1', port))
+    c.sendall(b'POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n'
+              b'Content-Length: %d\r\n\r\n' % len(big) + big)
+    time.sleep(0.5); c.close()
+    t0 = time.time()
+    assert call('POST', '/v1/chat/completions', {'model': 'ref', 'messages': ask, 'max_tokens': 4})[0] == 200
+    assert time.time() - t0 < 10, time.time() - t0
     # tools (#92): a model without a tool format refuses them, clearly (400), in both APIs
     weather = [{'type': 'function', 'function': {'name': 'get_weather', 'parameters': {'type': 'object',
                 'properties': {'city': {'type': 'string'}}}}}]
