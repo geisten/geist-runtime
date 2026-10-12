@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- The macOS archive, the Homebrew binary and the macOS wheel were built with the
+  runner's own macOS (27) as the minimum, so they did not start on macOS 15 or
+  26 and PyPI refused the wheel tag `macosx_27_0`. They are built for macOS 15
+  and later now (`minos 15.0`, checked in the release workflow) (#152).
+
 ## 0.3.3
 
 ### New
