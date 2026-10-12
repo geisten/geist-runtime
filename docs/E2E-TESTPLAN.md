@@ -93,6 +93,8 @@ Rules that keep agent runs reliable:
 | B5 | corrupt a byte of an installed model file | `catalog` marks it `✗ checksum differs (damaged file?)` (JSON state `corrupt`; a file of another size is `⟳`/`mismatch`); `run` refuses with "is damaged …; geistr pull …" (#149) | exit 1 |
 | B6 | `geistr pull` with no id after a catalog update that replaced a file | the ⟳ model is downloaded again; the old file stays until the new one is verified | — |
 | B7 | `geistr catalog --installed`, `--available` | only those rows | — |
+| B8 | `geistr pull qwen3-0.6b`, then cut the network halfway (Wi-Fi off, or `sudo ifconfig en0 down` / `ip link set … down`), then on again and pull again | a clear error and exit 1 (not a hang: it gives up within about a minute); the `.part` stays; the second pull resumes and verifies | exit code, time to the error, `.part` grew |
+| B9 | pull into a folder on a disk that is too small (macOS: `hdiutil create -size 200m -fs APFS -volname small small.dmg` and attach; Linux: `mount -t tmpfs -o size=200m tmpfs /mnt/small`): `geistr pull smollm2-360m --models /Volumes/small` | "no space left" (or the like), exit 1; no ✓ in `catalog`; nothing half-written left that `run` would load | exit code, `catalog --models …` |
 
 ## C. One answer: `geistr run`
 
@@ -104,6 +106,7 @@ Rules that keep agent runs reliable:
 | C4 | `geistr run nope hi`; `geistr fly`; `geistr run tiny hi` (not installed) | clear message: unknown model / usage / "not installed; geistr pull tiny"; exit 1, 2, 1 | exit codes |
 | C5 | `geistr run path/to/model.gguf "Hi"` | a `.gguf` path works like an id | exit 0 |
 | C6 | pipe the output: `geistr run qwen3-0.6b "Write **bold**" \| cat` | plain text, no escape codes, Markdown as written | no `\x1b` in stdout |
+| C7 | `geistr run qwen3-0.6b --cpu "Hi"` and `--gpu "Hi"` (a GPU machine); on a machine without a GPU `--gpu` | each answers on that processor (the speed line differs: Metal ≈ 3–4× the CPU on an M1 Max); without a GPU: a clear message or the CPU, no crash | the two speed lines |
 
 ## D. The chat: looks and answers
 
@@ -122,6 +125,7 @@ Start: `geistr chat qwen3-0.6b --new` in a terminal of 100 × 40.
 | D9 | `NO_COLOR=1 geistr chat …` | no colours or styles | no `\e[` SGR in `capture-pane -e` |
 | D10 | resize the terminal between answers (wider, narrower) | the next answer and the editor use the new width | — |
 | D11 | 40 and 48 columns | the chat's own lines (intro, `?`, `/help`, `/info`, hints) wrap at words; the intro's second line is dropped below 60; `?` lists one key per line | no line wider than the width |
+| D12 | a thinking model (`qwen3-0.6b`): ask "What is 17 × 23?" twice | `⠋ thinking · N s` while it reasons; the reasoning itself is not shown; the answer comes; the second question works and the first answer's reasoning is not sent again (`/info` context grows only by the visible turns) | screen, `/info` before and after |
 
 ## E. The line editor
 
@@ -137,6 +141,7 @@ Start: `geistr chat qwen3-0.6b --new` in a terminal of 100 × 40.
 | E8 | type ahead while an answer runs, including Enter | the keys appear at the next prompt; Enter sends (it is not a line break) | screen |
 | E9 | UTF-8: type `Grüße 👋`, move with ←→, delete with Backspace | whole characters move and vanish; the cursor stays aligned | screen |
 | E10 | `?` on an empty line | the shortcuts | screen |
+| E11 | type `one two three`, then Ctrl-A, Ctrl-E, Ctrl-W, Ctrl-U, type again, Ctrl-A + Ctrl-K, Ctrl-L (in iTerm2, Terminal.app, a Linux terminal and tmux) | start/end of line, the word before the cursor gone, the line cleared to the start / to the end, the screen cleared with the prompt kept | screen after each key |
 
 ## F. Chat commands
 
@@ -188,6 +193,11 @@ Start: `geistr chat qwen3-0.6b --new` in a terminal of 100 × 40.
 | H11 | two clients at once; one disconnects mid-answer | answers are served one at a time; the disconnect stops that answer; the other completes | — |
 | H12 | SIGTERM to the service | it exits cleanly and removes the socket | socket gone |
 | H13 | a request bigger than the context | 400 `context_length_exceeded` (OpenAI) | status and code |
+| H14 | `geistr serve qwen3-0.6b --http=127.0.0.1:18434 --chats 2`; three clients with different conversations, one after the other, then the first again | the first two are continued from the cache (`input_tokens` only the new message); the third evicts the least recently used; the first again is processed whole, still answered | `usage.prompt_tokens` / socket `input_tokens` per request |
+| H15 | `--max-request=1` and a 2 MB body; the same as a socket line | 413 naming `--max-request` and the limit (HTTP); refused at once (socket); the service goes on | status, time < 1 s |
+| H16 | OpenAI: `max_tokens: 5`, `stop: ["\n"]`, `temperature: 0` twice, `tool_choice: "none"` with `tools`; `GET /v1/models`; Ollama `options.num_predict: 3`; `/v1/embeddings` with `encoding_format: "base64"` | 5 tokens, `finish_reason: length`; cut at the stop; two equal answers; no tool call; the model listed; 3 tokens; base64 vectors of the same length as float | `jq` on each |
+| H17 | socket: `echo '{"op":"info"}' \| nc -U …/geistr.sock` | one JSON line: model, context, chat format | `jq .context` |
+| H18 | serve for an hour: 500 short requests (a loop with curl), RSS every 50 | RSS levels off after the first requests (no steady growth); every answer 200 | `ps -o rss` series |
 
 ## I. Bench, speeds, settings
 
@@ -198,6 +208,7 @@ Start: `geistr chat qwen3-0.6b --new` in a terminal of 100 × 40.
 | I3 | `geistr bench --compare` (after a geistr update with a new engine) | old vs new per model and processor, ▲/▼ % | — |
 | I4 | `geistr config`; `config processor gpu`; `config temperature 5`; `config model ""` | lists all settings and the file; sets; refuses 5 with the valid range; clears | exit codes 0/0/2/0 |
 | I5 | `geistr --models DIR`, `--catalog FILE` | another model folder; another catalog | — |
+| I6 | Linux, no `GEISTEN_HOME`: `XDG_DATA_HOME=/tmp/xd XDG_CONFIG_HOME=/tmp/xc geistr config temperature 0.5`, one chat, `geistr pull smollm2-360m`; then the same with `GEISTEN_HOME=/tmp/gh` (and the old name `GEIST_HOME`); macOS: no variables | Linux: settings in `/tmp/xc/geisten/geistr.conf`, models, chats and history in `/tmp/xd/geisten/`; a `geistr.conf` left in the data folder by an older geistr is moved there once. With `GEISTEN_HOME`/`GEIST_HOME`: everything in that folder. macOS: everything in `~/Library/Application Support/geisten/`. Folders 0700, files 0600 | `find /tmp/xd /tmp/xc /tmp/gh -ls` |
 
 ## J. Python package
 
