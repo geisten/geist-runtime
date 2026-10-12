@@ -1,0 +1,6 @@
+POST /v1/chat/completions HTTP/1.1
+Host: localhost:11434
+Content-Type: application/json
+Content-Length: 183
+
+{"messages": [{"role": "user", "content": [{"type": "text", "text": "What is this?"}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="}}]}]}
