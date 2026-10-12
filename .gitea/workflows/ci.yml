@@ -137,6 +137,11 @@ jobs:
           GEISTR_TEST_TOOLS_MODEL: geistlib/gguf_artifacts/Qwen3-0.6B-Q8_0.gguf  # #92: tool calls
           GEISTR_TEST_EMBED_MODEL: geistlib/gguf_artifacts/bitnet-embeddings-0.6b-bf16-i2_s.gguf  # #91: embeddings
         run: make test-geistr PULL=1 2>&1 | tee build/logs/test-geistr.log
+      # #174: the latest release's data folder (settings, receipts, a chat, history,
+      # an index) used by this build. Linux only: one platform is enough for the format.
+      - name: upgrade from the latest release
+        if: runner.os == 'Linux'
+        run: make test-upgrade 2>&1 | tee build/logs/test-upgrade.log
       # #9: the Python package. pip install the wheel into a fresh venv; the
       # 10-line example and the tests. Linux: auditwheel makes it manylinux
       # (bundles libgomp), and the repaired wheel runs the example again.
