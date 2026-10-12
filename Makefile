@@ -12,6 +12,7 @@
 #   make test-geistr the CLI against the reference model (ONLY=serve,bench: some sections)
 #   make wheel       build/wheel/geistr-*.whl: the Python package (#9)
 #   make test-python pip install it into a venv; example and tests
+#   make test-upgrade the latest release's data folder used by this build (PREVIOUS=vX.Y.Z)
 #
 # src/template.c and src/stream.c are the runtime's text side; src/runtime.c
 # binds them to geistlib (#4). src/stub.c implements include/geistr.h without
@@ -110,7 +111,7 @@ test: all $(BUILD)/test_decide_driver
 	  { echo "example chat failed: $$out"; exit 1; }
 
 # ---- the real runtime on geistlib (#4) ---------------------------------------
-ENGINE_GOALS := runtime test-real test-embed fetch-embed-model chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python $(BUILD)/test_decision_real $(BUILD)/bench_decision
+ENGINE_GOALS := runtime test-upgrade test-real test-embed fetch-embed-model chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python $(BUILD)/test_decision_real $(BUILD)/bench_decision
 ifneq (,$(filter $(ENGINE_GOALS),$(MAKECMDGOALS)))
 GEIST_REPO ?= https://github.com/geisten/geistlib.git
 GEIST_REF  ?= d53560d743ccbee1652aafc338405071d79f9f18
@@ -233,6 +234,13 @@ test-geistr:
 	$(MAKE) BUILD=$(BUILD)/geistr-nonet PULL=0 geistr
 	GEISTR_TEST_ONLY=$(ONLY) python3 -u tests/test_geistr.py $(BUILD)/geistr-test/geistr $(BUILD)/geistr-nonet/geistr "$(GEIST_TEST_MODEL)" $(PULL)
 
+# #174: a data folder of the latest release (install.sh) used by this build.
+test-upgrade: geistr
+	@test -f "$(GEIST_TEST_MODEL)" || { echo "no reference model at $(GEIST_TEST_MODEL): make fetch-model"; exit 1; }
+	rm -rf $(BUILD)/previous && GEISTR_VERSION=$(PREVIOUS) PREFIX=$(abspath $(BUILD)/previous) sh install.sh
+	python3 -u tests/test_upgrade.py $(BUILD)/previous/bin/geistr $(BUILD)/geistr "$$(dirname "$(GEIST_TEST_MODEL)")" \
+		$$(test -f "$(GEIST_TEST_EMBED_MODEL)" && dirname "$(GEIST_TEST_EMBED_MODEL)")
+
 $(BUILD)/test_embed: tests/test_embed.c $(RUNTIME) $(ENGINE_LIB)
 	$(CC) $(CFLAGS) -isystem $(GEISTLIB)/include $< $(RUNTIME) $(ENGINE_LINK) $(LDFLAGS) $(LDLIBS) -lm -o $@
 
@@ -292,4 +300,5 @@ coverage:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: install uninstall core all test sanitize coverage clean runtime test-real test-embed fetch-embed-model chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python FORCE
+PREVIOUS ?= latest
+.PHONY: test-upgrade install uninstall core all test sanitize coverage clean runtime test-real test-embed fetch-embed-model chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python FORCE
