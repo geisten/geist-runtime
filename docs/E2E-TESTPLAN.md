@@ -182,6 +182,7 @@ Start: `geistr chat qwen3-0.6b --new` in a terminal of 100 × 40.
 | H7 | Ollama: `curl …/api/chat -d '{"messages":[…]}'`, `/api/tags`, `/api/version` | NDJSON stream; the model; a version | — |
 | H8 | Open WebUI: add `http://127.0.0.1:11434` as Ollama (and `/v1` as OpenAI) | chat works through the UI | screenshot |
 | H9 | `curl -H 'Host: evil.example' …` | 403 (DNS-rebinding guard) | status code |
+| H9b | `curl …/v1/chat/completions -H 'Origin: https://evil.example' -H 'Content-Type: text/plain' -d …` (what a page of another site can send without a preflight); the same with `Origin: http://localhost:3000`; then with `GEISTR_ORIGINS=https://evil.example` | 403 naming `GEISTR_ORIGINS`; 200; 200 (#171) | status codes |
 | H10 | `--http=0.0.0.0:11434` | a warning that it is reachable from the network | stderr |
 | H11 | two clients at once; one disconnects mid-answer | answers are served one at a time; the disconnect stops that answer; the other completes | — |
 | H12 | SIGTERM to the service | it exits cleanly and removes the socket | socket gone |

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Security
+
+- `geistr serve --http` refuses requests from a web page of another site
+  (`Origin` header): before, any page could start answers on this computer
+  with a simple request (text/plain, no preflight), keeping the engine busy.
+  `GEISTR_ORIGINS` allows more origins, as Ollama's `OLLAMA_ORIGINS`. The
+  `Host` check no longer takes a name like `127.evil.example` for a loopback
+  address (#171).
+
+## Unreleased
+
 ### Fixes
 
 - The macOS archive, the Homebrew binary and the macOS wheel were built with the

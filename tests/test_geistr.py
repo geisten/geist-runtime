@@ -638,6 +638,15 @@ def section_http():
     assert kind == 'application/x-ndjson' and not lines[0]['done'] and lines[-1]['done'] and lines[-1]['eval_count'] == 3, body
     # refused: another Host (DNS rebinding), unknown path, wrong method, too long, chunked, the context
     assert call('GET', '/v1/models', headers={'Host': 'evil.example'})[0] == 403
+    assert call('GET', '/v1/models', headers={'Host': '127.evil.example'})[0] == 403  # a name, not 127.x.y.z
+    # a page of another site in a browser: a simple request (text/plain, no preflight) is refused (#171)
+    hi = {'messages': [{'role': 'user', 'content': 'Hi'}], 'max_tokens': 2}
+    for origin in ('https://evil.example', 'null', 'http://127.evil.example'):
+        for path in ('/v1/chat/completions', '/api/chat'):
+            status, _, body = call('POST', path, hi, headers={'Origin': origin, 'Content-Type': 'text/plain'})
+            assert status == 403 and 'GEISTR_ORIGINS' in body, (origin, path, status, body)
+    for origin in ('http://localhost:3000', 'http://127.0.0.1:8080', 'http://[::1]:5173'):  # pages of this computer
+        assert call('POST', '/v1/chat/completions', hi, headers={'Origin': origin})[0] == 200, origin
     assert call('GET', '/nope')[0] == 404 and call('GET', '/v1/chat/completions')[0] == 405
     c = unix.create_connection(('127.0.0.1', port))
     c.sendall(b'POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: 99999999\r\n\r\n')
