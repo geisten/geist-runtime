@@ -241,6 +241,17 @@ test-upgrade: geistr
 	python3 -u tests/test_upgrade.py $(BUILD)/previous/bin/geistr $(BUILD)/geistr "$$(dirname "$(GEIST_TEST_MODEL)")" \
 		$$(test -f "$(GEIST_TEST_EMBED_MODEL)" && dirname "$(GEIST_TEST_EMBED_MODEL)")
 
+# #132: serve --http against the OpenAI SDK and the Ollama library (pinned), in a
+# venv: SmolLM2 (make fetch-model), Qwen3 0.6B tools, BitNet-embedding (fetch-embed-model).
+CLIENTS ?= openai==3.29.0 ollama==0.6.3
+GEIST_TEST_TOOLS_MODEL ?= $(GEISTLIB)/gguf_artifacts/Qwen3-0.6B-Q8_0.gguf
+test-clients: geistr
+	@for m in "$(GEIST_TEST_MODEL)" "$(GEIST_TEST_TOOLS_MODEL)" "$(GEIST_TEST_EMBED_MODEL)"; do \
+		test -f "$$m" || { echo "no model at $$m: make fetch-model fetch-embed-model, scripts/fetch-model.sh ... qwen3-0.6b"; exit 1; }; done
+	rm -rf $(BUILD)/clients-venv && python3 -m venv $(BUILD)/clients-venv
+	$(BUILD)/clients-venv/bin/pip install -q $(CLIENTS)
+	$(BUILD)/clients-venv/bin/python -u tests/test_clients.py $(BUILD)/geistr "$(GEIST_TEST_MODEL)" "$(GEIST_TEST_TOOLS_MODEL)" "$(GEIST_TEST_EMBED_MODEL)"
+
 $(BUILD)/test_embed: tests/test_embed.c $(RUNTIME) $(ENGINE_LIB)
 	$(CC) $(CFLAGS) -isystem $(GEISTLIB)/include $< $(RUNTIME) $(ENGINE_LINK) $(LDFLAGS) $(LDLIBS) -lm -o $@
 
@@ -301,4 +312,4 @@ clean:
 	rm -rf $(BUILD)
 
 PREVIOUS ?= latest
-.PHONY: test-upgrade install uninstall core all test sanitize coverage clean runtime test-real test-embed fetch-embed-model chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python FORCE
+.PHONY: test-clients test-upgrade install uninstall core all test sanitize coverage clean runtime test-real test-embed fetch-embed-model chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python FORCE

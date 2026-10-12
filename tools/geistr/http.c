@@ -689,11 +689,12 @@ static void openai_done(void *ctx, const geistr_stats *st, const char *answer) {
         }
         calls_free(&calls);
         openai_chunk(a, false, nullptr, finish);
-        if (a->usage)
-            fprintf(a->out,
-                    "data: {\"id\":\"%s\",\"object\":\"chat.completion.chunk\",\"created\":%lld,\"choices\":[],"
-                    "\"usage\":%s}\n\n",
-                    a->id, a->created, usage);
+        if (a->usage) { /* every chunk has the model: the OpenAI SDK's ChatCompletionChunk requires it (#132) */
+            fprintf(a->out, "data: {\"id\":\"%s\",\"object\":\"chat.completion.chunk\",\"created\":%lld,\"model\":",
+                    a->id, a->created);
+            json_write(a->out, a->model);
+            fprintf(a->out, ",\"choices\":[],\"usage\":%s}\n\n", usage);
+        }
         fputs("data: [DONE]\n\n", a->out);
         return;
     }
