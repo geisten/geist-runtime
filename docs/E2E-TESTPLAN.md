@@ -81,6 +81,8 @@ Rules that keep agent runs reliable:
 | A4 | install.sh against a release whose archive was altered (or a test server with a wrong `SHA256SUMS`) | "does not match SHA256SUMS; nothing installed", exit ≠ 0 | target binary unchanged |
 | A5 | run the binary on an unsupported CPU (x86-64 without AVX2, or ARM without dotprod) | geistr says the CPU is unsupported and exits; no crash | exit code ≠ 0, message on stderr |
 | A6 | from source: `make geistr && make install PREFIX=$T` and `make uninstall PREFIX=$T` | builds with the pinned geistlib, installs, uninstalls cleanly | file present, then absent |
+| A7 | the released macOS archive on macOS 15 (oldest supported): install.sh, `--version`, one `run` | it starts and answers | `otool -l geistr \| grep minos` is 15.0 |
+| A8 | the released Linux archive through install.sh in Docker on Debian 12, Ubuntu 22.04, 24.04; `pip install geistr` on Debian 11 | installs, answers | the release's `smoke` job (#172) |
 
 ## B. Catalog and downloads
 

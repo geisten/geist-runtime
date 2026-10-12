@@ -54,12 +54,29 @@ For a fully static Linux build (musl), as in the releases:
 
 ## Releases
 
-`.github/workflows/release.yml` builds them: a `vX.Y.Z` tag makes a draft
-release, publishing is a maintainer's step. The Linux binaries are fully
-static (musl, with a minimal libcurl, OpenSSL and libgomp). The archives
-carry `THIRD_PARTY_LICENSES`: every component in the binary and its license.
-`install.sh` downloads `geistr-<os>-<arch>.tar.gz`, checks it against the
-release's `SHA256SUMS` and installs to `$PREFIX/bin`.
+`.gitea/workflows/release.yml` builds them on git.geisten.net's runners when a
+`vX.Y.Z` tag is pushed (or by hand with the input `tag`, to repeat one): the
+archives `geistr-<os>-<arch>.tar.gz`, the Python wheels and `SHA256SUMS` go to
+`https://www.geisten.net/download/geistr/vX.Y.Z/` and `latest` points there;
+then the Homebrew tap, then PyPI (with the secret `PYPI_TOKEN`). The Linux
+binaries are fully static (musl, with a minimal libcurl, OpenSSL and libgomp);
+the macOS binary needs macOS 15 or later (`MACOSX_DEPLOYMENT_TARGET`, checked).
+The archives carry `THIRD_PARTY_LICENSES`. `install.sh` downloads the archive
+for this computer, checks it against `SHA256SUMS` and installs to
+`$PREFIX/bin`.
+
+After the upload the `smoke` job installs what users get: the archive through
+`install.sh` on Debian 12, Ubuntu 22.04 and 24.04, the wheel from PyPI on
+Debian 11; each answers once (#172).
+
+A release is done when, in addition:
+
+1. **macOS 15**: on a Mac (or VM) with macOS 15, `curl -fsSL
+   https://www.geisten.net/download/geistr/install.sh | PREFIX=~/.local sh`,
+   then `~/.local/bin/geistr --version` and one `geistr run`. No runner has an
+   older macOS than the build machine, so nothing else checks this; v0.3.2 and
+   the first v0.3.3 build needed macOS 27 and nobody noticed (#172).
+2. `brew upgrade geistr` gives the new version (`brew test geistr`).
 
 ## geistr internals
 
@@ -106,7 +123,8 @@ auditwheel) and runs `examples/chat.py` from a fresh `pip install`. The release
 workflow builds them for macOS arm64 and Linux x86_64/arm64, checks that the
 wheel's version is the tag, attaches them to the release folder on
 www.geisten.net and, if the secret `PYPI_TOKEN` is set, uploads them to PyPI.
-Linux wheels carry the glibc of their runner (manylinux_2_39 on ubuntu-24.04).
+The Linux wheels are built in the manylinux_2_28 image (glibc 2.28 and newer:
+Debian 10+, Ubuntu 20.04+, RHEL 8+); the release checks one on Debian 11.
 
 The optional fixed-option decision contract (#13) is documented in
 [DECISIONS.md](DECISIONS.md). It is default-off and EXPERIMENTAL;
