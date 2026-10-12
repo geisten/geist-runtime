@@ -1,19 +1,6 @@
 # Changelog
 
-## Unreleased
-
-### Release
-
-- The Linux wheels are built in the manylinux_2_28 image: `pip install geistr`
-  works on glibc 2.28 and newer (Debian 10+, Ubuntu 20.04+), not only on 2.38/2.39
-  as with 0.3.3. After each upload a `smoke` job installs the release on Debian
-  12, Ubuntu 22.04 and 24.04 (install.sh) and from PyPI on Debian 11 (#172).
-
-### Fixes
-
-- `geistr index` says which files it leaves out and why: a PDF without text
-  (a scan), a PDF when `pdftotext` is missing, an unreadable file. Before they
-  were skipped without a word (#173).
+## 0.3.4
 
 ### Security
 
@@ -24,14 +11,22 @@
   `Host` check no longer takes a name like `127.evil.example` for a loopback
   address (#171).
 
-## Unreleased
-
 ### Fixes
 
-- The macOS archive, the Homebrew binary and the macOS wheel were built with the
-  runner's own macOS (27) as the minimum, so they did not start on macOS 15 or
-  26 and PyPI refused the wheel tag `macosx_27_0`. They are built for macOS 15
-  and later now (`minos 15.0`, checked in the release workflow) (#152).
+- `geistr index` says which files it leaves out and why: a PDF without text
+  (a scan), a PDF when `pdftotext` is missing, an unreadable file. Before they
+  were skipped without a word (#173).
+- The macOS binary of 0.3.2 and of the first 0.3.3 build needed macOS 27 (the
+  runner's own), so it did not start on macOS 15 or 26, and PyPI refused the
+  wheel tag `macosx_27_0`. Releases are built for macOS 15 and later now
+  (`minos 15.0`, checked); 0.3.3 was published again that way (#152).
+
+### Release
+
+- The Linux wheels are built in the manylinux_2_28 image: `pip install geistr`
+  works on glibc 2.28 and newer (Debian 10+, Ubuntu 20.04+), not only on 2.38/2.39
+  as with 0.3.3. After each upload a `smoke` job installs the release on Debian
+  12, Ubuntu 22.04 and 24.04 (install.sh) and from PyPI on Debian 11 (#172).
 
 ## 0.3.3
 
