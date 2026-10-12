@@ -206,8 +206,10 @@ network needed:
   `models/catalog.json` started as geist-serve's file.
 - `geistr_catalog_check(entry, models_dir, hash)` gives the install state:
   `MISSING`, `UNVERIFIED` (right size, not hashed yet), `OK` (SHA-256
-  matches) or `MISMATCH` (wrong size or hash, or not a regular file: never
-  load it). Nothing is deleted.
+  matches), `CORRUPT` (the right size but another SHA-256: a damaged or
+  changed copy, #149) or `MISMATCH` (another size, or not a regular file,
+  such as a symlink: links are not followed, #151). Never load either of
+  the last two; nothing is deleted.
 - Receipts: a match writes `<models>/.verified/<sha256>` with the file's
   device, inode, size, mode, owner, links, mtime and ctime (geist-serve's
   stamp). While these are unchanged, `check` answers without hashing; so

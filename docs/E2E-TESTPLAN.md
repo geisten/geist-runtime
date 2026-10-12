@@ -93,10 +93,11 @@ Rules that keep agent runs reliable:
 | B3 | `geistr pull smollm2-360m` | progress, verify, ✓ in `geistr catalog` | `catalog --installed` lists it |
 | B4 | interrupt `geistr pull qwen3-0.6b` with Ctrl-C halfway, run it again | it resumes (doesn't restart at 0), verifies | the `.part` file grew; final ✓ |
 | B5 | corrupt a byte of an installed model file | `catalog` marks it `✗ checksum differs (damaged file?)` (JSON state `corrupt`; a file of another size is `⟳`/`mismatch`); `run` refuses with "is damaged …; geistr pull …" (#149) | exit 1 |
-| B6 | `geistr pull` with no id after a catalog update that replaced a file | the ⟳ model is downloaded again; the old file stays until the new one is verified | — |
+| B6 | `geistr catalog`, then `geistr pull` with no id, after a catalog update that replaced a file (another size); and with the damaged file of B5 | `catalog` shows the replaced one as `⟳ not this catalog's file` (JSON `mismatch`), not `✗`; `run` says "does not match the catalog"; `pull` downloads both again (the ✗ one too); the old file stays until the new one is verified (#149) | `catalog --json` states; both ✓ after the pull |
 | B7 | `geistr catalog --installed`, `--available` | only those rows | — |
 | B8 | `geistr pull qwen3-0.6b`, then cut the network halfway (Wi-Fi off, or `sudo ifconfig en0 down` / `ip link set … down`), then on again and pull again | a clear error and exit 1 (not a hang: it gives up within about a minute); the `.part` stays; the second pull resumes and verifies | exit code, time to the error, `.part` grew |
 | B9 | pull into a folder on a disk that is too small (macOS: `hdiutil create -size 200m -fs APFS -volname small small.dmg` and attach; Linux: `mount -t tmpfs -o size=200m tmpfs /mnt/small`): `geistr pull smollm2-360m --models /Volumes/small` | "no space left" (or the like), exit 1; no ✓ in `catalog`; nothing half-written left that `run` would load | exit code, `catalog --models …` |
+| B10 | a symlink to a verified model file from another models folder: `mkdir m2; ln -s <models>/Qwen3-0.6B-Q8_0.gguf m2/`; `geistr catalog --models m2`, `geistr run qwen3-0.6b hi --models m2`, then `geistr pull qwen3-0.6b --models m2` | `catalog`: `⟳ a symlink, not used: copy the file or use a hard link`; `run`: "is a symlink; geistr does not follow links …", exit 1; `pull` says the download replaces the link, the link's target is unchanged (#151) | exit code; `ls -l m2`; `shasum` of the target before and after |
 
 ## C. One answer: `geistr run`
 

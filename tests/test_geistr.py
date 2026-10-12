@@ -172,11 +172,27 @@ def section_catalog():
     assert 'symlink' in sub('catalog').stdout
     r = sub('run', 'tiny', 'hi')
     assert r.returncode == 1 and 'is a symlink' in r.stderr and 'hard link' in r.stderr, r.stderr
+    # a catalog update that replaced the file (another size and SHA-256) stays ⟳ / mismatch, not ✗ / corrupt (#149)
+    updated, updated_catalog = os.path.join(tmp, 'updated-models'), os.path.join(tmp, 'updated-catalog.json')
+    os.makedirs(updated, exist_ok=True)
+    with open(os.path.join(updated, 'tiny.gguf'), 'wb') as f:
+        f.write(tiny)
+    newer = tiny + b' revision 2'
+    with open(updated_catalog, 'w') as f:
+        json.dump({**catalog, 'revision': 2, 'models': [entry('tiny', 'tiny.gguf', hashlib.sha256(newer).hexdigest(), len(newer))]}, f)
+    sub = lambda *a: subprocess.run([geistr, *a, '--models', updated, '--catalog', updated_catalog], capture_output=True, text=True, env=env, timeout=120)
+    assert json.loads(sub('catalog', '--json').stdout)['models'][0]['state'] == 'mismatch'
+    text = sub('catalog').stdout
+    assert '⟳ tiny' in text and "not this catalog's file" in text and 'checksum differs' not in text, text
+    r = sub('run', 'tiny', 'hi')
+    assert r.returncode == 1 and 'does not match the catalog' in r.stderr and 'damaged' not in r.stderr, r.stderr
     print('geistr catalog: states, receipts, --json schema, filters passed')
 
 # ---- exit codes ------------------------------------------------------------
 def section_run():
     assert geistr_run().returncode == 2 and geistr_run('fly').returncode == 2 and geistr_run('catalog', '--bogus').returncode == 2
+    r = geistr_run('--help')  # the request limit and its default (#147)
+    assert r.returncode == 0 and '--max-request=MiB' in r.stderr and 'default 16 MiB' in r.stderr, r.stderr
     assert geistr_run('run', 'nope', 'hi').returncode == 1
     r = geistr_run('run', 'tiny', 'hi')
     assert r.returncode == 1 and 'geistr pull tiny' in r.stderr, r.stderr
@@ -586,11 +602,21 @@ def section_serve():
         assert service.poll() is None and time.time() < deadline, service.stderr.read()
         time.sleep(0.1)
     time.sleep(0.5)
+    for path in ('/v1/chat/completions', '/api/chat'):  # in under 1 s; OpenAI's error format on /v1, Ollama's on /api
+        t0 = time.time()
+        c = unix.create_connection(('127.0.0.1', port))
+        c.sendall(f'POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2000000\r\n\r\n'.encode())
+        reply = b''
+        while chunk := c.recv(4096):
+            reply += chunk
+        c.close()
+        assert time.time() - t0 < 1, (path, time.time() - t0)
+        assert reply.startswith(b'HTTP/1.1 413'), reply
+        error = json.loads(reply.split(b'\r\n\r\n', 1)[1])['error']
+        message = error['message'] if path.startswith('/v1/') else error
+        assert '--max-request' in message and '1 MiB' in message, (path, error)
+        assert not path.startswith('/v1/') or error['type'] == 'invalid_request_error', error
     t0 = time.time()
-    c = unix.create_connection(('127.0.0.1', port))
-    c.sendall(b'POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2000000\r\n\r\n')
-    reply = c.recv(400); c.close()
-    assert reply.startswith(b'HTTP/1.1 413') and b'--max-request' in reply and b'1 MiB' in reply, reply
     s = unix.socket(unix.AF_UNIX); s.connect(sock3)
     try:  # the service answers and hangs up before the whole line is sent
         s.sendall(b'{"op":"chat","messages":[{"role":"user","content":"' + b'x' * 2000000 + b'"}]}\n')
@@ -600,6 +626,15 @@ def section_serve():
         pass
     s.close()
     assert time.time() - t0 < 5, time.time() - t0
+    body = json.dumps({'messages': [{'role': 'user', 'content': 'Hi'}], 'max_tokens': 3}).encode()  # under the limit: answered
+    c = unix.create_connection(('127.0.0.1', port))
+    c.sendall(b'POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n'
+              b'Content-Length: %d\r\n\r\n' % len(body) + body)
+    reply = b''
+    while chunk := c.recv(4096):
+        reply += chunk
+    c.close()
+    assert reply.startswith(b'HTTP/1.1 200') and b'"choices"' in reply, reply[:400]
     service.send_signal(signal.SIGTERM)
     assert service.wait(30) == 0
     assert geistr_run('serve', 'ref', '--max-request=0').returncode == 2
@@ -1061,6 +1096,17 @@ def section_pull():
         assert open(os.path.join(models, 'tiny.gguf'), 'rb').read() == tiny and not os.path.exists(os.path.join(models, 'tiny.gguf.part'))
         assert listing()['tiny']['state'] == 'installed'
         assert geistr_run('pull', 'tiny').stdout.startswith('✓ tiny is installed')
+        # a symlink the user placed: pull says it replaces the link, and leaves its target alone (#151)
+        linked, shared = os.path.join(tmp, 'pull-linked'), os.path.join(tmp, 'shared-tiny.gguf')
+        os.makedirs(linked)
+        with open(shared, 'wb') as f:
+            f.write(tiny)
+        os.symlink(shared, os.path.join(linked, 'tiny.gguf'))
+        r = subprocess.run([geistr, 'pull', 'tiny', '--models', linked, '--catalog', catalog_path], capture_output=True, text=True,
+                           env=env, timeout=120)
+        assert r.returncode == 0 and 'is a symlink; the downloaded file replaces the link' in r.stderr, (r.stdout, r.stderr)
+        assert not os.path.islink(os.path.join(linked, 'tiny.gguf')) and open(os.path.join(linked, 'tiny.gguf'), 'rb').read() == tiny
+        assert open(shared, 'rb').read() == tiny
         os.unlink(os.path.join(models, 'wrong.gguf'))
         with open(os.path.join(tmp, 'www', 'x', 'y', 'resolve', 'main', 'wrong.gguf'), 'wb') as f:
             f.write(tiny)
