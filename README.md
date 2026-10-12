@@ -203,7 +203,10 @@ what is new.
 
 There is no authentication. By default geistr listens on loopback only and
 answers only requests addressed to this computer (`Host` check, against DNS
-rebinding). `--http=0.0.0.0:11434` makes it reachable for everyone who can
+rebinding). A web page in a browser may use it only if it comes from this
+computer too (`Origin` check: another site's page cannot start answers);
+`GEISTR_ORIGINS=https://ui.example,…` (or `*`) allows more, like Ollama's
+`OLLAMA_ORIGINS`. `--http=0.0.0.0:11434` makes it reachable for everyone who can
 reach the computer; geistr warns about that. One request is answered at a
 time; a client that disconnects stops its answer.
 

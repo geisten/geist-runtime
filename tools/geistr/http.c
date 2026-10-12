@@ -70,7 +70,7 @@ int http_listen(const char *where, bool *loopback) {
 /* ---- a request ------------------------------------------------------------- */
 
 struct request {
-    char  method[8], path[256], host[256];
+    char  method[8], path[256], host[256], origin[256];
     char *body; /* NUL-terminated */
     long  length;
 };
@@ -105,6 +105,8 @@ static int read_request(int fd, struct request *r, size_t body_max) {
                 r->length = strtol(value, nullptr, 10);
             else if (!strcasecmp(line, "host"))
                 snprintf(r->host, sizeof r->host, "%s", value);
+            else if (!strcasecmp(line, "origin"))
+                snprintf(r->origin, sizeof r->origin, "%s", value);
             else if (!strcasecmp(line, "transfer-encoding"))
                 chunked = strstr(value, "chunked") || strstr(value, "Chunked"); /* no strcasestr in POSIX */
         }
@@ -148,7 +150,32 @@ static bool host_is_loopback(const char *host) {
         snprintf(name, sizeof name, "%.*s", (int) strcspn(host + 1, "]"), host + 1);
     else
         snprintf(name, sizeof name, "%.*s", (int) strcspn(host, ":"), host);
-    return !strcasecmp(name, "localhost") || !strncmp(name, "127.", 4) || !strcmp(name, "::1");
+    struct in_addr v4; /* 127.x.y.z as an address, not a name such as 127.evil.example */
+    return !strcasecmp(name, "localhost") || (!strncmp(name, "127.", 4) && inet_pton(AF_INET, name, &v4) == 1) ||
+           !strcmp(name, "::1");
+}
+
+/* A browser sends Origin; curl, SDKs and servers do not. A page on another
+ * site may POST here without a preflight (text/plain is a "simple request"):
+ * it cannot read the answer, but it would start one (#171). So only pages of
+ * this computer, and the origins in GEISTR_ORIGINS (comma separated, "*" for
+ * any), as Ollama's OLLAMA_ORIGINS. */
+static bool origin_allowed(const char *origin) {
+    if (!origin[0])
+        return true;
+    const char *allow = getenv("GEISTR_ORIGINS");
+    for (const char *a = allow; a && *a;) {
+        size_t n = strcspn(a, ",");
+        while (n && a[n - 1] == ' ')
+            n--;
+        if ((n == 1 && *a == '*') || (n == strlen(origin) && !strncasecmp(a, origin, n)))
+            return true;
+        a += strcspn(a, ",");
+        a += strspn(a, ", ");
+    }
+    const char *host = strstr(origin, "://");
+    return (!strncasecmp(origin, "http://", 7) || !strncasecmp(origin, "https://", 8)) && host[3] &&
+           host_is_loopback(host + 3);
 }
 
 /* ---- responses ------------------------------------------------------------- */
@@ -1031,6 +1058,8 @@ void http_serve(const struct svc_options *o, struct held *pool, int client, bool
         error_json(out, status, openai, reason(status), nullptr);
     else if (loopback && !host_is_loopback(r.host))
         error_json(out, 403, openai, "Host is not this computer (DNS rebinding?)", nullptr);
+    else if (!origin_allowed(r.origin))
+        error_json(out, 403, openai, "a web page of another site (Origin); allow it with GEISTR_ORIGINS", nullptr);
     else if (get && (!strcmp(r.path, "/") || !strcmp(r.path, "/api/version"))) {
         char version[64];
         snprintf(version, sizeof version, "{\"version\":\"%s\"}", geistr_version());
