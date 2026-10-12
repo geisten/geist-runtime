@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Fixes
+
+- `geistr serve --http`: a request that names another model (`"model":
+  "gemma4-e2b"` to a qwen3-0.6b service) gets 404 `model_not_found` instead of
+  an answer from the served model. Its id, `id:latest`, its file name or no
+  model are accepted as before (#193).
+
 ### Release
 
 - The Linux wheels are built in the manylinux_2_28 image: `pip install geistr`

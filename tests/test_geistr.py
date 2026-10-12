@@ -685,6 +685,14 @@ def section_http():
     # refused: another Host (DNS rebinding), unknown path, wrong method, too long, chunked, the context
     assert call('GET', '/v1/models', headers={'Host': 'evil.example'})[0] == 403
     assert call('GET', '/v1/models', headers={'Host': '127.evil.example'})[0] == 403  # a name, not 127.x.y.z
+    # a request for another model is refused, not answered by this one (#193); its own name (+ :latest) or none is fine
+    hi = {'messages': [{'role': 'user', 'content': 'Hi'}], 'max_tokens': 2}
+    status, _, body = call('POST', '/v1/chat/completions', {**hi, 'model': 'gemma4-e2b'})
+    assert status == 404 and 'model_not_found' in body and "'gemma4-e2b' is not served here" in body, (status, body)
+    status, _, body = call('POST', '/api/chat', {**hi, 'model': 'gemma4-e2b', 'stream': False})
+    assert status == 404 and "model 'gemma4-e2b' not found" in body, (status, body)
+    for name in ('ref', 'ref:latest', ''):
+        assert call('POST', '/v1/chat/completions', {**hi, 'model': name})[0] == 200, name
     # a page of another site in a browser: a simple request (text/plain, no preflight) is refused (#171)
     hi = {'messages': [{'role': 'user', 'content': 'Hi'}], 'max_tokens': 2}
     for origin in ('https://evil.example', 'null', 'http://127.evil.example'):
@@ -787,7 +795,7 @@ def section_embed():
         query = 'Instruct: Given a question, retrieve passages that answer the question\nQuery: Where does the cat sleep?'
         docs = ['The cat sleeps on the red sofa.', 'Die Katze schläft auf dem Sofa.', 'Revenue grew by twelve percent.']
         # OpenAI: a list, floats; the vectors are unit length, in order, with usage
-        status, out = call('/v1/embeddings', {'model': 'x', 'input': [query] + docs, 'encoding_format': 'float'})
+        status, out = call('/v1/embeddings', {'model': os.path.basename(path), 'input': [query] + docs, 'encoding_format': 'float'})
         assert status == 200 and out['object'] == 'list' and [d['index'] for d in out['data']] == [0, 1, 2, 3], out
         vectors = [d['embedding'] for d in out['data']]
         assert all(len(v) == 1024 and abs(sum(x * x for x in v) - 1) < 1e-3 for v in vectors)
@@ -799,7 +807,7 @@ def section_embed():
         packed = struct.unpack('<1024f', base64.b64decode(out['data'][0]['embedding']))
         assert status == 200 and max(abs(a - b) for a, b in zip(packed, vectors[1])) < 1e-6
         # Ollama: /api/embed, a text or a list
-        status, out = call('/api/embed', {'model': 'x', 'input': docs[0]})
+        status, out = call('/api/embed', {'model': os.path.basename(path) + ':latest', 'input': docs[0]})
         assert status == 200 and len(out['embeddings']) == 1 and max(abs(a - b) for a, b in zip(out['embeddings'][0], vectors[1])) < 1e-6, out
         status, out = call('/api/embed', {'input': docs})
         assert status == 200 and len(out['embeddings']) == 3 and out['prompt_eval_count'] > 0, out
