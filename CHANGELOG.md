@@ -1,11 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.3.3
 
 ### New
 
 - `geistr serve --max-request=MiB`: the size of one request (default 16, as
   before); a larger one is refused at once, naming the flag (#147).
+- Python wheels (macOS arm64, Linux x86_64/arm64) are built by the release
+  workflow, listed in `SHA256SUMS`, put next to the archives, and uploaded to
+  PyPI when the release has the token (#152).
 
 ### Fixes
 
