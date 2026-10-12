@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Changed
+
+- `geistr chat` the first time: instead of one yes/no question, a list of the
+  models that can run on this computer, the suggestion first, to choose with
+  ↑↓ and Enter (or Skip; Ctrl-C twice cancels). With models installed but none
+  chosen, the only one is used, or one is chosen from a list (in a terminal) or
+  named (#189).
+
+## Unreleased
+
 ### Release
 
 - The Linux wheels are built in the manylinux_2_28 image: `pip install geistr`

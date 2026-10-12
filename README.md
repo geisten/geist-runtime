@@ -50,8 +50,9 @@ says so and exits. To build from source instead, see
 ## Quick start
 
 ```sh
-geistr chat                    # the first time: suggests a model for this computer,
-                               # downloads and verifies it on Enter, then chats
+geistr chat                    # the first time: the models that run here, the best
+                               # first; choose with ↑↓ and Enter, it downloads, verifies
+                               # and chats
 ```
 
 Or choose yourself:

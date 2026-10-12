@@ -603,3 +603,72 @@ enum le_event le_read(struct le *e, const char *prompt) {
     tcsetattr(STDIN_FILENO, TCSANOW, &cooked);
     return ev;
 }
+
+/* ---- a choice from a list (#189) ---------------------------------------- */
+
+void le_pick_draw(struct le_pick *p) {
+    if (p->drawn)
+        fprintf(p->out, "\r\033[%uA", p->drawn); /* back to the first row */
+    fputs("\r\033[J", p->out);
+    for (size_t i = 0; i < p->n; i++)
+        fprintf(p->out, i == p->sel ? "\033[1m❯ %s\033[0m\r\n" : "  %s\r\n", p->rows[i]);
+    p->drawn = (unsigned) p->n;
+    if (p->armed)
+        fputs("\033[2m  Ctrl-C again to cancel\033[0m\r\n", p->out), p->drawn++;
+    fflush(p->out);
+}
+
+enum le_pick_event le_pick_feed(struct le_pick *p, unsigned char c) {
+    if (p->n_esc || c == 27) { /* ESC [ A / ESC [ B (or ESC O A, O B) */
+        if (p->n_esc < sizeof p->esc)
+            p->esc[p->n_esc++] = (char) c;
+        if (p->n_esc < 3)
+            return LE_PICK_MORE;
+        c = p->esc[2] == 'A' ? 'k' : p->esc[2] == 'B' ? 'j' : 0;
+        p->n_esc = 0;
+        if (!c)
+            return LE_PICK_MORE;
+    }
+    if (c == 3) { /* Ctrl-C */
+        if (p->armed)
+            return LE_PICK_CANCEL;
+        p->armed = true;
+        le_pick_draw(p);
+        return LE_PICK_MORE;
+    }
+    if (c == '\r' || c == '\n')
+        return LE_PICK_TAKE;
+    size_t was = p->sel;
+    if ((c == 'k' || c == 16) && p->sel > 0) /* ↑, k, Ctrl-P */
+        p->sel--;
+    else if ((c == 'j' || c == 14) && p->sel + 1 < p->n) /* ↓, j, Ctrl-N */
+        p->sel++;
+    if (p->sel != was || p->armed) {
+        p->armed = false; /* another key: the first Ctrl-C no longer counts */
+        le_pick_draw(p);
+    }
+    return LE_PICK_MORE;
+}
+
+long le_pick_read(FILE *out, const char *const rows[], size_t n, size_t sel) {
+    struct termios cooked, raw;
+    if (!n || tcgetattr(STDIN_FILENO, &cooked) != 0)
+        return -1;
+    raw = cooked;
+    raw.c_iflag &= (tcflag_t) ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+    raw.c_lflag &= (tcflag_t) ~(ECHO | ICANON | IEXTEN | ISIG); /* Ctrl-C is a key here */
+    raw.c_cc[VMIN]  = 1;
+    raw.c_cc[VTIME] = 0;
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+    fputs("\033[?25l", out); /* no cursor in the list */
+    struct le_pick p = {.out = out, .rows = rows, .n = n, .sel = sel < n ? sel : 0};
+    le_pick_draw(&p);
+    enum le_pick_event ev = LE_PICK_MORE;
+    unsigned char      c;
+    while (ev == LE_PICK_MORE)
+        ev = read(STDIN_FILENO, &c, 1) == 1 ? le_pick_feed(&p, c) : LE_PICK_CANCEL;
+    fputs("\033[?25h", out);
+    fflush(out);
+    tcsetattr(STDIN_FILENO, TCSANOW, &cooked);
+    return ev == LE_PICK_TAKE ? (long) p.sel : -1;
+}

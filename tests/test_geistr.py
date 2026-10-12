@@ -1082,33 +1082,57 @@ def section_pull():
             assert r.returncode == 1 and word in r.stderr and 'No error' not in r.stderr, r.stderr
             assert not os.path.exists(target + '.part') and open(target, 'rb').read() == previous, r.stderr
         os.unlink(target)
-        # first run (#89): nothing installed → the recommendation; piped, only the command; in a terminal
-        # n downloads nothing, Enter downloads, verifies and opens the chat
+        # first run (#89, #189): nothing installed → the models that can run here, the suggestion first; piped,
+        # only the command; in a terminal a list: Ctrl-C twice cancels, Skip downloads nothing, Enter on the
+        # suggestion downloads, verifies and opens the chat
         first_models, first_catalog = os.path.join(tmp, 'first-models'), os.path.join(tmp, 'first-catalog.json')
         os.makedirs(first_models)
         with open(first_catalog, 'w') as f:
-            json.dump({**catalog, 'models': [catalog['models'][0]]}, f)  # ref alone: the one to recommend
+            json.dump({**catalog, 'models': [catalog['models'][0], catalog['models'][3]]}, f)  # ref, and huge: never offered
         link_or_copy(model_path, os.path.join(www, ref_file))
         first = ['--models', first_models, '--catalog', first_catalog]
         first_env = {**env, 'GEISTEN_HOME': os.path.join(tmp, 'home-first'), 'TERM': 'xterm'}
         r = subprocess.run([geistr, 'chat', *first], input='', capture_output=True, text=True, env=first_env)
         assert r.returncode == 2 and 'For this computer: ref' in r.stdout and 'geistr pull ref' in r.stdout, (r.stdout, r.stderr)
         assert not os.listdir(first_models)
-        for key in (b'n\r', b'\r'):
+        for keys, code in ((b'\x03\x03', 130), (b'\x1b[B\r', 0), (b'\r', None)):
             pid, fd = pty.fork()
             if pid == 0:
                 os.execve(geistr, [geistr, 'chat', *first], first_env)
-            until(fd, '[Y/n]')
-            os.write(fd, key)
-            if key == b'n\r':
-                until(fd, 'Later: geistr pull ref')
-                assert os.waitpid(pid, 0)[1] >> 8 == 2 and not os.listdir(first_models)
+            shown = until(fd, 'Skip download')
+            assert b'\xe2\x9d\xaf ref' in shown and b'suggested' in shown and b'huge' not in shown, shown[-400:]
+            if keys == b'\x03\x03':
+                os.write(fd, b'\x03'); until(fd, 'Ctrl-C again to cancel'); os.write(fd, b'\x03')
+            else:
+                os.write(fd, keys)
+            if code is not None:
+                if code == 0:
+                    until(fd, 'Later: geistr pull ref')
+                status = os.waitpid(pid, 0)[1]
+                assert os.WEXITSTATUS(status) == code and not os.listdir(first_models), (keys, status)
                 os.close(fd)
             else:
                 until(fd, 'ref installed', 120)
                 until(fd, 'Ctrl-C twice exits', 120)  # the chat, with the downloaded model
                 finish_chat(pid, fd)
                 assert os.path.exists(os.path.join(first_models, ref_file))
+        # installed, none chosen (#189): the only one is used
+        only_env = {**first_env, 'GEISTEN_HOME': os.path.join(tmp, 'home-only')}
+        pid, fd = pty.fork()
+        if pid == 0:
+            os.execve(geistr, [geistr, 'chat', *first], only_env)
+        until(fd, 'geistr · ref', 120)
+        finish_chat(pid, fd)
+        # several installed, none chosen, no terminal: they are named, best first (#189)
+        two_models, two_catalog = os.path.join(tmp, 'two-models'), os.path.join(tmp, 'two-catalog.json')
+        os.makedirs(two_models)
+        twin = dict(catalog['models'][0], id='ref2', file='ref2.gguf', group_id='ref2', group_name='REF2')
+        with open(two_catalog, 'w') as f:
+            json.dump({**catalog, 'models': [catalog['models'][0], twin]}, f)
+        link_or_copy(model_path, os.path.join(two_models, ref_file)); link_or_copy(model_path, os.path.join(two_models, 'ref2.gguf'))
+        r = subprocess.run([geistr, 'chat', '--models', two_models, '--catalog', two_catalog], input='', capture_output=True,
+                           text=True, env={**first_env, 'GEISTEN_HOME': os.path.join(tmp, 'home-two')})
+        assert r.returncode == 2 and 'which model? installed: ref' in r.stderr and 'ref2' in r.stderr, (r.stdout, r.stderr)
         r = geistr_run('pull')  # nothing left to update
         assert r.returncode == 0 and 'installed models are current' in r.stdout, (r.stdout, r.stderr)
         server.shutdown()
