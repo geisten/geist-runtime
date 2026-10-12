@@ -29,6 +29,20 @@ def png(size=224, square=(0xdd, 0x11, 0x11)):
     return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', size, size, 8, 2, 0, 0, 0)) +
             chunk(b'IDAT', zlib.compress(rows)) + chunk(b'IEND', b''))
 
+def pdf(text):
+    """A one-page PDF with text (a text layer), or an empty page (like a scan)."""
+    content = (f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET" if text else "").encode()
+    objs = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+            b"<< /Length %d >>\nstream\n" % len(content) + content + b"\nendstream",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    out, offsets = b"%PDF-1.4\n", []
+    for i, o in enumerate(objs, 1):
+        offsets.append(len(out)); out += b"%d 0 obj\n" % i + o + b"\nendobj\n"
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs) + 1) + b"".join(b"%010d 00000 n \n" % o for o in offsets)
+    return out + b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objs) + 1, xref)
+
 def entry(id, file, digest, size, **extra):
     return {'id': id, 'name': id.upper(), 'file': file, 'url': f'https://huggingface.co/x/y/resolve/main/{file}',
             'sha256': digest, 'bytes': size, 'working_mib': 64, 'recommended_ram_gib': 1, 'backends': ['cpu'],
@@ -429,6 +443,38 @@ def section_resume():
     out = terminal_chat('Say OK.')
     assert '↻ 80 · ' in out and 'resumes the last' in out, out[-400:]
     assert time.time() - started < 60, time.time() - started
+    # resume_tokens: a smaller budget re-reads fewer of the newest messages; invalid values are refused (#173)
+    import re as _re
+    budget = lambda text: int(_re.search(r'resumes the last (\d+)', text).group(1))
+    default = budget(out)
+    assert geistr_run('config', 'resume_tokens', '200').returncode == 0
+    small = budget(terminal_chat('Say OK.'))
+    assert small < default, (small, default)
+    assert geistr_run('config', 'resume_tokens', '-1').returncode == 2 and geistr_run('config', 'resume_tokens', 'abc').returncode == 2
+    assert geistr_run('config', 'resume_tokens', '2048').returncode == 0
+    # intro off: the prompt comes first, no intro lines (#173)
+    assert geistr_run('config', 'intro', 'off').returncode == 0
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execve(geistr, [geistr, 'chat', 'ref', '--new', *base], {**env, 'TERM': 'xterm'})
+    seen = until(fd, '> ')
+    time.sleep(.5)
+    finish_chat(pid, fd)
+    assert b'Ctrl-C twice exits' not in seen and b'geistr \xc2\xb7 ' not in seen, seen[-300:]
+    assert geistr_run('config', 'intro', 'on').returncode == 0
+    # markdown off: the answer is shown exactly as the model wrote it, Markdown and all (#173)
+    assert geistr_run('config', 'markdown', 'off').returncode == 0
+    shown = terminal_chat('Give a bulleted list of three fruits, with the first one in bold.', '--new')
+    newest = max(stored(), key=lambda n: os.stat(os.path.join(chats, n)).st_mtime)
+    raw = [m for m in lines(newest) if m['role'] == 'assistant'][-1]['content'].strip()
+    text = shown.replace('\r\n', '\n')
+    assert raw and raw in text, (raw, text[-600:])
+    assert geistr_run('config', 'markdown', 'on').returncode == 0
+    # /quit ends a chat like /exit; --help is the usage, exit 0 (#173)
+    r = subprocess.run([geistr, 'chat', 'ref', *base], input='/quit\n', capture_output=True, text=True, env=env, timeout=120)
+    assert r.returncode == 0, r
+    r = geistr_run('--help')
+    assert r.returncode == 0 and 'usage: geistr' in (r.stdout + r.stderr), r
     print('geistr chat: continues the last conversation in a terminal, --new, private files, input history, context meter, drop notice, resume budget, /retry, /copy, loops cut, piped chats keep nothing passed')
 
 # ---- serve and chat --socket --------------------------------------------------
@@ -809,6 +855,19 @@ def section_files():
     r = geistr_files('chat', '--files', notes, model_path, input='What is the budget for 2027?\n/files off\nHi\n')
     assert r.returncode == 0 and '45,000' in r.stdout and 'sources: work.txt' in r.stdout, (r.stdout, r.stderr)
     assert 'no files' in r.stdout and r.stdout.count('sources:') == 1, r.stdout
+    # a PDF (through pdftotext), a .rst file, and a PDF without text: indexed, indexed, left out with a note (#173)
+    import shutil
+    papers = os.path.join(tmp, 'papers'); os.makedirs(papers)
+    with open(os.path.join(papers, 'lighthouse.pdf'), 'wb') as f: f.write(pdf('The lighthouse keeper is called Ansgar Mertens.'))
+    with open(os.path.join(papers, 'scan.pdf'), 'wb') as f: f.write(pdf(''))
+    with open(os.path.join(papers, 'ferry.rst'), 'w') as f: f.write('Ferry\n=====\n\nThe ferry leaves at 6:15 from pier 9.\n')
+    r = geistr_files('index', papers)
+    if shutil.which('pdftotext'):
+        assert r.returncode == 0 and '2 files' in r.stderr and 'left out scan.pdf: no text' in r.stderr, r.stderr
+        r = geistr_files('run', '--files', papers, model_path, 'Who is the lighthouse keeper?')
+        assert r.returncode == 0 and 'Mertens' in r.stdout and 'lighthouse.pdf' in r.stderr, (r.stdout, r.stderr)
+    else:  # without pdftotext: both PDFs left out, and said how to get it; the .rst is indexed
+        assert r.returncode == 0 and '1 file' in r.stderr and r.stderr.count('pdftotext') == 2, r.stderr
     # without an embedding model: what to install
     r = subprocess.run([geistr, 'index', notes, '--models', models], capture_output=True, text=True, env=env, timeout=60)
     assert r.returncode == 1 and 'geistr pull bitnet-embed-0.6b' in r.stderr, r.stderr

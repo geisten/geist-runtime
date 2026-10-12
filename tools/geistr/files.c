@@ -342,9 +342,18 @@ struct files *files_open(const char *dir, bool quiet) {
             files++;
             continue;
         }
-        char *text = read_text(full);
-        if (!text)
-            continue; /* a PDF without pdftotext, an unreadable file */
+        char       *text = read_text(full);
+        const char *dot  = strrchr(p.v[i], '.');
+        const bool  pdf  = dot && !strcasecmp(dot, ".pdf");
+        if (!text || (pdf && !text[strspn(text, " \t\r\n\f")])) { /* left out, and said why (#173) */
+            if (!quiet)
+                fprintf(stderr, "%sleft out %s: %s\n", isatty(2) ? "\r\033[K" : "", p.v[i],
+                        !pdf    ? "cannot read it"
+                        : text  ? "no text in it (a scanned PDF?)"
+                                : "pdftotext could not read it, or is missing (macOS: brew install poppler; Linux: poppler-utils)");
+            free(text);
+            continue;
+        }
         if (!quiet && isatty(2))
             fprintf(stderr, "\rindexing %zu/%zu: %.60s\033[K", i + 1, p.n, p.v[i]);
         size_t len = strlen(text), end = 0;

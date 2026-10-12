@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixes
+
+- `geistr index` says which files it leaves out and why: a PDF without text
+  (a scan), a PDF when `pdftotext` is missing, an unreadable file. Before they
+  were skipped without a word (#173).
+
 ### Security
 
 - `geistr serve --http` refuses requests from a web page of another site
