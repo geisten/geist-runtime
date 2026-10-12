@@ -592,14 +592,11 @@ static int first_run(const char *processor, bool fresh) {
     } else if (best && count) {
         char size[16];
         if (terminal) {
-            rows[count] = strdup("Skip download");
             printf("No model yet. Choose one to download (↑↓, Enter · Ctrl-C twice cancels):\n");
-            taken = le_pick_read(stdout, (const char *const *) rows, count + 1, 0);
-            if (taken < 0)
-                rc = CANCELLED;
-            else if ((size_t) taken == count) { /* skip */
+            taken = le_pick_read(stdout, (const char *const *) rows, count, 0);
+            if (taken < 0) { /* cancelled: how to do it later */
                 printf("Later: geistr pull %s, then geistr chat %s\n", best->entry->id, best->entry->id);
-                rc = OK, taken = -1;
+                rc = CANCELLED;
             } else {
                 rc = geistr_pull(pick[taken]->entry, models_dir);
                 if (rc == OK)

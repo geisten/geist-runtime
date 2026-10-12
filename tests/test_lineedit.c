@@ -197,7 +197,7 @@ int main(void) {
     }
     /* a choice from a list (#189): ↑↓ and k/j move within it, Enter takes, Ctrl-C twice cancels */
     {
-        static const char *const rows[] = {"gemma4-e2b", "gemma4-e4b", "Skip download"};
+        static const char *const rows[] = {"gemma4-e2b", "gemma4-e4b", "smollm2-360m"};
         char  *shown = nullptr;
         size_t size  = 0;
         FILE  *out   = open_memstream(&shown, &size);

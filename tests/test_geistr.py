@@ -1083,7 +1083,7 @@ def section_pull():
             assert not os.path.exists(target + '.part') and open(target, 'rb').read() == previous, r.stderr
         os.unlink(target)
         # first run (#89, #189): nothing installed → the models that can run here, the suggestion first; piped,
-        # only the command; in a terminal a list: Ctrl-C twice cancels, Skip downloads nothing, Enter on the
+        # only the command; in a terminal a list: Ctrl-C twice cancels and says how to do it later, Enter on the
         # suggestion downloads, verifies and opens the chat
         first_models, first_catalog = os.path.join(tmp, 'first-models'), os.path.join(tmp, 'first-catalog.json')
         os.makedirs(first_models)
@@ -1095,19 +1095,18 @@ def section_pull():
         r = subprocess.run([geistr, 'chat', *first], input='', capture_output=True, text=True, env=first_env)
         assert r.returncode == 2 and 'For this computer: ref' in r.stdout and 'geistr pull ref' in r.stdout, (r.stdout, r.stderr)
         assert not os.listdir(first_models)
-        for keys, code in ((b'\x03\x03', 130), (b'\x1b[B\r', 0), (b'\r', None)):
+        for keys, code in ((b'\x03\x03', 130), (b'\r', None)):
             pid, fd = pty.fork()
             if pid == 0:
                 os.execve(geistr, [geistr, 'chat', *first], first_env)
-            shown = until(fd, 'Skip download')
+            shown = until(fd, 'suggested for this computer')
             assert b'\xe2\x9d\xaf ref' in shown and b'suggested' in shown and b'huge' not in shown, shown[-400:]
             if keys == b'\x03\x03':
                 os.write(fd, b'\x03'); until(fd, 'Ctrl-C again to cancel'); os.write(fd, b'\x03')
             else:
                 os.write(fd, keys)
             if code is not None:
-                if code == 0:
-                    until(fd, 'Later: geistr pull ref')
+                until(fd, 'Later: geistr pull ref')
                 status = os.waitpid(pid, 0)[1]
                 assert os.WEXITSTATUS(status) == code and not os.listdir(first_models), (keys, status)
                 os.close(fd)
