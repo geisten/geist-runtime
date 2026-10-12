@@ -145,12 +145,14 @@ jobs:
       # The shipped Linux wheel is built in the manylinux_2_28 image (glibc 2.28, GCC 14 with C23), not on
       # the runner: built there it would need the runner's glibc (2.39), and pip refuses it on Debian 12,
       # Ubuntu 22.04 and older (#172). auditwheel in the image bundles libgomp and tags it manylinux_2_28.
+      # The engine is built again in the image: the runner's objects call glibc 2.35+ vector math
+      # (libmvec, e.g. _ZGVdN8v_log1pf), which a 2.28 system does not have.
       - name: manylinux_2_28 wheel (linux)
         if: runner.os == 'Linux'
         run: |
           docker run --rm -e GEIST_REPO -e GIT_CONFIG_COUNT -e GIT_CONFIG_KEY_0 -e GIT_CONFIG_VALUE_0 \
             -v "$PWD:/src" -w /src "quay.io/pypa/manylinux_2_28_$(uname -m)" bash -c \
-            'git config --global --add safe.directory "*" && make BUILD=build/m228 wheel && auditwheel repair build/m228/wheel/geistr-*.whl -w build/wheelhouse'
+            'git config --global --add safe.directory "*" && rm -rf geistlib/build geistlib/lib && make BUILD=build/m228 wheel && auditwheel repair build/m228/wheel/geistr-*.whl -w build/wheelhouse'
           ls build/wheelhouse/geistr-*manylinux_2_28_*.whl
       - name: the manylinux wheel installs and answers on Debian 11 (glibc 2.31) and in a clean venv here
         if: runner.os == 'Linux'
