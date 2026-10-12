@@ -111,7 +111,7 @@ test: all $(BUILD)/test_decide_driver
 	  { echo "example chat failed: $$out"; exit 1; }
 
 # ---- the real runtime on geistlib (#4) ---------------------------------------
-ENGINE_GOALS := runtime test-upgrade test-real test-embed fetch-embed-model chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python $(BUILD)/test_decision_real $(BUILD)/bench_decision
+ENGINE_GOALS := runtime test-clients test-upgrade test-real test-embed fetch-embed-model chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python $(BUILD)/test_decision_real $(BUILD)/bench_decision
 ifneq (,$(filter $(ENGINE_GOALS),$(MAKECMDGOALS)))
 GEIST_REPO ?= https://github.com/geisten/geistlib.git
 GEIST_REF  ?= d53560d743ccbee1652aafc338405071d79f9f18
