@@ -3,7 +3,7 @@
 A manual (human) or agent-driven test of the shipped apps: the `geistr` CLI,
 its install paths, the chat, the service APIs and the Python package. It
 complements the automated suites (`make test`, `make test-real`,
-`make test-geistr`, `make test-python`). Those pin behaviour in a pty with a
+`make test-geistr`, `make test-clients`, `make test-python`). Those pin behaviour in a pty with a
 tiny model. This plan checks what a user sees, on real terminals, real models
 and real hardware, before a release or after larger changes.
 
@@ -186,8 +186,8 @@ Start: `geistr chat qwen3-0.6b --new` in a terminal of 100 × 40.
 | H3 | `echo '{"op":"chat","messages":[{"role":"user","content":"Hi"}]}' \| nc -U …/geistr.sock` | JSON lines: parts, then `done` with tokens and times | `jq` on the last line |
 | H4 | `geistr serve qwen3-0.6b --http`; `curl …/v1/chat/completions -d '{"messages":[…]}'` | an OpenAI completion | `jq .choices[0].message.content` |
 | H5 | the same with `"stream":true` and `stream_options.include_usage` | SSE chunks: role first, content, finish, usage, `[DONE]` | — |
-| H6 | the OpenAI Python SDK example from the README | prints an answer | exit 0 |
-| H7 | Ollama: `curl …/api/chat -d '{"messages":[…]}'`, `/api/tags`, `/api/version` | NDJSON stream; the model; a version | — |
+| H6 | the OpenAI Python SDK example from the README | prints an answer | exit 0 (automated: `make test-clients`, #132: the pinned SDK, one answer, stream, `max_tokens`, `stop`, usage, a tool call, embeddings) |
+| H7 | Ollama: `curl …/api/chat -d '{"messages":[…]}'`, `/api/tags`, `/api/version` | NDJSON stream; the model; a version | automated with the `ollama` Python library: `make test-clients` (#132; `/api/version` by `make test-geistr`) |
 | H8 | Open WebUI: add `http://127.0.0.1:11434` as Ollama (and `/v1` as OpenAI) | chat works through the UI | screenshot |
 | H9 | `curl -H 'Host: evil.example' …` | 403 (DNS-rebinding guard) | status code |
 | H9b | `curl …/v1/chat/completions -H 'Origin: https://evil.example' -H 'Content-Type: text/plain' -d …` (what a page of another site can send without a preflight); the same with `Origin: http://localhost:3000`; then with `GEISTR_ORIGINS=https://evil.example` | 403 naming `GEISTR_ORIGINS`; 200; 200 (#171) | status codes |

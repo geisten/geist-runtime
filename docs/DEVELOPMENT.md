@@ -39,6 +39,7 @@ make install PREFIX=~/.local       # or without sudo (~/.local/bin on the PATH)
 make install DESTDIR=/tmp/stage    # staged, for packaging
 make uninstall                     # the same PREFIX/DESTDIR
 make test-geistr                   # the CLI against the reference model
+make test-clients                  # serve --http against the openai and ollama Python clients
 ```
 
 Needs a C23 compiler (clang 18+ or gcc 14+) and python3; on macOS also
@@ -145,7 +146,7 @@ Every PR and push to `main` runs `.github/workflows/ci.yml`; the job
 | job | platforms | what |
 |---|---|---|
 | `test` | macOS arm64 (clang), Linux x86_64 (gcc-14, clang-18), Linux arm64 (gcc-14) | `make test` (stub conformance, templates, streams, catalog, fit), `make sanitize` |
-| `real` | macOS arm64, Linux x86_64, Linux arm64 | the runtime on the pinned geistlib against SmolLM2 360M (from the catalog, SHA-256 verified, cached): `make test-real` (also under ASan/UBSan), `make test-geistr`, `make test-python`; the wheels as artifacts |
+| `real` | macOS arm64, Linux x86_64, Linux arm64 | the runtime on the pinned geistlib against SmolLM2 360M (from the catalog, SHA-256 verified, cached): `make test-real` (also under ASan/UBSan), `make test-geistr`, `make test-clients` (the pinned `openai` and `ollama` Python clients against `serve --http`: SmolLM2, Qwen3 0.6B tools, BitNet-embedding), `make test-python`; the wheels as artifacts |
 
 On failure each job uploads its logs (`build/logs/`) as `evidence-*`. A run
 takes about 3 minutes; jobs time out at 15 and 30 minutes.
