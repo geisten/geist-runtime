@@ -230,9 +230,11 @@ conversation keeps it for the follow-up questions. Other models refuse images
 **Embeddings**: `geistr serve bitnet-embed-0.6b --http` answers
 `/v1/embeddings` (the OpenAI SDK's `embeddings.create` works) and Ollama's
 `/api/embed`: unit-length vectors of 1024 dimensions, multilingual. For
-retrieval, put a one-line task before a query (`Instruct: Given a question,
-retrieve passages that answer the question\nQuery: …`), nothing before
-documents. An embedding model does not chat, and a chat model does not
+retrieval, embed the question and the documents as they are, with nothing
+before them, as `--files` does: on `scripts/retrieval-bench.py` (#157) that
+put the right file among the four nearest passages most often (97 %), ahead of
+an `Instruct: …\nQuery: ` task before the question (92 %) or `query: ` /
+`passage: ` (89–94 %). An embedding model does not chat, and a chat model does not
 embed (400). Not supported yet: more than one model per service.
 
 Without `--http`, `geistr serve` listens on a Unix socket only (owner only,

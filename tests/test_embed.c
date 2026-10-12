@@ -1,9 +1,10 @@
 /* test_embed.c — geistr_embed (#91) against BitNet-embedding-0.6B: the model
  * card's printed vector, the same vector twice, retrieval order (English and
- * German), several threads at once, too little room, too long a text, and a
+ * German) with the prefixes of --files (pinned, #157), several threads at once, too little room, too long a text, and a
  * model that generates text. Usage: GEIST_TEST_EMBED_MODEL=<gguf>
  * [GEIST_TEST_MODEL=<generative gguf>] test_embed */
 #include "geistr.h"
+#include "files.h"
 #include <math.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -37,12 +38,12 @@ static bool embed(const char *text, float out[DIMS]) {
     return s == GEISTR_OK && dims == DIMS;
 }
 
-static const char *const QUERY = "Instruct: Given a question, retrieve passages that answer the question\n"
-                                 "Query: Where does the cat sleep?";
-static const char *const DOCS[] = {"The cat sleeps on the red sofa in the living room.",
-                                   "Die Katze schläft auf dem roten Sofa im Wohnzimmer.",
-                                   "Quarterly revenue grew by twelve percent.",
-                                   "The train to Hamburg leaves at nine."};
+/* As --files embeds them (FILES_QUERY_PREFIX, FILES_PASSAGE_PREFIX). */
+static const char *const QUERY  = FILES_QUERY_PREFIX "Where does the cat sleep?";
+static const char *const DOCS[] = {FILES_PASSAGE_PREFIX "The cat sleeps on the red sofa in the living room.",
+                                   FILES_PASSAGE_PREFIX "Die Katze schläft auf dem roten Sofa im Wohnzimmer.",
+                                   FILES_PASSAGE_PREFIX "Quarterly revenue grew by twelve percent.",
+                                   FILES_PASSAGE_PREFIX "The train to Hamburg leaves at nine."};
 
 static void *in_thread(void *arg) {
     float *out = arg;
@@ -82,6 +83,11 @@ int main(void) {
     CHECK(rmse < 5e-3, "the model card's vector");
     CHECK(fabs(dot(a, a) - 1) < 1e-3, "L2-normalised");
     CHECK(embed("query: What is BitNet?", b) && dot(a, b) > 0.9999, "the same text, the same vector");
+
+    /* The prefixes --files uses, chosen by scripts/retrieval-bench.py (#157). A
+     * new passage prefix needs a new INDEX_VERSION in files.c as well. */
+    CHECK(!strcmp(FILES_QUERY_PREFIX, ""), "nothing before a question");
+    CHECK(!strcmp(FILES_PASSAGE_PREFIX, ""), "nothing before a passage (index version 1)");
 
     /* Retrieval: the cat, in English and German, before the rest. */
     CHECK(embed(QUERY, a), "the query");
@@ -128,7 +134,7 @@ int main(void) {
     }
     if (failures)
         return fprintf(stderr, "test_embed: %d check(s) failed\n", failures), 1;
-    printf("geistr_embed: card vector (RMSE %.1e), deterministic, retrieval (en, de), two threads, room, context%s passed\n",
+    printf("geistr_embed: card vector (RMSE %.1e), deterministic, retrieval (en, de) with the --files prefixes, two threads, room, context%s passed\n",
            rmse, generative ? ", generative model refused" : "");
     return 0;
 }
