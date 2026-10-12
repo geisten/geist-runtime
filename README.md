@@ -11,6 +11,9 @@ or the GPU.
 > [report what breaks or confuses you](https://github.com/geisten/geist-runtime/issues);
 > early feedback shapes what comes next ([roadmap](ROADMAP.md)).
 
+**Full manual:** [docs/GUIDE.md](docs/GUIDE.md): every command, chat
+command, setting and file, the HTTP API, and what to do when something fails.
+
 ![geistr chat in action: qwen3-0.6b answers on the CPU, /model switches to gemma4-e2b on the GPU for a table, and a new session continues the conversation](docs/demo.gif)
 
 ## Install
@@ -235,13 +238,8 @@ embed (400). Not supported yet: more than one model per service.
 Without `--http`, `geistr serve` listens on a Unix socket only (owner only,
 0600), and `geistr chat --socket` chats through it. `--chats N` sets how many
 conversations the service keeps (default 2), `--max-request=MiB` the size of one
-request (default 16): a larger one is refused at once (HTTP 413). The socket protocol is one
-JSON object per line, documented in
-[`tools/geistr/service.h`](tools/geistr/service.h):
-
-```sh
-echo '{"op":"chat","messages":[{"role":"user","content":"Hi"}]}' | nc -U ~/…/geistr.sock
-```
+request (default 16). The options and the socket protocol:
+[docs/GUIDE.md](docs/GUIDE.md#serve-use-the-model-from-other-programs).
 </details>
 
 ## Settings
@@ -313,5 +311,6 @@ with geistr.chat("gemma4-e2b", system="Answer briefly.") as chat:
     print(chat.ask("And of Italy?"))           # only the new message is processed
 ```
 
+Using geistr: [docs/GUIDE.md](docs/GUIDE.md).
 Building, the library, tests and CI: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 API reference and design: [docs/API.md](docs/API.md).
