@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Release
+
+- The Linux wheels are built in the manylinux_2_28 image: `pip install geistr`
+  works on glibc 2.28 and newer (Debian 10+, Ubuntu 20.04+), not only on 2.38/2.39
+  as with 0.3.3. After each upload a `smoke` job installs the release on Debian
+  12, Ubuntu 22.04 and 24.04 (install.sh) and from PyPI on Debian 11 (#172).
+
 ### Fixes
 
 - `geistr index` says which files it leaves out and why: a PDF without text

@@ -142,13 +142,23 @@ jobs:
           echo "MACOSX_DEPLOYMENT_TARGET=15.0" >> "$GITHUB_ENV"
       - name: the wheel installs into a fresh venv; the example and the tests
         run: make fetch-model && make test-python
-      - name: manylinux (linux), then a clean venv answers
+      # The shipped Linux wheel is built in the manylinux_2_28 image (glibc 2.28, GCC 14 with C23), not on
+      # the runner: built there it would need the runner's glibc (2.39), and pip refuses it on Debian 12,
+      # Ubuntu 22.04 and older (#172). auditwheel in the image bundles libgomp and tags it manylinux_2_28.
+      - name: manylinux_2_28 wheel (linux)
         if: runner.os == 'Linux'
         run: |
-          python3 -m venv /tmp/tools && /tmp/tools/bin/pip install -q auditwheel patchelf
-          PATH=/tmp/tools/bin:$PATH auditwheel repair build/wheel/geistr-*.whl -w build/wheelhouse
+          docker run --rm -e GEIST_REPO -e GIT_CONFIG_COUNT -e GIT_CONFIG_KEY_0 -e GIT_CONFIG_VALUE_0 \
+            -v "$PWD:/src" -w /src "quay.io/pypa/manylinux_2_28_$(uname -m)" bash -c \
+            'git config --global --add safe.directory "*" && make BUILD=build/m228 wheel && auditwheel repair build/m228/wheel/geistr-*.whl -w build/wheelhouse'
+          ls build/wheelhouse/geistr-*manylinux_2_28_*.whl
+      - name: the manylinux wheel installs and answers on Debian 11 (glibc 2.31) and in a clean venv here
+        if: runner.os == 'Linux'
+        run: |
+          docker run --rm -v "$PWD:/src:ro" python:3.9-bullseye bash -c \
+            'pip install -q /src/build/wheelhouse/geistr-*.whl && cd /tmp && python /src/examples/chat.py /src/geistlib/gguf_artifacts/smollm2-360m-instruct-q8_0.gguf < /dev/null'
           python3 -m venv /tmp/clean && /tmp/clean/bin/pip install -q build/wheelhouse/geistr-*.whl
-          cd /tmp && /tmp/clean/bin/python "$GITHUB_WORKSPACE/examples/chat.py" "$GITHUB_WORKSPACE/geistlib/gguf_artifacts/smollm2-360m-instruct-q8_0.gguf"
+          cd /tmp && /tmp/clean/bin/python "$GITHUB_WORKSPACE/examples/chat.py" "$GITHUB_WORKSPACE/geistlib/gguf_artifacts/smollm2-360m-instruct-q8_0.gguf" < /dev/null
       - name: macOS wheel, tagged macosx_15_0
         if: runner.os == 'macOS'
         run: |
@@ -236,3 +246,37 @@ jobs:
           python3 -m venv /tmp/twine && /tmp/twine/bin/pip install -q twine
           /tmp/twine/bin/twine check dist/geistr-*.whl
           TWINE_USERNAME=__token__ TWINE_PASSWORD="$PYPI_TOKEN" /tmp/twine/bin/twine upload --skip-existing dist/geistr-*.whl
+
+  # After the upload (#172): what users download, on systems older and newer than the build
+  # runners. The static Linux archive through install.sh on Debian 12, Ubuntu 22.04 and 24.04;
+  # the wheel from PyPI on Debian 11. Each answers once. (macOS 15: docs/DEVELOPMENT.md, by hand.)
+  smoke:
+    needs: [release]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: one model for all, with the released binary
+        run: |
+          curl -fsSL https://www.geisten.net/download/geistr/install.sh | GEISTR_VERSION="$TAG" PREFIX="$RUNNER_TEMP/g" sh
+          GEISTEN_HOME="$RUNNER_TEMP/h" "$RUNNER_TEMP/g/bin/geistr" pull smollm2-360m --models "$RUNNER_TEMP/m"
+      - name: install.sh on Debian 12, Ubuntu 22.04 and 24.04
+        run: |
+          for image in debian:12 ubuntu:22.04 ubuntu:24.04; do
+            echo "== $image"
+            docker run --rm -e TAG -v "$RUNNER_TEMP/m:/m:ro" -v "$PWD/install.sh:/install.sh:ro" "$image" sh -c '
+              apt-get -qq update >/dev/null && apt-get -qq install -y curl ca-certificates >/dev/null &&
+              GEISTR_VERSION="$TAG" PREFIX=/usr/local sh /install.sh && geistr --version | grep -q "geistr ${TAG#v} " &&
+              GEISTEN_HOME=/tmp/h geistr run smollm2-360m "What is the capital of France? One word." --models /m | grep -qi paris'
+          done
+      - name: pip install geistr from PyPI on Debian 11 (when the release went to PyPI)
+        env:
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: |
+          if [ -z "${PYPI_TOKEN:-}" ]; then echo "no PyPI upload in this release"; exit 0; fi
+          docker run --rm -e TAG -v "$RUNNER_TEMP/m:/m:ro" -v "$PWD/examples:/ex:ro" python:3.9-bullseye bash -c '
+            for i in 1 2 3 4 5 6; do pip install -q "geistr==${TAG#v}" && break; sleep 30; done  # the index needs a moment
+            python -c "import geistr; assert geistr.__version__ == \"${TAG#v}\""
+            cd /tmp && python /ex/chat.py /m/smollm2-360m-instruct-q8_0.gguf < /dev/null'
