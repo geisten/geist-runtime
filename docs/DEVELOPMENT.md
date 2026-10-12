@@ -59,7 +59,12 @@ For a fully static Linux build (musl), as in the releases:
 `vX.Y.Z` tag is pushed (or by hand with the input `tag`, to repeat one): the
 archives `geistr-<os>-<arch>.tar.gz`, the Python wheels and `SHA256SUMS` go to
 `https://www.geisten.net/download/geistr/vX.Y.Z/` and `latest` points there;
-then the Homebrew tap, then PyPI (with the secret `PYPI_TOKEN`). The Linux
+then the Homebrew tap, then PyPI (with the secret `PYPI_TOKEN`). The server
+keeps the **last 5 releases** (`KEEP` in the `prune` job,
+`scripts/prune-releases.sh`, after a successful release): older `vX.Y.Z`
+folders are deleted in version order; `latest`, `install.sh` and the release
+just uploaded never are. The repository variable `PRUNE_DRY_RUN=1` makes it
+only print what it would delete (#148). The Linux
 binaries are fully static (musl, with a minimal libcurl, OpenSSL and libgomp);
 the macOS binary needs macOS 15 or later (`MACOSX_DEPLOYMENT_TARGET`, checked).
 The archives carry `THIRD_PARTY_LICENSES`. `install.sh` downloads the archive
@@ -69,6 +74,12 @@ for this computer, checks it against `SHA256SUMS` and installs to
 After the upload the `smoke` job installs what users get: the archive through
 `install.sh` on Debian 12, Ubuntu 22.04 and 24.04, the wheel from PyPI on
 Debian 11; each answers once (#172).
+
+A release PR sets the version in `src/runtime.c`, `src/stub.c`,
+`include/geistr.h`, `python/geistr/__init__.py` and, where README.md and
+`install.sh` name a release (`vX.Y.Z`), there too: `make test` runs
+`scripts/check-version.sh`, which fails while any of them names another
+version.
 
 A release is done when, in addition:
 

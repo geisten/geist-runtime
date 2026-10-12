@@ -52,7 +52,7 @@ jobs:
       - name: deps (linux)
         if: runner.os == 'Linux'
         timeout-minutes: 12
-        run: sh scripts/apt-need.sh gcc-14 g++-14 clang-18
+        run: sh scripts/apt-need.sh gcc-14 g++-14 clang-18 rsync
       - name: build and test
         run: mkdir -p build/logs && make test 2>&1 | tee build/logs/test.log
       - name: sanitizers (ASan, UBSan; leaks on Linux)

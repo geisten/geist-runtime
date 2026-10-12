@@ -5,7 +5,7 @@ binary, no Python, no Docker, no account. The model runs locally, on the CPU
 or the GPU.
 
 > [!WARNING]
-> **geistr is at an early stage (v0.1).** It works and every change is tested
+> **geistr is at an early stage (v0.3.3).** It works and every change is tested
 > on Linux and macOS, but expect rough edges: commands, settings and file formats may
 > still change between versions, and the model list is small. Please
 > [report what breaks or confuses you](https://github.com/geisten/geist-runtime/issues);
@@ -32,12 +32,12 @@ Both work on Linux (x86_64, arm64) and macOS (Apple Silicon). The script
 downloads the latest release, checks it against `SHA256SUMS` and puts
 `geistr` in `/usr/local/bin`.
 
-Without sudo, or a specific release (a release that is not on the server is
-reported as "no release …"; releases before 0.3.2 never were):
+Without sudo, or a specific release (the server keeps the last 5, from 0.3.2
+on; another one is reported as "no release …"):
 
 ```sh
 curl -fsSL https://www.geisten.net/download/geistr/install.sh | PREFIX=~/.local sh
-curl -fsSL https://www.geisten.net/download/geistr/install.sh | GEISTR_VERSION=v0.3.2 sh
+curl -fsSL https://www.geisten.net/download/geistr/install.sh | GEISTR_VERSION=v0.3.3 sh
 ```
 
 <details>

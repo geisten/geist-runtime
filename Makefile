@@ -121,6 +121,8 @@ test: all $(BUILD)/test_decide_driver
 	$(BUILD)/fuzz_catalog tests/fuzz/catalog/*
 	$(BUILD)/fuzz_json tests/fuzz/json/*
 	$(BUILD)/fuzz_http tests/fuzz/http/*
+	sh scripts/check-version.sh
+	sh tests/test_prune_releases.sh
 	@out=$$(printf 'Hallo Welt\nnoch einmal\n' | $(BUILD)/chat stub:echo) && \
 	  echo "$$out" | grep -q 'Echo: noch einmal' && echo "example chat: two turns passed" || \
 	  { echo "example chat failed: $$out"; exit 1; }

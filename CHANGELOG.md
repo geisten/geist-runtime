@@ -8,6 +8,10 @@
   works on glibc 2.28 and newer (Debian 10+, Ubuntu 20.04+), not only on 2.38/2.39
   as with 0.3.3. After each upload a `smoke` job installs the release on Debian
   12, Ubuntu 22.04 and 24.04 (install.sh) and from PyPI on Debian 11 (#172).
+- www.geisten.net/download/geistr/ keeps the last 5 releases: after a release
+  the `prune` job deletes older version folders, never `latest`, `install.sh` or
+  the new one. `make test` fails while README.md or install.sh name another
+  version than the current one (#148).
 
 ### Fixes
 
