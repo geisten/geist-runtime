@@ -201,10 +201,11 @@ Start: `geistr chat qwen3-0.6b --new` in a terminal of 100 × 40.
 
 | ID | Steps | Expected | Agent check |
 |---|---|---|---|
-| J1 | `pip install` the wheel into a fresh venv; run the README example | streams an answer; the second question processes only the new message | exit 0 |
+| J1 | `python3 -m venv v && v/bin/pip install geistr` (the published wheel from PyPI; before the first PyPI release: the wheel from `https://www.geisten.net/download/geistr/vX.Y.Z/`), `v/bin/python -c 'import geistr; print(geistr.__version__)'` equals `geistr --version`; run the README example with a model from `geistr pull smollm2-360m` | the version matches; streams an answer; the second question processes only the new message | exit 0, the two versions equal |
 | J2 | `geistr.catalog(installed=True)` | the same models as `geistr catalog --installed` | compare ids |
 | J3 | break out of `for piece in chat.send(…)` early; Ctrl-C | the answer stops; the chat goes on | the next `ask` works |
 | J4 | a missing model | `geistr.GeistrError` with `.status == "io"` | — |
+| J5 | `pip install` on a Linux with an older glibc than the wheel's `manylinux_2_N` tag (e.g. Debian 11) | pip refuses it ("no matching distribution"), it does not install a library that fails at import | pip's message |
 
 ## K. Decisions (experimental, default-off)
 
