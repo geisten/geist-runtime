@@ -12,6 +12,7 @@
  *   geistr bench --compare [A [B]]   two engines' bench speeds side by side, the change in %
  *   geistr serve <model> [--socket=PATH] [--chats N] [--http[=ADDR:PORT]] [--max-request=MiB]
  *                                    the model as a service on a Unix socket (service.h)
+ *   geistr serve --http[=ADDR:PORT] …  every installed model, the one a request names loaded
  *   geistr chat --socket[=PATH]      chat with that service
  *   geistr decide <model> --config FILE --question TEXT --option ID DESC…
  *                                    fixed-option scoring (EXPERIMENTAL, default-off; docs/DECISIONS.md)
@@ -102,6 +103,8 @@ static int usage(void) {
           "       geistr serve <model> [--socket=PATH] [--chats N] [--http[=ADDR:PORT]] [--max-request=MiB]\n"
           "                                       (--http: OpenAI and Ollama APIs, default 127.0.0.1:11434;\n"
           "                                        --max-request: one request's size, default 16 MiB, larger: 413)\n"
+          "       geistr serve --http[=ADDR:PORT] [...]  every installed model; a request's model is loaded\n"
+          "                                       in place of the one before (one in memory)\n"
           "       geistr chat --socket[=PATH]\n"
           "       geistr decide <model> --config FILE --question TEXT --option ID DESC [--option ID DESC…]\n"
           "decision: --question-file FILE|-  --context TEXT  --processor auto|cpu|gpu\n"
@@ -466,21 +469,72 @@ static void on_stop(int signal) {
     stopping = 1;
 }
 
+/* geistr serve without a model (#195): the installed models a request may
+ * name (chat and embedding models; a reranker does not serve). Unverified
+ * ones count: loading one verifies it. */
+static size_t serve_installed(char (*ids)[64], size_t cap) {
+    geistr_catalog *c = load_catalog();
+    size_t          n = 0;
+    for (size_t i = 0; c && i < geistr_catalog_count(c) && n < cap; i++) {
+        const geistr_catalog_entry *m     = geistr_catalog_get(c, i);
+        geistr_install              state = GEISTR_INSTALL_MISSING;
+        if (m->embedding != 2 && geistr_catalog_check(m, models_dir, false, &state) == GEISTR_OK &&
+            (state == GEISTR_INSTALL_OK || state == GEISTR_INSTALL_UNVERIFIED))
+            snprintf(ids[n++], sizeof *ids, "%s", m->id);
+    }
+    geistr_catalog_free(c);
+    return n;
+}
+
+static struct session served;     /* the model loaded now */
+static const char    *serve_processor;
+
+/* The loaded model closed (its chats are), then id opened unless nullptr.
+ * The log names the switch and its time, unload and load. */
+static bool serve_load(struct svc_options *o, const char *id) {
+    static char            before[256]; /* the model unloaded for the next, since t0 */
+    static struct timespec t0;
+    if (served.model || !before[0])
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+    if (served.model)
+        snprintf(before, sizeof before, "%s", served.name);
+    session_close(&served);
+    o->model = nullptr, o->name = "", o->embedding = false;
+    if (!id)
+        return true;
+    bool opened = session_open(&served, id, serve_processor, 0, true) == OK;
+    if (opened) {
+        geistr_chat_close(served.chat); /* the service opens its own */
+        served.chat = nullptr;
+        o->model = served.model, o->reasoning = served.reasoning, o->name = served.name, o->embedding = served.embedding;
+        struct timespec t1;
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        fprintf(stderr, "geistr: %s loaded%s%s in %.1f s\n", id, before[0] ? " in place of " : "", before,
+                (double) (t1.tv_sec - t0.tv_sec) + (double) (t1.tv_nsec - t0.tv_nsec) / 1e9);
+    }
+    before[0] = 0;
+    return opened;
+}
+
+/* name: one model; nullptr: every installed one, one loaded at a time (#195). */
 static int serve(const char *name, const char *processor, const char *socket, const char *http, size_t chats,
                  size_t max_request) {
-    struct session x;
-    serving = true; /* an embedding model too (#91) */
-    int rc  = session_open(&x, name, processor, 0, true);
+    serving         = true; /* an embedding model too (#91) */
+    serve_processor = processor;
+    int rc          = name ? session_open(&served, name, processor, 0, true) : OK;
     if (rc != OK)
         return rc;
-    geistr_chat_close(x.chat); /* the service opens its own */
+    geistr_chat_close(served.chat); /* the service opens its own */
+    served.chat = nullptr;
     struct sigaction sa = {.sa_handler = on_stop};
     sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
-    struct svc_options o = {.model = x.model, .reasoning = x.reasoning, .name = x.name, .socket = socket,
-                            .http = http, .chats = chats, .max_request = max_request, .stop = &stopping, .embedding = x.embedding};
+    struct svc_options o = {.model = served.model, .reasoning = served.reasoning, .name = served.name, .socket = socket,
+                            .http = http, .chats = chats, .max_request = max_request, .stop = &stopping,
+                            .embedding = served.embedding, .installed = name ? nullptr : serve_installed,
+                            .load = name ? nullptr : serve_load};
     rc = service_run(&o) ? ERROR : OK;
-    geistr_model_close(x.model);
+    session_close(&served);
     return rc;
 }
 
@@ -786,6 +840,8 @@ int main(int argc, char **argv) {
     }
     if (!strcmp(command, "serve") && n == 2)
         return serve(args[1], processor, socket, http, (size_t) chats, (size_t) max_request << 20);
+    if (!strcmp(command, "serve") && n == 1 && http) /* every installed model (#195) */
+        return serve(nullptr, processor, socket, http, (size_t) chats, (size_t) max_request << 20);
     if (!strcmp(command, "chat") && socket)
         return n == 1 ? chat("", processor, socket, fresh) : usage();
     if (!strcmp(command, "chat") && n == 1) { /* the last model, else the geisten app's */

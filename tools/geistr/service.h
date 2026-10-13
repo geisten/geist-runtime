@@ -1,5 +1,7 @@
 /* service.h — geistr as a service: one model, many short-lived clients over a
- * Unix socket (geistr serve / geistr chat --socket).
+ * Unix socket (geistr serve / geistr chat --socket). Without a model (#195)
+ * the HTTP API offers every installed model and loads the one a request
+ * names, in place of the one loaded before: one model in memory at a time.
  *
  * Protocol: one JSON object per line. A client connects, sends one request
  * line and reads lines until the last one, then the connection closes.
@@ -36,19 +38,25 @@ struct svc_stats {
 /* ---- the service -------------------------------------------------------- */
 
 struct svc_options {
-    geistr_model    *model;
+    geistr_model    *model;  /* nullptr: none loaded yet (a service of every model) */
     geistr_reasoning reasoning;
-    const char      *name;   /* shown by info */
+    const char      *name;   /* shown by info; "" while none is loaded */
     const char      *socket; /* path */
     const char      *http;   /* ADDR:PORT for the HTTP API, or nullptr */
     size_t           chats;  /* conversations kept, ≥ 1 */
     size_t           max_request; /* bytes of one request: the HTTP body, a socket line */
     volatile sig_atomic_t *stop;
     bool             embedding; /* an embedding model (#91): /v1/embeddings, no chats */
+    /* A service of every installed model (#195); nullptr: the one above.
+     * installed: the ids a request may name (at most cap). load: close the
+     * model (its chats are closed already), then open id unless nullptr, and
+     * set model, reasoning, name and embedding; false after saying why. */
+    size_t (*installed)(char (*ids)[64], size_t cap);
+    bool (*load)(struct svc_options *o, const char *id);
 };
 
 /* Serve until *stop is set. Returns a geistr exit code (0 ok, 1 error). */
-int service_run(const struct svc_options *o);
+int service_run(struct svc_options *o);
 
 /* ---- inside the service: one chat request, whatever the protocol ---------- */
 
@@ -86,11 +94,12 @@ struct held; /* the conversations the service keeps */
 void        svc_chat(const struct svc_options *o, struct held *pool, const struct svc_request *r,
                      const struct svc_sink *out);
 const char *svc_finish(geistr_finish finish); /* "stop", "length", … */
+void        svc_unload(struct svc_options *o, struct held *pool); /* the chats, then the model (#195) */
 
 /* http.c: a listener for ADDR:PORT (-1 on failure, reported), and one HTTP
  * request on a connection (OpenAI and Ollama APIs); it closes client. */
 int  http_listen(const char *where, bool *loopback);
-void http_serve(const struct svc_options *o, struct held *pool, int client, bool loopback);
+void http_serve(struct svc_options *o, struct held *pool, int client, bool loopback);
 
 /* ---- a client ----------------------------------------------------------- */
 

@@ -169,6 +169,16 @@ const char *svc_finish(geistr_finish finish) {
     return finish < sizeof names / sizeof *names ? names[finish] : "error";
 }
 
+/* The conversations' chats (their caches belong to the model), then the
+ * model: its memory goes back before another is loaded (#195). */
+void svc_unload(struct svc_options *o, struct held *pool) {
+    for (size_t i = 0; pool && i < o->chats; i++)
+        if (pool[i].chat)
+            held_close(&pool[i]);
+    if (o->model)
+        (void) o->load(o, nullptr);
+}
+
 void svc_free_request(struct svc_request *r) {
     for (size_t i = 0; r->messages && i < r->n; i++)
         free((char *) r->messages[i].role), free((char *) r->messages[i].content);
@@ -215,6 +225,10 @@ void svc_chat(const struct svc_options *o, struct held *pool, const struct svc_r
     size_t                n = r->n;
     if (!n || !(r->temperature >= 0 && r->temperature <= 2)) {
         out->error(out->ctx, GEISTR_INVALID, "at least one message; temperature 0 to 2");
+        return;
+    }
+    if (!o->model) { /* a service of every model, none loaded yet (#195) */
+        out->error(out->ctx, GEISTR_INVALID, "no model is loaded: an HTTP request that names one loads it");
         return;
     }
     if (o->embedding) {
@@ -381,14 +395,15 @@ static void chat_request(const struct svc_options *o, struct held *pool, FILE *o
 
 static void info_request(const struct svc_options *o, FILE *out) {
     geistr_model_info i = {.size = sizeof i};
-    (void) geistr_model_info_get(o->model, &i);
+    if (o->model)
+        (void) geistr_model_info_get(o->model, &i);
     fputs("{\"model\":", out), json_write(out, o->name);
     fputs(",\"backend\":", out), json_write(out, i.backend ? i.backend : "cpu");
     fputs(",\"chat_format\":", out), json_write(out, i.chat_format ? i.chat_format : "");
     fprintf(out, ",\"context\":%u,\"chats\":%zu}\n", i.context, o->chats);
 }
 
-int service_run(const struct svc_options *o) {
+int service_run(struct svc_options *o) {
     struct sockaddr_un a;
     if (!address(o->socket, &a)) {
         fprintf(stderr, "geistr: socket path too long: %s\n", o->socket);
@@ -419,8 +434,9 @@ int service_run(const struct svc_options *o) {
     }
     signal(SIGPIPE, SIG_IGN); /* a vanished client is a failed write, not the end */
     struct held *pool = calloc(o->chats, sizeof *pool);
-    fprintf(stderr, "geistr: serving %s on %s%s%s (%zu conversations)\n", o->name, o->socket,
-            o->http ? " and http://" : "", o->http ? o->http : "", o->chats);
+    fprintf(stderr, "geistr: serving %s on %s%s%s (%zu conversations)\n",
+            o->installed ? "every installed model, one at a time," : o->name, o->socket, o->http ? " and http://" : "",
+            o->http ? o->http : "", o->chats);
     while (pool && !*o->stop) {
         struct pollfd in[2] = {{.fd = fd, .events = POLLIN}, {.fd = web, .events = POLLIN}};
         if (poll(in, web >= 0 ? 2 : 1, 200) <= 0)
