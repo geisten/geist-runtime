@@ -981,8 +981,9 @@ def section_http():
     assert call('POST', '/api/chat', {'messages': [{'role': 'user', 'content': 'Hi'}], 'stream': False,
                 'options': {'num_predict': 2}})[0] == 200 and time.time() - t0 < 60
     # a client that goes away while a long prompt is processed frees the service at once (#146): the next
-    # request is answered before a prompt a sixth of that size could be processed, measured here, so a slow
-    # runner slows both (#202); the dropped prompt to its end takes over six times as long
+    # request is answered within three times what a prompt a sixth of that size takes, measured here, so a
+    # slow runner slows both (#202); the dropped prompt to its end takes over six times as long. Not once:
+    # the next request's own prompt and tokens cost about as much as the small one under coverage (#202)
     s = unix.socket(unix.AF_UNIX); s.connect(sock); s.sendall(b'{"op":"info"}\n')
     ctx = json.loads(s.makefile(encoding='utf-8').readline())['context']; s.close()
     t0 = time.time()  # another word: not the dropped prompt's cache
@@ -996,7 +997,7 @@ def section_http():
     time.sleep(0.5); c.close()
     t0 = time.time()
     assert call('POST', '/v1/chat/completions', {'model': 'ref', 'messages': ask, 'max_tokens': 4})[0] == 200
-    assert time.time() - t0 < sixth, (time.time() - t0, sixth)
+    assert time.time() - t0 < 3 * sixth, (time.time() - t0, sixth)
     # tools (#92): a model without a tool format refuses them, clearly (400), in both APIs
     weather = [{'type': 'function', 'function': {'name': 'get_weather', 'parameters': {'type': 'object',
                 'properties': {'city': {'type': 'string'}}}}}]
