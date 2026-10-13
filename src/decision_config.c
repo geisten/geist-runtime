@@ -1,6 +1,6 @@
 /* Decision configuration/input validation (#13). No engine or mutable global
  * policy. The deliberately small JSON grammar accepts only this schema. */
-#include "geistr_decision.h"
+#include "decision_profile.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,22 +11,15 @@ struct geistr_decision_config {
     geistr_decision_policy policies[GEISTR_DECISION_MAX_POLICIES];
 };
 
-static const char *const names[] = {"none", "bonsai2-27b-pq2-v1", "gemma4-e2b-q4-v1"};
-static const char *const hashes[] = {"", "3907dc1658db1f78a9826bf8d5bcb8dc65db0d466388937af57f2294fae62ec1",
-                                     "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8"};
-
+/* Names and artifacts come from the verified profile registry (#162). */
 const char *geistr_decision_profile_name(geistr_decision_profile p) {
-    return p == GEISTR_DECISION_PROFILE_NONE || p == GEISTR_DECISION_BONSAI2_27B_PQ2 ||
-                   p == GEISTR_DECISION_GEMMA4_E2B_Q4
-               ? names[p]
-               : "unknown";
+    const struct decision_profile *e = decision_profile_get(p);
+    return p == GEISTR_DECISION_PROFILE_NONE ? "none" : e ? e->name : "unknown";
 }
 
 const char *geistr_decision_profile_sha256(geistr_decision_profile p) {
-    return p == GEISTR_DECISION_PROFILE_NONE || p == GEISTR_DECISION_BONSAI2_27B_PQ2 ||
-                   p == GEISTR_DECISION_GEMMA4_E2B_Q4
-               ? hashes[p]
-               : "";
+    const struct decision_profile *e = decision_profile_get(p);
+    return e ? e->artifact_sha256 : "";
 }
 
 static bool hash_valid(const char *s) {
@@ -41,8 +34,7 @@ static bool hash_valid(const char *s) {
 geistr_status geistr_decision_policy_validate(const geistr_decision_policy *p) {
     if (!p || !hash_valid(p->sha256) ||
         (p->mode != GEISTR_DECISION_DENSE && p->mode != GEISTR_DECISION_SELECTED_ROWS) ||
-        (p->profile != GEISTR_DECISION_PROFILE_NONE && p->profile != GEISTR_DECISION_BONSAI2_27B_PQ2 &&
-         p->profile != GEISTR_DECISION_GEMMA4_E2B_Q4))
+        (p->profile != GEISTR_DECISION_PROFILE_NONE && !decision_profile_get(p->profile)))
         return GEISTR_INVALID;
     if (p->profile != GEISTR_DECISION_PROFILE_NONE &&
         strcmp(p->sha256, geistr_decision_profile_sha256(p->profile)))
@@ -129,8 +121,8 @@ static bool policy(struct input *j, geistr_decision_policy *p) {
             if (!text(sizeof value, j, value))
                 return false;
             bool found = false;
-            for (size_t i = 1; i < sizeof names / sizeof names[0]; ++i)
-                if (!strcmp(value, names[i])) {
+            for (int i = 1; decision_profile_get((geistr_decision_profile)i); ++i)
+                if (!strcmp(value, decision_profile_get((geistr_decision_profile)i)->name)) {
                     p->profile = (geistr_decision_profile)i;
                     found = true;
                 }

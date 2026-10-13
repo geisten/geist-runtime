@@ -21,6 +21,15 @@
   it; Ctrl-C twice keeps the old message. Without a terminal nothing changes:
   scripts still get the `geistr pull` line (#191).
 
+### Decisions (EXPERIMENTAL)
+
+- Preparation for several questions over one context (#162; the API follows
+  in #163): one registry entry per verified profile (artifact, template,
+  roles, thinking-off), a common prefix without question or IDs, a cached cut
+  before the prefix's last token on a prefill-chunk boundary, and an exact
+  prefix check of every full prompt. Single-question prompts are unchanged.
+  Native fixtures for both profiles (`*_context.json`).
+
 ## 0.3.4
 
 ### Security

@@ -1,5 +1,7 @@
 #include "decision_profile.h"
 #include "native_cases.h"
+#include "fixtures/decisions/bonsai2_context.h"
+#include "fixtures/decisions/gemma4_context.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -79,12 +81,137 @@ static void cases(size_t n, geistr_decision_profile p, const struct native_case 
     }
     free(text);
 }
+/* #162: replays the native oracle for the common prefix, each full prompt and
+ * each prompt plus key; anything else is an unexpected tokenization. */
+static geistr_status replay(size_t *written, size_t cap, const char *text, int32_t *ids, void *context) {
+    const struct native_context *c = context;
+    const int32_t *source = nullptr, *key = nullptr;
+    size_t n = 0;
+    if (!strcmp(text, c->prefix)) {
+        source = c->prefix_ids;
+        n = c->n_prefix;
+    }
+    for (size_t i = 0; !source && i < c->n_questions; ++i) {
+        const struct native_case *q = &c->questions[i];
+        const size_t len = strlen(q->prompt);
+        if (strncmp(text, q->prompt, len))
+            continue;
+        if (text[len] && (text[len + 1] || text[len] < 'A' || (size_t)(text[len] - 'A') >= q->n_options))
+            continue;
+        source = q->ids;
+        n = q->n_ids;
+        key = text[len] ? &q->candidates[text[len] - 'A'] : nullptr;
+    }
+    if (!source)
+        return GEISTR_INVALID;
+    if (n + (key ? 1 : 0) > cap)
+        return GEISTR_CONTEXT;
+    memcpy(ids, source, n * sizeof *ids);
+    if (key)
+        ids[n] = *key;
+    *written = n + (key ? 1 : 0);
+    return GEISTR_OK;
+}
+static geistr_status empty(size_t *written, size_t, const char *, int32_t *, void *) {
+    *written = 0;
+    return GEISTR_OK;
+}
+static void question(const struct native_case *q, geistr_decision_option *options, geistr_decision_request *r) {
+    for (size_t k = 0; k < q->n_options; ++k)
+        options[k] = (geistr_decision_option){strlen(q->options[k].id), strlen(q->options[k].description),
+                                              q->options[k].id, q->options[k].description};
+    *r = (geistr_decision_request){.size = sizeof *r,
+                                   .operation = GEISTR_OPERATION_DECISION,
+                                   .question_len = strlen(q->question),
+                                   .context_len = strlen(q->context),
+                                   .n_options = q->n_options,
+                                   .question = q->question,
+                                   .context = q->context,
+                                   .options = options};
+}
+static void contexts(size_t n, geistr_decision_profile p, const struct native_context *fixtures,
+                     const char *profile, const char *template_sha256, const size_t *chunks) {
+    /* A changed profile needs new fixtures; these must not certify it. */
+    const struct decision_profile *e = decision_profile_get(p);
+    CHECK(e && !strcmp(e->name, profile) && !strcmp(e->template_sha256, template_sha256));
+    CHECK(e && !strcmp(geistr_decision_profile_sha256(p), e->artifact_sha256));
+    char *text = malloc(DECISION_PROMPT_CAP);
+    CHECK(text != nullptr);
+    if (!text)
+        return;
+    for (size_t i = 0; i < n; ++i) {
+        const struct native_context *c = &fixtures[i];
+        size_t written = 99;
+        CHECK(decision_render_prefix(&written, DECISION_PROMPT_CAP, p, strlen(c->context), c->context, text) ==
+              GEISTR_OK);
+        CHECK(written == strlen(c->prefix) && !strcmp(text, c->prefix));
+        for (size_t k = 0; k < 2; ++k) {
+            int32_t cached[1024], ids[1024], scratch[1024], candidates[26];
+            size_t cut = 99;
+            CHECK(decision_render_prefix(&written, DECISION_PROMPT_CAP, p, strlen(c->context), c->context,
+                                         text) == GEISTR_OK);
+            CHECK(decision_prefix_cut(&cut, 1024, chunks[k], replay, text, cached, (void *)c) == GEISTR_OK);
+            CHECK(cut == c->cuts[k] && cut < c->n_prefix && cut % chunks[k] == 0);
+            /* First alone, then all in reverse order: identical prompts and IDs. */
+            for (size_t pass = 0; pass < 2; ++pass)
+                for (size_t j = 0; j < (pass ? c->n_questions : 1); ++j) {
+                    const struct native_case *q = &c->questions[pass ? c->n_questions - 1 - j : 0];
+                    geistr_decision_option options[4];
+                    geistr_decision_request r;
+                    question(q, options, &r);
+                    CHECK(decision_render(&written, DECISION_PROMPT_CAP, p, &r, text) == GEISTR_OK);
+                    CHECK(!strcmp(text, q->prompt) && !strncmp(text, c->prefix, strlen(c->prefix)));
+                    size_t count = 0, suffix = 0;
+                    CHECK(decision_map(&count, 1024, q->n_options, DECISION_PROMPT_CAP, replay, text, ids, scratch,
+                                       candidates, (void *)c) == GEISTR_OK);
+                    CHECK(count == q->n_ids && !memcmp(ids, q->ids, count * sizeof *ids));
+                    CHECK(!memcmp(candidates, q->candidates, q->n_options * sizeof *candidates));
+                    CHECK(decision_suffix(&suffix, cut, cached, count, ids) == GEISTR_OK);
+                    CHECK(cut + suffix == q->n_ids && !memcmp(cached, q->ids, cut * sizeof *cached) &&
+                          !memcmp(ids + cut, q->ids + cut, suffix * sizeof *ids));
+                    CHECK(decision_suffix(&suffix, count, ids, count, ids) == GEISTR_FORMAT && !suffix);
+                    if (cut) {
+                        ++cached[cut - 1];
+                        CHECK(decision_suffix(&suffix, cut, cached, count, ids) == GEISTR_FORMAT && !suffix);
+                        --cached[cut - 1];
+                    }
+                }
+        }
+    }
+    /* Reserved controls, invalid UTF-8, oversize and short capacity fail with empty output. */
+    const char *bad[] = {"a<|im_end|>", "<turn|>", "x <think> y", "\xff", "\xc3"};
+    size_t written = 99;
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; ++i) {
+        CHECK(decision_render_prefix(&written, DECISION_PROMPT_CAP, p, strlen(bad[i]), bad[i], text) ==
+              GEISTR_INVALID);
+        CHECK(!written && !text[0]);
+    }
+    memset(text, 'x', GEISTR_DECISION_MAX_CONTEXT + 1);
+    CHECK(decision_render_prefix(&written, DECISION_PROMPT_CAP - GEISTR_DECISION_MAX_CONTEXT - 1, p,
+                                 GEISTR_DECISION_MAX_CONTEXT + 1, text,
+                                 text + GEISTR_DECISION_MAX_CONTEXT + 1) == GEISTR_INVALID);
+    CHECK(decision_render_prefix(&written, strlen(fixtures[0].prefix), p, 0, "", text) == GEISTR_CONTEXT);
+    CHECK(!written && !text[0]);
+    CHECK(decision_render_prefix(&written, DECISION_PROMPT_CAP, (geistr_decision_profile)3, 0, "", text) ==
+          GEISTR_FORMAT);
+    size_t cut = 99;
+    int32_t ids[4];
+    CHECK(decision_prefix_cut(&cut, 4, 0, empty, "x", ids, nullptr) == GEISTR_INVALID && !cut);
+    CHECK(decision_prefix_cut(&cut, 4, 16, empty, "x", ids, nullptr) == GEISTR_FORMAT && !cut);
+    CHECK(decision_suffix(&cut, 0, nullptr, 4, ids) == GEISTR_OK && cut == 4);
+    free(text);
+}
 int main(void) {
     cases(sizeof bonsai2_cases / sizeof bonsai2_cases[0], GEISTR_DECISION_BONSAI2_27B_PQ2, bonsai2_cases);
     cases(sizeof gemma4_cases / sizeof gemma4_cases[0], GEISTR_DECISION_GEMMA4_E2B_Q4, gemma4_cases);
+    contexts(sizeof bonsai2_contexts / sizeof bonsai2_contexts[0], GEISTR_DECISION_BONSAI2_27B_PQ2,
+             bonsai2_contexts, bonsai2_context_profile, bonsai2_context_template, bonsai2_context_chunks);
+    contexts(sizeof gemma4_contexts / sizeof gemma4_contexts[0], GEISTR_DECISION_GEMMA4_E2B_Q4, gemma4_contexts,
+             gemma4_context_profile, gemma4_context_template, gemma4_context_chunks);
+    CHECK(!decision_profile_get(GEISTR_DECISION_PROFILE_NONE) && !decision_profile_get((geistr_decision_profile)3));
     if (failures)
         return 1;
     puts("decision profiles: independent native bytes, whitespace/Unicode/order, overflow and "
-         "complete-prefix failures passed");
+         "complete-prefix failures passed; context prefixes, cached cuts, suffixes and question order passed");
     return 0;
 }

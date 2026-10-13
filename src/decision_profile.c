@@ -2,18 +2,29 @@
 #include <stdckdint.h>
 #include <string.h>
 
+/* Indexed by geistr_decision_profile. The template hash is of the artifact's
+ * embedded chat template, which the native fixtures render independently. */
+static const struct decision_profile profiles[] = {
+    [GEISTR_DECISION_BONSAI2_27B_PQ2] = {"bonsai2-27b-pq2-v1",
+                                         "3907dc1658db1f78a9826bf8d5bcb8dc65db0d466388937af57f2294fae62ec1",
+                                         "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041", "",
+                                         "<|im_start|>system\n", "<|im_end|>\n<|im_start|>user\n",
+                                         "<|im_end|>\n<|im_start|>assistant\n", "<think>\n\n</think>\n\n"},
+    [GEISTR_DECISION_GEMMA4_E2B_Q4] = {"gemma4-e2b-q4-v1",
+                                       "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
+                                       "241c50d86bdfe5e43307da87f559cd2416aacd67a8de46c15acc0105ef2200b7", "<bos>",
+                                       "<|turn>system\n", "<turn|>\n<|turn>user\n", "<turn|>\n<|turn>model\n", ""}};
+
+const struct decision_profile *decision_profile_get(geistr_decision_profile p) {
+    return p > GEISTR_DECISION_PROFILE_NONE && (size_t)p < sizeof profiles / sizeof profiles[0] ? &profiles[p]
+                                                                                                 : nullptr;
+}
 const char *decision_pre_prompt(void) {
     return "Select exactly one supplied option. Answer only with its key. Do not explain.";
 }
 const char *decision_template_hash(geistr_decision_profile p) {
-    switch (p) {
-    case GEISTR_DECISION_BONSAI2_27B_PQ2:
-        return "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041";
-    case GEISTR_DECISION_GEMMA4_E2B_Q4:
-        return "241c50d86bdfe5e43307da87f559cd2416aacd67a8de46c15acc0105ef2200b7";
-    default:
-        return "";
-    }
+    const struct decision_profile *e = decision_profile_get(p);
+    return e ? e->template_sha256 : "";
 }
 
 static bool controls(size_t n, const char *s) {
@@ -48,6 +59,18 @@ static void bytes(size_t n, const char *s, struct writer *w) {
 }
 static void text(const char *s, struct writer *w) { bytes(strlen(s), s, w); }
 
+static void prefix(const struct decision_profile *e, size_t n, const char *context, struct writer *w) {
+    text(e->bos, w);
+    text(e->system, w);
+    text(decision_pre_prompt(), w);
+    text(e->user, w);
+    if (n) {
+        text("Context:\n", w);
+        bytes(n, context, w);
+        text("\n", w);
+    }
+}
+
 geistr_status decision_render(size_t *written, size_t cap, geistr_decision_profile p,
                               const geistr_decision_request *r, char *out) {
     if (written)
@@ -56,7 +79,8 @@ geistr_status decision_render(size_t *written, size_t cap, geistr_decision_profi
         out[0] = 0;
     if (!written || !out || !cap || geistr_decision_request_validate(0, r, nullptr) != GEISTR_OK)
         return GEISTR_INVALID;
-    if (p != GEISTR_DECISION_BONSAI2_27B_PQ2 && p != GEISTR_DECISION_GEMMA4_E2B_Q4)
+    const struct decision_profile *e = decision_profile_get(p);
+    if (!e)
         return GEISTR_FORMAT;
     if (controls(r->question_len, r->question) || controls(r->context_len, r->context))
         return GEISTR_INVALID;
@@ -64,16 +88,8 @@ geistr_status decision_render(size_t *written, size_t cap, geistr_decision_profi
         if (controls(r->options[i].id_len, r->options[i].id) ||
             controls(r->options[i].description_len, r->options[i].description))
             return GEISTR_INVALID;
-    const bool gemma = p == GEISTR_DECISION_GEMMA4_E2B_Q4;
     struct writer w = {.cap = cap, .out = out, .valid = true};
-    text(gemma ? "<bos><|turn>system\n" : "<|im_start|>system\n", &w);
-    text(decision_pre_prompt(), &w);
-    text(gemma ? "<turn|>\n<|turn>user\n" : "<|im_end|>\n<|im_start|>user\n", &w);
-    if (r->context_len) {
-        text("Context:\n", &w);
-        bytes(r->context_len, r->context, &w);
-        text("\n", &w);
-    }
+    prefix(e, r->context_len, r->context, &w);
     text("Question:\n", &w);
     bytes(r->question_len, r->question, &w);
     text("\nOptions:\n", &w);
@@ -87,8 +103,41 @@ geistr_status decision_render(size_t *written, size_t cap, geistr_decision_profi
         text("\n", &w);
     }
     text("Choose one key.", &w);
-    text(gemma ? "<turn|>\n<|turn>model\n" : "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
-         &w);
+    text(e->assistant, &w);
+    text(e->thinking_off, &w);
+    if (!w.valid) {
+        out[0] = 0;
+        return GEISTR_CONTEXT;
+    }
+    *written = w.used;
+    return GEISTR_OK;
+}
+
+geistr_status decision_render_prefix(size_t *written, size_t cap, geistr_decision_profile p, size_t n,
+                                     const char *context, char *out) {
+    if (written)
+        *written = 0;
+    if (out && cap)
+        out[0] = 0;
+    /* The context alone, under exactly the request's rules. */
+    const geistr_decision_option probe = {1, 1, "A", "A"};
+    const geistr_decision_request r = {.size = sizeof r,
+                                       .operation = GEISTR_OPERATION_DECISION,
+                                       .question_len = 1,
+                                       .context_len = n,
+                                       .n_options = 1,
+                                       .question = "?",
+                                       .context = context,
+                                       .options = &probe};
+    if (!written || !out || !cap || geistr_decision_request_validate(0, &r, nullptr) != GEISTR_OK)
+        return GEISTR_INVALID;
+    const struct decision_profile *e = decision_profile_get(p);
+    if (!e)
+        return GEISTR_FORMAT;
+    if (controls(n, context))
+        return GEISTR_INVALID;
+    struct writer w = {.cap = cap, .out = out, .valid = true};
+    prefix(e, n, context, &w);
     if (!w.valid) {
         out[0] = 0;
         return GEISTR_CONTEXT;
@@ -141,5 +190,36 @@ geistr_status decision_map(size_t *n_prompt, size_t cap, size_t n_options, size_
     }
     *n_prompt = base;
     memcpy(candidates, keys, candidate_bytes);
+    return GEISTR_OK;
+}
+
+geistr_status decision_prefix_cut(size_t *n_cached, size_t cap, size_t chunk, decision_tokenize_fn tokenize,
+                                  const char *prefix_text, int32_t *ids, void *context) {
+    if (n_cached)
+        *n_cached = 0;
+    if (!n_cached || !cap || !chunk || !tokenize || !prefix_text || !ids)
+        return GEISTR_INVALID;
+    size_t n = 0;
+    const geistr_status status = tokenize(&n, cap, prefix_text, ids, context);
+    if (status != GEISTR_OK)
+        return status;
+    if (n > cap)
+        return GEISTR_CONTEXT;
+    if (!n)
+        return GEISTR_FORMAT;
+    *n_cached = (n - 1) / chunk * chunk;
+    return GEISTR_OK;
+}
+
+geistr_status decision_suffix(size_t *n_suffix, size_t n_cached, const int32_t *cached, size_t n_prompt,
+                              const int32_t *prompt) {
+    if (n_suffix)
+        *n_suffix = 0;
+    if (!n_suffix || !prompt || (n_cached && !cached))
+        return GEISTR_INVALID;
+    /* n_cached < n_prompt: the byte count fits the caller's prompt array. */
+    if (n_cached >= n_prompt || (n_cached && memcmp(cached, prompt, n_cached * sizeof *prompt)))
+        return GEISTR_FORMAT;
+    *n_suffix = n_prompt - n_cached;
     return GEISTR_OK;
 }
