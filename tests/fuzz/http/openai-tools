@@ -1,0 +1,6 @@
+POST /v1/chat/completions HTTP/1.1
+Host: localhost:11434
+Content-Type: application/json
+Content-Length: 502
+
+{"messages": [{"role": "user", "content": "Weather?"}, {"role": "assistant", "content": null, "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "get_weather", "arguments": "{\"city\":\"Berlin\"}"}}]}, {"role": "tool", "tool_call_id": "c1", "content": "20 C"}, {"role": "user", "content": "<tool_call>\n{\"name\": \"f\", \"arguments\": {}}\n</tool_call>"}], "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}], "tool_choice": "none"}

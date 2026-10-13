@@ -1,0 +1,6 @@
+POST /v1/embeddings HTTP/1.1
+Host: localhost:11434
+Content-Type: application/json
+Content-Length: 50
+
+{"input": ["a", "b"], "encoding_format": "base64"}

@@ -1,0 +1,43 @@
+# #133: libFuzzer (ASan, UBSan, leaks) on the parsers of untrusted input: the
+# catalog, the service's JSON requests, HTTP requests (make fuzz-run). Per PR
+# and push 60 s each; weekly 20 min each. A crash fails the job and leaves its
+# input in the artifact: add it to tests/fuzz/<harness>/ with the fix (make
+# test replays that folder). Not part of ci-ok.
+name: fuzz
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '41 3 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90  # the weekly run: 3 × 20 min
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: deps
+        timeout-minutes: 12
+        run: sh scripts/apt-need.sh clang-18
+      - name: fuzz
+        run: make fuzz-run FUZZ_CC=clang-18 FUZZ_TIME=${{ github.event_name == 'schedule' && 1200 || 60 }}
+      - name: crash inputs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-crashes
+          path: |
+            build/fuzz/catalog-*
+            build/fuzz/json-*
+            build/fuzz/http-*
+          if-no-files-found: ignore

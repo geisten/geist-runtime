@@ -1,0 +1,6 @@
+POST /api/chat HTTP/1.1
+Host: localhost:11434
+Content-Type: application/json
+Content-Length: 88
+
+{"messages": [{"role": "user", "content": "What is this?", "images": ["iVBORw0KGgo="]}]}
