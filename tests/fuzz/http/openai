@@ -1,0 +1,6 @@
+POST /v1/chat/completions HTTP/1.1
+Host: localhost:11434
+Content-Type: application/json
+Content-Length: 164
+
+{"model": "ref", "messages": [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "Hi"}], "temperature": 0, "max_tokens": 4, "stop": [".", "!"]}

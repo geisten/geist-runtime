@@ -4,6 +4,8 @@
 #   make core        build/libgeistr-core.a: catalog, fit, templates, text (no engine)
 #   make test        run them
 #   make sanitize    the same under ASan + UBSan
+#   make fuzz-run    libFuzzer on the catalog, JSON and HTTP parsers, FUZZ_TIME s each
+#                    (FUZZ_CC: a clang with libFuzzer; make test replays tests/fuzz/)
 #   make runtime     the real libgeistr.a on the pinned geistlib engine
 #   make test-real   the real runtime against the reference model (GEIST_TEST_MODEL,
 #                    default: the engine's fetched SmolLM2; make fetch-model)
@@ -30,9 +32,10 @@ LDLIBS   += -lpthread
 
 LIB  := $(BUILD)/libgeistr-stub.a
 CORE := $(BUILD)/libgeistr-core.a
+FUZZERS := $(BUILD)/fuzz_catalog $(BUILD)/fuzz_json $(BUILD)/fuzz_http
 TEXT := $(BUILD)/template.o $(BUILD)/stream.o $(BUILD)/catalog.o $(BUILD)/fit.o $(BUILD)/decision_config.o $(BUILD)/decision_profile.o
 
-all: $(LIB) $(CORE) $(BUILD)/test_api $(BUILD)/test_cxx $(BUILD)/test_template $(BUILD)/test_stream $(BUILD)/test_window $(BUILD)/test_catalog $(BUILD)/test_fit $(BUILD)/test_decision_config $(BUILD)/test_decision_profile $(BUILD)/test_render $(BUILD)/test_lineedit $(BUILD)/test_chat $(BUILD)/chat
+all: $(LIB) $(CORE) $(BUILD)/test_api $(BUILD)/test_cxx $(BUILD)/test_template $(BUILD)/test_stream $(BUILD)/test_window $(BUILD)/test_catalog $(BUILD)/test_fit $(BUILD)/test_decision_config $(BUILD)/test_decision_profile $(BUILD)/test_render $(BUILD)/test_lineedit $(BUILD)/test_chat $(BUILD)/chat $(FUZZERS)
 
 $(BUILD)/%.o: src/%.c src/*.h include/*.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -84,6 +87,15 @@ $(BUILD)/test_chat: tests/test_chat.c $(CHAT_PARTS) tools/geistr/cli.h tools/gei
 $(BUILD)/test_lineedit: tests/test_lineedit.c tools/geistr/lineedit.c tools/geistr/lineedit.h | $(BUILD)
 	$(CC) $(CFLAGS) -Itools/geistr tests/test_lineedit.c tools/geistr/lineedit.c $(LDFLAGS) -o $@
 
+# #133: the fuzz harnesses. Built with FUZZ_MAIN (tests/fuzz/replay.c) they run
+# their seeds and found crashes in make test; make fuzz builds them on libFuzzer.
+FUZZ_MAIN    ?= tests/fuzz/replay.c
+FUZZ_catalog := $(TEXT)
+FUZZ_json    := tools/geistr/json.c
+FUZZ_http    := tools/geistr/service.c tools/geistr/json.c $(LIB)
+$(BUILD)/fuzz_%: tests/fuzz/fuzz_%.c $(FUZZ_MAIN) $(LIB) tools/geistr/*.h tools/geistr/*.c | $(BUILD)
+	$(CC) $(CFLAGS) -Itools/geistr -Isrc $< $(FUZZ_MAIN) $(FUZZ_$*) $(LDFLAGS) $(LDLIBS) -o $@
+
 $(BUILD)/chat: examples/chat.c $(LIB)
 	$(CC) $(CFLAGS) $< $(LIB) $(LDFLAGS) $(LDLIBS) -o $@
 
@@ -106,12 +118,17 @@ test: all $(BUILD)/test_decide_driver
 	$(BUILD)/test_render
 	$(BUILD)/test_lineedit
 	$(BUILD)/test_chat
+	$(BUILD)/fuzz_catalog tests/fuzz/catalog/*
+	$(BUILD)/fuzz_json tests/fuzz/json/*
+	$(BUILD)/fuzz_http tests/fuzz/http/*
+	sh scripts/check-version.sh
+	sh tests/test_prune_releases.sh
 	@out=$$(printf 'Hallo Welt\nnoch einmal\n' | $(BUILD)/chat stub:echo) && \
 	  echo "$$out" | grep -q 'Echo: noch einmal' && echo "example chat: two turns passed" || \
 	  { echo "example chat failed: $$out"; exit 1; }
 
 # ---- the real runtime on geistlib (#4) ---------------------------------------
-ENGINE_GOALS := runtime test-upgrade test-real test-embed fetch-embed-model chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python $(BUILD)/test_decision_real $(BUILD)/bench_decision
+ENGINE_GOALS := runtime test-clients test-upgrade test-real test-embed fetch-embed-model chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python $(BUILD)/test_decision_real $(BUILD)/bench_decision
 ifneq (,$(filter $(ENGINE_GOALS),$(MAKECMDGOALS)))
 GEIST_REPO ?= https://github.com/geisten/geistlib.git
 GEIST_REF  ?= d53560d743ccbee1652aafc338405071d79f9f18
@@ -241,8 +258,19 @@ test-upgrade: geistr
 	python3 -u tests/test_upgrade.py $(BUILD)/previous/bin/geistr $(BUILD)/geistr "$$(dirname "$(GEIST_TEST_MODEL)")" \
 		$$(test -f "$(GEIST_TEST_EMBED_MODEL)" && dirname "$(GEIST_TEST_EMBED_MODEL)")
 
-$(BUILD)/test_embed: tests/test_embed.c $(RUNTIME) $(ENGINE_LIB)
-	$(CC) $(CFLAGS) -isystem $(GEISTLIB)/include $< $(RUNTIME) $(ENGINE_LINK) $(LDFLAGS) $(LDLIBS) -lm -o $@
+# #132: serve --http against the OpenAI SDK and the Ollama library (pinned), in a
+# venv: SmolLM2 (make fetch-model), Qwen3 0.6B tools, BitNet-embedding (fetch-embed-model).
+CLIENTS ?= openai==3.29.0 ollama==0.6.3
+GEIST_TEST_TOOLS_MODEL ?= $(GEISTLIB)/gguf_artifacts/Qwen3-0.6B-Q8_0.gguf
+test-clients: geistr
+	@for m in "$(GEIST_TEST_MODEL)" "$(GEIST_TEST_TOOLS_MODEL)" "$(GEIST_TEST_EMBED_MODEL)"; do \
+		test -f "$$m" || { echo "no model at $$m: make fetch-model fetch-embed-model, scripts/fetch-model.sh ... qwen3-0.6b"; exit 1; }; done
+	rm -rf $(BUILD)/clients-venv && python3 -m venv $(BUILD)/clients-venv
+	$(BUILD)/clients-venv/bin/pip install -q $(CLIENTS)
+	$(BUILD)/clients-venv/bin/python -u tests/test_clients.py $(BUILD)/geistr "$(GEIST_TEST_MODEL)" "$(GEIST_TEST_TOOLS_MODEL)" "$(GEIST_TEST_EMBED_MODEL)"
+
+$(BUILD)/test_embed: tests/test_embed.c tools/geistr/files.h $(RUNTIME) $(ENGINE_LIB)
+	$(CC) $(CFLAGS) -Itools/geistr -isystem $(GEISTLIB)/include $< $(RUNTIME) $(ENGINE_LINK) $(LDFLAGS) $(LDLIBS) -lm -o $@
 
 # #91: geistr_embed against BitNet-embedding-0.6B (make fetch-embed-model).
 GEIST_TEST_EMBED_MODEL ?= $(GEISTLIB)/gguf_artifacts/bitnet-embeddings-0.6b-bf16-i2_s.gguf
@@ -289,6 +317,26 @@ SAN := -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recove
 sanitize:
 	$(MAKE) BUILD=$(BUILD)/san CFLAGS="-O1 -g $(SAN)" CXXFLAGS="-O1 -g $(SAN)" LDFLAGS="$(SAN)" test
 
+# libFuzzer (#133): FUZZ_CC is a clang with libFuzzer (Apple's has none:
+# FUZZ_CC=$$(brew --prefix llvm)/bin/clang). fuzz-run fuzzes each harness for
+# FUZZ_TIME seconds from its seeds (tests/fuzz/<harness>/); a crash stops it and
+# leaves the input in build/fuzz/: add it to tests/fuzz/<harness>/ with the fix.
+FUZZ_CC   ?= clang
+FUZZ_TIME ?= 60
+FUZZ_SAN  := -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all
+fuzz:
+	$(MAKE) BUILD=$(BUILD)/fuzz CC=$(FUZZ_CC) FUZZ_MAIN= CFLAGS="-O1 -g $(FUZZ_SAN) -fsanitize=fuzzer-no-link" \
+		LDFLAGS="$(FUZZ_SAN) -fsanitize=fuzzer" fuzzers
+
+fuzzers: $(FUZZERS)
+
+fuzz-run: fuzz
+	for h in catalog json http; do \
+		mkdir -p $(BUILD)/fuzz/corpus/$$h && \
+		$(BUILD)/fuzz/fuzz_$$h -max_total_time=$(FUZZ_TIME) -timeout=10 -artifact_prefix=$(BUILD)/fuzz/$$h- \
+			$(BUILD)/fuzz/corpus/$$h tests/fuzz/$$h || exit 1; \
+	done
+
 # Line coverage of src/ and tools/geistr/ over the unit, real, embedding and CLI tests
 # (tools/coverage.py; GCOV="xcrun llvm-cov gcov" on macOS, gcov-14 with gcc-14).
 GCOV ?= gcov
@@ -301,4 +349,4 @@ clean:
 	rm -rf $(BUILD)
 
 PREVIOUS ?= latest
-.PHONY: test-upgrade install uninstall core all test sanitize coverage clean runtime test-real test-embed fetch-embed-model chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python FORCE
+.PHONY: fuzz fuzzers fuzz-run test-clients test-upgrade install uninstall core all test sanitize coverage clean runtime test-real test-embed fetch-embed-model chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python FORCE

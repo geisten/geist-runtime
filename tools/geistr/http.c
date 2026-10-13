@@ -556,11 +556,13 @@ static void read_stop(const struct json *j, int t, struct svc_request *r) {
         stop[k] = one ? one : json_string(j, item = json_next(j, t, item));
     if (!stop)
         free(one);
+    size_t strings = 0; /* those before the first that is not a string */
+    while (stop && strings < (size_t) n && stop[strings])
+        strings++;
+    for (size_t k = strings + 1; stop && k < (size_t) n; k++) /* svc_free_request frees only the first */
+        free(stop[k]);
     r->stop   = (const char *const *) stop;
-    r->n_stop = stop ? (size_t) n : 0;
-    for (size_t k = 0; k < r->n_stop; k++)
-        if (!stop[k]) /* not a string: no stop at all */
-            r->n_stop = k;
+    r->n_stop = strings;
 }
 
 static double clamp(double t) {
@@ -689,11 +691,12 @@ static void openai_done(void *ctx, const geistr_stats *st, const char *answer) {
         }
         calls_free(&calls);
         openai_chunk(a, false, nullptr, finish);
-        if (a->usage)
-            fprintf(a->out,
-                    "data: {\"id\":\"%s\",\"object\":\"chat.completion.chunk\",\"created\":%lld,\"choices\":[],"
-                    "\"usage\":%s}\n\n",
-                    a->id, a->created, usage);
+        if (a->usage) { /* every chunk has the model: the OpenAI SDK's ChatCompletionChunk requires it (#132) */
+            fprintf(a->out, "data: {\"id\":\"%s\",\"object\":\"chat.completion.chunk\",\"created\":%lld,\"model\":",
+                    a->id, a->created);
+            json_write(a->out, a->model);
+            fprintf(a->out, ",\"choices\":[],\"usage\":%s}\n\n", usage);
+        }
         fputs("data: [DONE]\n\n", a->out);
         return;
     }
@@ -759,7 +762,7 @@ static void openai_chat(const struct svc_options *o, struct held *pool, FILE *ou
         return;
     }
     r.temperature = clamp(json_number(j, json_field(j, 0, "temperature"), 1)); /* OpenAI's default */
-    r.max         = (unsigned) json_number(j, max >= 0 ? max : json_field(j, 0, "max_tokens"), 0);
+    r.max         = json_unsigned(j, max >= 0 ? max : json_field(j, 0, "max_tokens"), 0);
     read_stop(j, json_field(j, 0, "stop"), &r);
     int           options = json_field(j, 0, "stream_options");
     struct openai a       = {.out     = out,
@@ -916,8 +919,7 @@ static void ollama_chat(const struct svc_options *o, struct held *pool, FILE *ou
         return;
     }
     r.temperature  = clamp(json_number(j, json_field(j, options, "temperature"), 0.8)); /* Ollama's default */
-    double predict = json_number(j, json_field(j, options, "num_predict"), 0);
-    r.max          = predict > 0 ? (unsigned) predict : 0; /* -1: unlimited */
+    r.max          = json_unsigned(j, json_field(j, options, "num_predict"), 0); /* -1: unlimited */
     read_stop(j, json_field(j, options, "stop"), &r);
     struct ollama a = {.out    = out,
                        .model  = o->name,

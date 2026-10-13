@@ -1,0 +1,1 @@
+{"op": "chat", "messages": [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "Hallo \u00e4 \\ \"x\" \ud83d\ude00"}], "max": 8, "temperature": 0.7}

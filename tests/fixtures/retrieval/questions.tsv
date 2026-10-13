@@ -1,0 +1,58 @@
+# relevant files (comma-separated; - for none)	question. The first 36: one per passage (paragraph) of files/, in order; some cross the language
+garden/shed.md	What is the code for the lock on the shed?
+garden/shed.md	Where do we keep the fuel for the lawn mower?
+garden/shed.md	Which box should the kitchen scraps go into?
+garden/hochbeet.md	Wie hoch ist das Hochbeet und woraus ist es gebaut?
+garden/hochbeet.md	Wann läuft die Pumpe für die Bewässerung?
+garden/hochbeet.md	What helped against the slugs eating the lettuce?
+travel/lisbon.md	When does our flight to Portugal take off?
+travel/lisbon.md	Wo übernachten wir in Lissabon?
+travel/lisbon.md	How do we get to Sintra and what time is our palace slot?
+travel/wien.md	Wann kommt der Nachtzug in Wien an?
+travel/wien.md	In which district is our hotel in Vienna?
+travel/wien.md	Wie lange hat das Museum am Donnerstag offen?
+money/budget-2027.md	How much money does the platform team have for tools next year?
+money/budget-2027.md	Who pays for the new backend developer?
+money/budget-2027.md	How do we cut the cloud bill?
+money/steuer-2025.md	Wie viel von der Malerrechnung kann ich absetzen?
+money/steuer-2025.md	How many days did I commute to the office in 2025?
+money/steuer-2025.md	Bis wann muss die Steuererklärung beim Finanzamt sein?
+home/server-migration.md	When is the database offline for the move?
+home/server-migration.md	How do we check that the copied data is complete?
+home/server-migration.md	Wie machen wir die Umstellung rückgängig, wenn etwas schiefgeht?
+home/heizung.md	Where will the outdoor unit of the heat pump stand?
+home/heizung.md	Wie hoch ist der Zuschuss für die Wärmepumpe?
+home/heizung.md	Was kostet der Strom für die Wärmepumpe?
+life/dog.md	Who is the vet and when is the practice open?
+life/dog.md	When is the next rabies shot due?
+life/dog.md	Wie viel Futter bekommt der Hund am Tag?
+life/rezepte.md	Bei welcher Temperatur backe ich das Roggenbrot?
+life/rezepte.md	How long does the lentil soup have to simmer?
+life/rezepte.md	Welche Äpfel nehme ich für den Kuchen?
+life/book-club.md	When does the reading group meet?
+life/book-club.md	Which novel are we reading in November?
+life/book-club.md	How can someone new join the club?
+life/sportverein.md	Was kostet die Mitgliedschaft im Volleyballverein für Studenten?
+life/sportverein.md	When is volleyball practice?
+life/sportverein.md	Wer darf bei der Vorstandswahl abstimmen?
+# answered only by two files together
+life/book-club.md,home/server-migration.md	What happens in November?
+home/heizung.md,life/sportverein.md	Was kosten der Wärmepumpenstrom und der Volleyballverein?
+life/dog.md,life/book-club.md	When is the vet open and when does the book club meet?
+# answered by no file: unrelated, or close to a file's topic (near misses)
+-	What is the password for the guest WiFi?
+-	When is my next dentist appointment?
+-	How much does the car insurance cost per year?
+-	How many vacation days do I have left this year?
+-	What does the cat eat?
+-	Which hotel do we stay at in Rome?
+-	What time does the swimming pool open on Sundays?
+-	Who repairs the washing machine?
+-	Wann ist der nächste Elternabend in der Schule?
+-	Wie viel kostet die Hausratversicherung?
+-	Wer gewinnt dieses Jahr die Bundesliga?
+-	Was gibt es heute in der Kantine zum Mittagessen?
+-	Welche Tomatensorten wachsen im Gewächshaus?
+-	Wann fährt der Zug nach Hamburg?
+-	Wie lautet die PIN der Bankkarte?
+-	Wie viel Miete zahlen wir für die Wohnung?
