@@ -178,6 +178,20 @@ static bool origin_allowed(const char *origin) {
            host_is_loopback(host + 3);
 }
 
+/* Is the model a request names the one this service runs (#193)? No name
+ * or an empty one: yes. Else its id, with Ollama's ":latest", or the path or
+ * file name it was started with. A request for another model is refused,
+ * not answered by this one. */
+static bool serves(const char *wanted, const char *name) {
+    if (!wanted || !wanted[0])
+        return true;
+    const size_t n    = strlen(wanted);
+    const bool   tag  = n > 7 && !strcmp(wanted + n - 7, ":latest");
+    const size_t core = tag ? n - 7 : n;
+    const char  *base = strrchr(name, '/') ? strrchr(name, '/') + 1 : name;
+    return (strlen(name) == core && !strncmp(wanted, name, core)) || (strlen(base) == core && !strncmp(wanted, base, core));
+}
+
 /* ---- responses ------------------------------------------------------------- */
 
 static const char *reason(int status) {
@@ -1073,14 +1087,22 @@ void http_serve(const struct svc_options *o, struct held *pool, int client, bool
         ollama_tags(o, out);
     else if ((chat || embed) && post) {
         struct json j = {};
+        char       *wanted = nullptr;
         if (!json_parse(&j, r.body, (size_t) r.length))
             error_json(out, 400, openai, "the body is not a JSON object", nullptr);
-        else if (embed)
+        else if (!serves((wanted = json_string(&j, json_field(&j, 0, "model"))), o->name)) {
+            char why[512];
+            snprintf(why, sizeof why,
+                     openai ? "model '%.200s' is not served here (this service: %.200s)" : "model '%.200s' not found", wanted,
+                     o->name);
+            error_json(out, 404, openai, why, openai ? "model_not_found" : nullptr);
+        } else if (embed)
             embeddings(o, out, &j, openai);
         else if (openai)
             openai_chat(o, pool, out, &j);
         else
             ollama_chat(o, pool, out, &j);
+        free(wanted);
         json_free(&j);
     } else if (chat || embed)
         error_json(out, 405, openai, "use POST", nullptr);

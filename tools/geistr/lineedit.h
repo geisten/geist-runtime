@@ -69,3 +69,23 @@ void          le_type_ahead(struct le *e, const unsigned char *keys, size_t n);
 /* Read a line from a terminal on fd 0: LE_SUBMIT (line in e->buf), LE_EOF
  * (Ctrl-D on an empty line) or LE_INTERRUPT (Ctrl-C). */
 enum le_event le_read(struct le *e, const char *prompt);
+
+/* ---- a choice from a list (#189) ----------------------------------------
+ * The rows under a title, the chosen one marked ❯; ↑/↓ (or k/j) move, Enter
+ * takes, Ctrl-C once asks for a second one, twice cancels. le_pick_feed is
+ * the state machine (tested without a terminal), le_pick_read runs it on a
+ * raw terminal on fd 0. */
+enum le_pick_event { LE_PICK_MORE, LE_PICK_TAKE, LE_PICK_CANCEL };
+struct le_pick {
+    FILE              *out;
+    const char *const *rows;
+    size_t             n, sel;
+    unsigned           drawn; /* lines of the last drawing */
+    bool               armed; /* one Ctrl-C seen */
+    char               esc[4];
+    size_t             n_esc;
+};
+void               le_pick_draw(struct le_pick *p);
+enum le_pick_event le_pick_feed(struct le_pick *p, unsigned char byte);
+/* The chosen index, or -1 when cancelled (or no terminal). */
+long le_pick_read(FILE *out, const char *const rows[], size_t n, size_t sel);

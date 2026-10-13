@@ -119,6 +119,14 @@ unsigned json_unsigned(const struct json *j, int t, unsigned dflt) {
     return !(v > 0) ? 0 : v >= (double) UINT_MAX ? UINT_MAX : (unsigned) v;
 }
 
+bool json_offset(const struct json *j, int t, uint64_t *v) {
+    double d = json_number(j, t, -1); /* checked before the cast, as json_unsigned (#203) */
+    if (!(d >= 0 && d <= 0x1p53) || (double) (uint64_t) d != d)
+        return false;
+    *v = (uint64_t) d;
+    return true;
+}
+
 bool json_bool(const struct json *j, int t, bool dflt) {
     if (t < 0 || T(j)[t].type != JSMN_PRIMITIVE)
         return dflt;

@@ -4,12 +4,42 @@
 
 ### Fixes
 
+- `geistr serve --http`: a request that names another model (`"model":
+  "gemma4-e2b"` to a qwen3-0.6b service) gets 404 `model_not_found` instead of
+  an answer from the served model. Its id, `id:latest`, its file name or no
+  model are accepted as before (#193).
+- `geistr pull` refuses a vision tower checkpoint whose header has a negative,
+  fractional or huge tensor offset, naming the tensor, instead of asking the
+  server for a bogus range. `geistr chat --socket` clamps token counts from
+  the service's stats line that are negative or too large: casting them was
+  undefined behaviour (#203).
 - `geistr pull` onto a disk that is too small says so before it downloads:
   `no space left in <folder> (<model> needs N MB, M MB free); free some space
   or use --models`. A write that fails while downloading (the disk filled up
   meanwhile, a file size limit) names the error. Before it was taken for the
   network ("Failure when receiving data from the peer", "Failed writing
   received data") with the hint to resume, which failed the same way (#206).
+
+### Changed
+
+- `geistr chat` the first time: instead of one yes/no question, a list of the
+  models that can run on this computer, the suggestion first, to choose with
+  ↑↓ and Enter (Ctrl-C twice cancels). With models installed but none
+  chosen, the only one is used, or one is chosen from a list (in a terminal) or
+  named (#189).
+- `geistr chat`, `run`, `serve`, `/model` and `index` offer, in a terminal, to
+  download a model that is not installed (or outdated, damaged) and go on with
+  it; Ctrl-C twice keeps the old message. Without a terminal nothing changes:
+  scripts still get the `geistr pull` line (#191).
+
+### Decisions (EXPERIMENTAL)
+
+- Preparation for several questions over one context (#162; the API follows
+  in #163): one registry entry per verified profile (artifact, template,
+  roles, thinking-off), a common prefix without question or IDs, a cached cut
+  before the prefix's last token on a prefill-chunk boundary, and an exact
+  prefix check of every full prompt. Single-question prompts are unchanged.
+  Native fixtures for both profiles (`*_context.json`).
 
 ## 0.3.4
 
