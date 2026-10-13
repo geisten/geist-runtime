@@ -110,7 +110,7 @@ A release is done when, in addition:
   ```
   The measured speeds also feed the fit verdicts (`geistr_rank`).
 - Chats are kept in `chats/` in the data folder (0600, one JSON message per
-  line), written after every answer.
+  line), written after every answer and on `/system`.
 - Settings live in `geistr.conf`: on macOS in
   `~/Library/Application Support/geisten/` (next to the models), on Linux in
   `$XDG_CONFIG_HOME/geisten/` (`~/.config/geisten/`), with `GEISTEN_HOME` in

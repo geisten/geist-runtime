@@ -346,7 +346,8 @@ says when only part is read again (`resumes the last 12`), and when the last
 answer was stopped or cut off.
 
 - Each conversation is a file in `chats/` in the data folder, one JSON
-  message per line, written after every answer, readable only by you.
+  message per line, written after every answer and when `/system` changes it,
+  readable only by you.
 - When you continue one, the next answer writes it to a new file and removes
   the old one: there is one current conversation.
 - `/clear` and `geistr chat --new` start a new conversation; the old file

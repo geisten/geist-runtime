@@ -18,6 +18,10 @@
   --max-request=MiB)","status":"too_large"}`, as HTTP's 413 says it. Before it
   was `"one JSON object per line"` with the status `invalid`, as bad JSON
   (#207).
+- `geistr chat`: a system prompt set or removed with `/system` in a
+  conversation is written to its file at once. Before it was written only
+  with the next answer, so a chat that ended before it resumed without the
+  system prompt `/info` had shown (#205).
 
 ### Changed
 
