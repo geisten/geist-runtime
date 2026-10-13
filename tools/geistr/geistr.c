@@ -324,6 +324,24 @@ static int catalog(bool installed_only, bool available_only, bool json) {
     return OK;
 }
 
+/* In a terminal, a model that is not installed (or outdated, damaged) is
+ * offered for download, in the list style of the first run; true when it is
+ * there now. Without a terminal nothing is downloaded unasked (#191). */
+static bool offer_download(const geistr_catalog_entry *m, geistr_install state) {
+    if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO))
+        return false;
+    char size[16], row[160];
+    snprintf(row, sizeof row, "Download %s (%s)", m->id, size_text(m->bytes, size));
+    printf("%s %s. (Enter · Ctrl-C twice cancels)\n", m->id,
+           state == GEISTR_INSTALL_MISSING   ? "is not installed"
+           : state == GEISTR_INSTALL_CORRUPT ? "is damaged (its checksum differs from the catalog's)"
+                                             : "is not this catalog's file");
+    const char *const rows[] = {row};
+    if (le_pick_read(stdout, rows, 1, 0) < 0)
+        return false;
+    return geistr_pull(m, models_dir) == OK && geistr_pull_vision(m, models_dir) == OK;
+}
+
 /* A catalog id → its verified file; a path stays a path. */
 int resolve(const char *model, char *path, size_t cap, geistr_reasoning *reasoning, int *embedding) {
     geistr_catalog *c   = load_catalog();
@@ -347,6 +365,8 @@ int resolve(const char *model, char *path, size_t cap, geistr_reasoning *reasoni
                 geistr_catalog_free(c);
                 return ERROR;
             }
+            if (state != GEISTR_INSTALL_OK && offer_download(m, state))
+                state = install_state(m, true);
             if (state != GEISTR_INSTALL_OK) {
                 fprintf(stderr,
                         state == GEISTR_INSTALL_MISSING ? "geistr: %s is not installed; geistr pull %s\n"

@@ -1430,6 +1430,29 @@ def section_pull():
                 until(fd, 'Ctrl-C twice exits', 120)  # the chat, with the downloaded model
                 finish_chat(pid, fd)
                 assert os.path.exists(os.path.join(first_models, ref_file))
+        # a named model that is not installed (#191): in a terminal offered for download (Ctrl-C twice:
+        # the old message, exit 1; Enter: downloaded and the chat opens); piped: the message, nothing downloaded
+        offer_models = os.path.join(tmp, 'offer-models'); os.makedirs(offer_models)
+        offer = ['--models', offer_models, '--catalog', first_catalog]
+        offer_env = {**first_env, 'GEISTEN_HOME': os.path.join(tmp, 'home-offer')}
+        r = subprocess.run([geistr, 'run', 'ref', 'hi', *offer], input='', capture_output=True, text=True, env=offer_env)
+        assert r.returncode == 1 and 'geistr pull ref' in r.stderr and not os.listdir(offer_models), r.stderr
+        for cancel in (True, False):
+            pid, fd = pty.fork()
+            if pid == 0:
+                os.execve(geistr, [geistr, 'chat', 'ref', *offer], offer_env)
+            until(fd, 'Download ref')
+            if cancel:
+                os.write(fd, b'\x03'); until(fd, 'Ctrl-C again to cancel'); os.write(fd, b'\x03')
+                until(fd, 'geistr pull ref')
+                assert os.WEXITSTATUS(os.waitpid(pid, 0)[1]) == 1 and not os.listdir(offer_models)
+                os.close(fd)
+            else:
+                os.write(fd, b'\r')
+                until(fd, 'ref installed', 120)
+                until(fd, 'Ctrl-C twice exits', 120)
+                finish_chat(pid, fd)
+                assert os.path.exists(os.path.join(offer_models, ref_file))
         # installed, none chosen (#189): the only one is used
         only_env = {**first_env, 'GEISTEN_HOME': os.path.join(tmp, 'home-only')}
         pid, fd = pty.fork()

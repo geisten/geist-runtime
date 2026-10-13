@@ -16,6 +16,10 @@
   ↑↓ and Enter (Ctrl-C twice cancels). With models installed but none
   chosen, the only one is used, or one is chosen from a list (in a terminal) or
   named (#189).
+- `geistr chat`, `run`, `serve`, `/model` and `index` offer, in a terminal, to
+  download a model that is not installed (or outdated, damaged) and go on with
+  it; Ctrl-C twice keeps the old message. Without a terminal nothing changes:
+  scripts still get the `geistr pull` line (#191).
 
 ## 0.3.4
 

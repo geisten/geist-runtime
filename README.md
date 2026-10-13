@@ -62,9 +62,13 @@ Or choose yourself:
 
 ```sh
 geistr catalog                 # which models fit this computer
-geistr pull qwen3-0.6b         # download and verify one (640 MB)
-geistr chat qwen3-0.6b         # talk to it
+geistr chat qwen3-0.6b         # talk to it; not installed yet: Enter downloads it (640 MB)
 ```
+
+`geistr pull qwen3-0.6b` downloads without starting anything: for scripts and
+servers (without a terminal geistr never downloads unasked), the embedding
+model of `--files`, and with no id, the update of all installed models after a
+new geistr.
 
 Or a single answer, for scripts:
 
