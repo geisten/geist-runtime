@@ -840,12 +840,14 @@ def section_serve():
         assert not path.startswith('/v1/') or error['type'] == 'invalid_request_error', error
     t0 = time.time()
     s = unix.socket(unix.AF_UNIX); s.connect(sock3)
-    try:  # the service answers and hangs up before the whole line is sent
-        s.sendall(b'{"op":"chat","messages":[{"role":"user","content":"' + b'x' * 2000000 + b'"}]}\n')
-        refused = s.makefile(encoding='utf-8').readline()
-        assert not refused or json.loads(refused).get('status') == 'invalid', refused
-    except (BrokenPipeError, ConnectionResetError):
-        pass
+    def send_line():  # the service answers and hangs up before the whole line is sent
+        try:
+            s.sendall(b'{"op":"chat","messages":[{"role":"user","content":"' + b'x' * 2000000 + b'"}]}\n')
+        except OSError:
+            pass
+    threading.Thread(target=send_line, daemon=True).start()
+    refused = json.loads(s.makefile(encoding='utf-8').readline())  # the limit named, as over HTTP (#207)
+    assert refused == {'error': 'the request is over the limit of 1 MiB (geistr serve --max-request=MiB)', 'status': 'too_large'}, refused
     s.close()
     assert time.time() - t0 < 5, time.time() - t0
     body = json.dumps({'messages': [{'role': 'user', 'content': 'Hi'}], 'max_tokens': 3}).encode()  # under the limit: answered

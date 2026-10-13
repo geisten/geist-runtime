@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- `geistr serve`: a socket line over `--max-request` is answered
+  `{"error":"the request is over the limit of N MiB (geistr serve
+  --max-request=MiB)","status":"too_large"}`, as HTTP's 413 says it. Before it
+  was `"one JSON object per line"` with the status `invalid`, as bad JSON
+  (#207).
+
 ## 0.3.4
 
 ### Security

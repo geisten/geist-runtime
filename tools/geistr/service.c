@@ -39,8 +39,9 @@ static bool write_all(int fd, const char *s, size_t n) {
 }
 
 /* One line (without '\n') into a malloc'd string; nullptr at EOF or longer
- * than max. What follows the '\n' is dropped: one line per connection. */
-static char *read_line(int fd, size_t max) {
+ * than max (then *over, if given). What follows the '\n' is dropped: one line
+ * per connection. */
+static char *read_line(int fd, size_t max, bool *over) {
     char    buf[4096], *line = nullptr, *nl = nullptr;
     size_t  len = 0, got = 0;
     FILE   *m = open_memstream(&line, &len);
@@ -54,6 +55,8 @@ static char *read_line(int fd, size_t max) {
     if (m)
         fclose(m);
     if (got > max || (!nl && !got)) { /* too long, or nothing before the end */
+        if (over)
+            *over = got > max;
         free(line);
         return nullptr;
     }
@@ -437,12 +440,18 @@ int service_run(const struct svc_options *o) {
             http_serve(o, pool, client, loopback);
             continue;
         }
-        char       *request = read_line(client, o->max_request);
+        bool        over    = false;
+        char       *request = read_line(client, o->max_request, &over);
         FILE       *out     = fdopen(client, "w"); /* closes client */
         struct json j       = {};
         if (!out)
             close(client);
-        else if (!request || !json_parse(&j, request, strlen(request)))
+        else if (over) { /* as HTTP's 413 says it (#207) */
+            char why[96];
+            snprintf(why, sizeof why, "the request is over the limit of %zu MiB (geistr serve --max-request=MiB)",
+                     o->max_request >> 20);
+            reply_error(out, "too_large", why);
+        } else if (!request || !json_parse(&j, request, strlen(request)))
             reply_error(out, "invalid", "one JSON object per line");
         else {
             char *op = json_string(&j, json_field(&j, 0, "op"));
@@ -477,7 +486,7 @@ geistr_status service_info(const char *path, char *out, size_t cap) {
     int fd = dial(path);
     if (fd < 0)
         return GEISTR_IO;
-    char *line = write_all(fd, "{\"op\":\"info\"}\n", 14) ? read_line(fd, 1 << 16) : nullptr;
+    char *line = write_all(fd, "{\"op\":\"info\"}\n", 14) ? read_line(fd, 1 << 16, nullptr) : nullptr;
     close(fd);
     if (!line)
         return GEISTR_IO;
