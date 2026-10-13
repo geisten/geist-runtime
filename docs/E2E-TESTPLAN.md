@@ -97,7 +97,7 @@ Rules that keep agent runs reliable:
 | B5 | corrupt a byte of an installed model file | `catalog` marks it `✗ checksum differs (damaged file?)` (JSON state `corrupt`; a file of another size is `⟳`/`mismatch`); `run` refuses with "is damaged …; geistr pull …" (#149) | exit 1 |
 | B6 | `geistr catalog`, then `geistr pull` with no id, after a catalog update that replaced a file (another size); and with the damaged file of B5 | `catalog` shows the replaced one as `⟳ not this catalog's file` (JSON `mismatch`), not `✗`; `run` says "does not match the catalog"; `pull` downloads both again (the ✗ one too); the old file stays until the new one is verified (#149) | `catalog --json` states; both ✓ after the pull |
 | B7 | `geistr catalog --installed`, `--available` | only those rows | — |
-| B8 | `geistr pull qwen3-0.6b`, then cut the network halfway (Wi-Fi off, or `sudo ifconfig en0 down` / `ip link set … down`), then on again and pull again | a clear error and exit 1 (not a hang: it gives up within about a minute); the `.part` stays; the second pull resumes and verifies | exit code, time to the error, `.part` grew |
+| B8 | `geistr pull qwen3-0.6b`, then cut the network halfway (Wi-Fi off, or `sudo ifconfig en0 down` / `ip link set … down`), then on again and pull again. On a shared machine, without touching its network: a `GEISTR_TESTING` build (`make BUILD=build/geistr-test GEISTR_CFLAGS=-DGEISTR_TESTING geistr`) with `GEISTR_TEST_URL_BASE=http://127.0.0.1:PORT` and a local server that stops sending halfway (no FIN), then one that serves `Range` | a clear error and exit 1 (not a hang: it gives up within about a minute); the `.part` stays; the second pull resumes and verifies | exit code, time to the error, `.part` grew |
 | B9 | pull into a folder on a disk that is too small (macOS: `hdiutil create -size 200m -fs APFS -volname small small.dmg` and attach; Linux: `mount -t tmpfs -o size=200m tmpfs /mnt/small`): `geistr pull smollm2-360m --models /Volumes/small` | "no space left" (or the like), exit 1; no ✓ in `catalog`; nothing half-written left that `run` would load | exit code, `catalog --models …` |
 | B10 | a symlink to a verified model file from another models folder: `mkdir m2; ln -s <models>/Qwen3-0.6B-Q8_0.gguf m2/`; `geistr catalog --models m2`, `geistr run qwen3-0.6b hi --models m2`, then `geistr pull qwen3-0.6b --models m2` | `catalog`: `⟳ a symlink, not used: copy the file or use a hard link`; `run`: "is a symlink; geistr does not follow links …", exit 1; `pull` says the download replaces the link, the link's target is unchanged (#151) | exit code; `ls -l m2`; `shasum` of the target before and after |
 
@@ -111,7 +111,7 @@ Rules that keep agent runs reliable:
 | C4 | `geistr run nope hi`; `geistr fly`; `geistr run tiny hi` (not installed) | clear message: unknown model / usage / "not installed; geistr pull tiny"; exit 1, 2, 1 | exit codes |
 | C5 | `geistr run path/to/model.gguf "Hi"` | a `.gguf` path works like an id | exit 0 |
 | C6 | pipe the output: `geistr run qwen3-0.6b "Write **bold**" \| cat` | plain text, no escape codes, Markdown as written | no `\x1b` in stdout |
-| C7 | `geistr run qwen3-0.6b --cpu "Hi"` and `--gpu "Hi"` (a GPU machine); on a machine without a GPU `--gpu` | each answers on that processor (the speed line differs: Metal ≈ 3–4× the CPU on an M1 Max); without a GPU: a clear message or the CPU, no crash | the two speed lines |
+| C7 | `geistr run qwen3-0.6b --cpu "Hi"` and `--gpu "Hi"` (a GPU machine); the same with `geistr chat qwen3-0.6b --cpu` / `--gpu` and `geistr serve qwen3-0.6b --cpu` / `--gpu`; on a machine without a GPU `--gpu` | each answers on that processor (the speed line differs: Metal ≈ 2–4× the CPU on an M1 Max); the chat's prompt is `⚙ >` / `⚡ >`; the service's `op: info` names the backend (`cpu`, `metal`/`vulkan`); without a GPU: a clear message or the CPU, no crash | the two speed lines; the prompt; `echo '{"op":"info"}' \| nc -U …` → `.backend` |
 
 ## D. The chat: looks and answers
 
@@ -124,7 +124,7 @@ Start: `geistr chat qwen3-0.6b --new` in a terminal of 100 × 40.
 | D3 | a long prose answer | wraps at words to the terminal width; code lines are not re-wrapped | no line wider than the terminal |
 | D4 | while waiting for the first word | a dim `⠋ reading · N s` (or `thinking` for a thinking model) | screen |
 | D5 | after each answer | `NN.N tok/s · N.N s` dim | screen |
-| D6 | fill the context past 50 % (a long paste; or a small window in a test build with `GEISTR_TEST_CONTEXT=512`) | the prompt shows `⚙ 62% >`, yellow from 80 %, red from 95 %; `/info` shows `context N of M tokens (P %)` | screen |
+| D6 | fill the context past 50 % (a long paste; or a small window: `GEISTR_TEST_CONTEXT=512` with the `GEISTR_TESTING` build of B8; the released binary ignores it) | the prompt shows `⚙ 62% >`, yellow from 80 %, red from 95 %; `/info` shows `context N of M tokens (P %)` | screen |
 | D7 | Esc during an answer | it stops, `[stopped]`, the prompt returns | screen; automated (`make test-geistr ONLY=terminal`) |
 | D8 | Ctrl-C on an empty line, twice | "Ctrl-C again to exit", then the chat ends; the terminal is normal again (echo, line editing) | after exit, `stty -a` shows `icanon echo` |
 | D9 | `NO_COLOR=1 geistr chat …` | no colours or styles | no `\e[` SGR in `capture-pane -e`; automated (`make test-geistr ONLY=terminal`) |
@@ -176,7 +176,7 @@ Start: `geistr chat qwen3-0.6b --new` in a terminal of 100 × 40.
 | G5 | `geistr config history off` | the conversation is still kept; typed lines are not | `history` unchanged |
 | G6 | `echo hi \| geistr chat qwen3-0.6b` | answers; keeps nothing | no new files |
 | G7 | file permissions | `chats/*.jsonl` and `history` are 0600, `chats/` 0700 | `stat` |
-| G8 | a conversation that outgrows the context (small window or many long messages) | `↥ N oldest messages left out to fit the context …` once | screen |
+| G8 | a conversation that outgrows the context (the small window of D6 and eight two-sentence questions, or many long messages) | `↥ N oldest messages left out to fit the context …` once | screen |
 | G9 | a small model that loops (SmolLM2: "Say hello in five words." several times) | the loop guard ends it: `⟲ it repeated itself: kept up to the repeat · /retry or /clear`; the next answers do not grow | the chat file has `"cut": true`; later answers stay short |
 | G10 | Esc an answer, exit, resume | `↻ … · its last answer was stopped` | file has `"stopped": true`; automated (`make test-geistr ONLY=terminal`) |
 
@@ -198,7 +198,7 @@ Start: `geistr chat qwen3-0.6b --new` in a terminal of 100 × 40.
 | H11 | two clients at once; one disconnects mid-answer | answers are served one at a time; the disconnect stops that answer; the other completes | — |
 | H12 | SIGTERM to the service | it exits cleanly and removes the socket | socket gone |
 | H13 | a request bigger than the context | 400 `context_length_exceeded` (OpenAI) | status and code |
-| H14 | `geistr serve qwen3-0.6b --http=127.0.0.1:18434 --chats 2`; three clients with different conversations, one after the other, then the first again | the first two are continued from the cache (`input_tokens` only the new message); the third evicts the least recently used; the first again is processed whole, still answered | `usage.prompt_tokens` / socket `input_tokens` per request |
+| H14 | `geistr serve qwen3-0.6b --http=127.0.0.1:18434 --chats 2`; three clients with different conversations, one after the other, then the first again | the first two are continued from the cache (`input_tokens` well below the whole conversation's: the last answer and the new message); the third evicts the least recently used; the first again is processed whole, still answered | socket `input_tokens` per request (`usage.prompt_tokens` over HTTP counts the whole prompt, cached or not) |
 | H15 | `--max-request=1` and a 2 MB body; the same as a socket line | 413 naming `--max-request` and the limit (HTTP); refused at once (socket); the service goes on | status, time < 1 s |
 | H16 | OpenAI: `max_tokens: 5`, `stop: ["\n"]`, `temperature: 0` twice, `tool_choice: "none"` with `tools`; `GET /v1/models`; Ollama `options.num_predict: 3`; `/v1/embeddings` with `encoding_format: "base64"` | 5 tokens, `finish_reason: length`; cut at the stop; two equal answers; no tool call; the model listed; 3 tokens; base64 vectors of the same length as float | `jq` on each |
 | H17 | socket: `echo '{"op":"info"}' \| nc -U …/geistr.sock` | one JSON line: model, context, chat format | `jq .context` |
@@ -254,7 +254,9 @@ permission file (see [docs/DECISIONS.md](DECISIONS.md)).
 
 ## Report
 
-One file per run, `e2e-<date>-<platform>.md`:
+One report per run, posted as a comment on the issue the run belongs to
+(not committed: the findings become issues, the report stays with the run;
+#135, #175):
 
 ```
 geistr <version> · engine <commit> · <OS, CPU, GPU> · terminal <name> · load <avg>
