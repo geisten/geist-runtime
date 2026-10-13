@@ -9,6 +9,14 @@
   an answer from the served model. Its id, `id:latest`, its file name or no
   model are accepted as before (#193).
 
+### Changed
+
+- `geistr chat` the first time: instead of one yes/no question, a list of the
+  models that can run on this computer, the suggestion first, to choose with
+  ↑↓ and Enter (Ctrl-C twice cancels). With models installed but none
+  chosen, the only one is used, or one is chosen from a list (in a terminal) or
+  named (#189).
+
 ## 0.3.4
 
 ### Security
