@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "revision": 12,
+  "revision": 13,
   "models": [
     {
       "id": "bitnet-2b",
@@ -480,6 +480,23 @@
       "group_name": "BitNet embedding 0.6B",
       "quantization": "I2_S",
       "kind": "embedding"
+    },
+    {
+      "id": "qwen3-reranker-0.6b",
+      "name": "Qwen3 Reranker 0.6B",
+      "file": "Qwen3-Reranker-0.6B.Q8_0.gguf",
+      "url": "https://huggingface.co/mradermacher/Qwen3-Reranker-0.6B-GGUF/resolve/6727da811d2cc45b078b744bffaaab122a0691da/Qwen3-Reranker-0.6B.Q8_0.gguf",
+      "sha256": "c525a7449243f690a7062e6377d6cf5adbb289354bd4316312367cd20e187ab7",
+      "bytes": 639150752,
+      "working_mib": 512,
+      "recommended_ram_gib": 2,
+      "backends": [
+        "cpu"
+      ],
+      "group_id": "qwen3-reranker-0.6b",
+      "group_name": "Qwen3 Reranker 0.6B",
+      "quantization": "Q8_0",
+      "kind": "reranker"
     },
     {
       "id": "bonsai2-27b-pq2",

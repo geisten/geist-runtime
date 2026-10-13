@@ -1131,6 +1131,45 @@ def section_files():
     print('geistr index and --files: index (hidden and non-text left out, 0600), incremental by hash, run and chat answer '
           'from a file and name it, /files off, no embedding model passed')
 
+# ---- the reranker (#150): only with GEISTR_TEST_RERANK_MODEL, Qwen3-Reranker-0.6B --
+def section_rerank():
+    """--files with the reranker installed: sources name only the files that answer."""
+    folder = os.path.join(tmp, 'rerank-models'); os.makedirs(folder)
+    for path in (os.environ['GEISTR_TEST_EMBED_MODEL'], os.environ['GEISTR_TEST_RERANK_MODEL']):
+        try:
+            os.link(path, os.path.join(folder, os.path.basename(path)))
+        except OSError:
+            import shutil; shutil.copy(path, folder)
+    notes = os.path.join(tmp, 'rerank-notes'); os.makedirs(notes)
+    for name, text in (('shed.md', 'The lock on the garden shed opens with the code 4711.\n'),
+                       ('rezept.md', 'Rezept: Pfannkuchen mit 3 Eiern und 250 g Mehl.\n')):
+        with open(os.path.join(notes, name), 'w') as f:
+            f.write(text)
+    def ask(*args, **kw):
+        return subprocess.run([geistr, *args, '--models', folder], capture_output=True, text=True, env=env, timeout=900, **kw)
+    # one relevant and one unrelated file: only the relevant one named
+    r = ask('run', '--files', notes, model_path, 'What is the code for the garden shed?')
+    assert r.returncode == 0 and '4711' in r.stdout, (r.stdout, r.stderr)
+    assert 'sources: shed.md\n' in r.stderr and 'rezept.md' not in r.stderr and 'geistr pull' not in r.stderr, r.stderr
+    # a question no file answers: no excerpts, said so, no sources line
+    r = ask('run', '--files', notes, model_path, 'How much does household insurance cost per year?')
+    assert r.returncode == 0 and 'nothing relevant in your files' in r.stderr and 'sources:' not in r.stderr, r.stderr
+    # the chat: the same, per question
+    r = ask('chat', '--files', notes, model_path, input='What is the code for the garden shed?\nWhen does the train to Hamburg leave?\n')
+    assert r.returncode == 0 and r.stdout.count('sources:') == 1 and 'sources: shed.md\n' in r.stdout, r.stdout
+    assert 'nothing relevant in your files' in r.stdout, r.stdout
+    # a reranker does not chat
+    r = ask('run', 'qwen3-reranker-0.6b', 'hi')
+    assert r.returncode == 1 and 'is a reranker' in r.stderr, r.stderr
+    # without it: all files searched named, and how to get it
+    embed_only = os.path.dirname(os.path.abspath(os.environ['GEISTR_TEST_EMBED_MODEL']))
+    if not os.path.exists(os.path.join(embed_only, os.path.basename(os.environ['GEISTR_TEST_RERANK_MODEL']))):
+        r = subprocess.run([geistr, 'run', '--files', notes, model_path, 'What is the code for the garden shed?',
+                            '--models', embed_only], capture_output=True, text=True, env=env, timeout=900)
+        assert r.returncode == 0 and 'geistr pull qwen3-reranker-0.6b' in r.stderr and 'rezept.md' in r.stderr, r.stderr
+    print('geistr --files with the reranker: only the relevant file named, nothing relevant said (run, chat), '
+          'a reranker does not chat, without it the hint passed')
+
 # ---- tools (#92): only with GEISTR_TEST_TOOLS_MODEL, a Qwen3 GGUF -------------
 def section_tools():
     import http.client, socket as unix
@@ -1502,6 +1541,8 @@ assert all(s in SECTIONS for s in only), f'GEISTR_TEST_ONLY: unknown section in 
 assert 'gpu' not in only or os.environ.get('GEISTR_TEST_GPU_MODELS'), 'gpu: set GEISTR_TEST_GPU_MODELS'
 assert 'tools' not in only or os.environ.get('GEISTR_TEST_TOOLS_MODEL'), 'tools: set GEISTR_TEST_TOOLS_MODEL'
 assert not {'embed', 'files'} & set(only) or os.environ.get('GEISTR_TEST_EMBED_MODEL'), 'embed, files: set GEISTR_TEST_EMBED_MODEL'
+assert 'rerank' not in only or (os.environ.get('GEISTR_TEST_RERANK_MODEL') and os.environ.get('GEISTR_TEST_EMBED_MODEL')), \
+    'rerank: set GEISTR_TEST_RERANK_MODEL and GEISTR_TEST_EMBED_MODEL'
 for name, section in SECTIONS.items():
     if name == 'gpu' and not os.environ.get('GEISTR_TEST_GPU_MODELS'):
         continue  # no GPU models here (#112)
@@ -1509,6 +1550,8 @@ for name, section in SECTIONS.items():
         continue  # no tool-capable model here (#92)
     if name in ('embed', 'files') and not os.environ.get('GEISTR_TEST_EMBED_MODEL'):
         continue  # no embedding model here (#91)
+    if name == 'rerank' and not (os.environ.get('GEISTR_TEST_RERANK_MODEL') and os.environ.get('GEISTR_TEST_EMBED_MODEL')):
+        continue  # no reranker here (#150)
     if not only or name in only:
         env['GEISTEN_HOME'] = os.path.join(tmp, 'home-' + name)
         if name != 'catalog':  # it starts from an empty model folder

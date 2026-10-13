@@ -159,6 +159,14 @@ geistr_status geistr_embed(geistr_model *m, const char *text, float *out, size_t
     return GEISTR_FORMAT;
 }
 
+/* No stub model has logits (#150). */
+geistr_status geistr_logits(geistr_model *m, const char *prompt, size_t n_tokens, const char *const tokens[],
+                            float out[]) {
+    if (!m || !prompt || (n_tokens && (!tokens || !out)))
+        return GEISTR_INVALID;
+    return GEISTR_FORMAT;
+}
+
 void geistr_model_close(geistr_model *m) {
     model_release(m);
 }

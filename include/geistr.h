@@ -146,6 +146,19 @@ GEISTR_NODISCARD geistr_status geistr_model_info_get(const geistr_model *model, 
 GEISTR_NODISCARD geistr_status geistr_embed(geistr_model *model, const char *text, float *out, size_t cap,
                                             size_t *dims, uint32_t *tokens);
 
+/* The model's raw logits for the token after prompt, without generating
+ * anything: out[i] for tokens[i], each the text of exactly one vocabulary
+ * token ("yes", "no"). For scoring, e.g. a reranker's yes/no (#150):
+ * softmax over out is the model's choice between those tokens. prompt is
+ * tokenized as it is, special tokens such as <|im_start|> included, no chat
+ * template; the model's BOS first if it wants one. A call that begins as the
+ * previous one did processes only the rest (a question before each passage).
+ * GEISTR_INVALID: a text is not one token; GEISTR_CONTEXT: prompt is longer
+ * than the window; GEISTR_FORMAT: an embedding model.
+ * Thread safety: any thread; calls on one model take turns (with geistr_embed). */
+GEISTR_NODISCARD geistr_status geistr_logits(geistr_model *model, const char *prompt, size_t n_tokens,
+                                             const char *const tokens[], float out[]);
+
 /* Detail of the last failure caused by this model handle (never nullptr). */
 const char *geistr_model_error(const geistr_model *model);
 
