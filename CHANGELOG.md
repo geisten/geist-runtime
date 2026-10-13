@@ -87,6 +87,18 @@
   and close. All of it is new, EXPERIMENTAL API; the existing calls are
   unchanged. It needs `make runtime DECISION=1 DECISION_CONTEXT=1` and the
   model's permission; otherwise every call answers "unsupported".
+- `geistr decide-batch MODEL --config FILE --shared-context --request-file
+  FILE|-` (#164): the questions of one JSON request (a shared context, 1–32
+  questions with their options) over one context. stdout gets
+  `question_id<TAB>option_id` per question in input order, only when all of
+  them succeeded; otherwise nothing, and the failing question is named. The
+  request is read bounded (1 MiB) and checked completely before the model is
+  loaded. `--context-tokens` (512) and `--snapshot-budget-mib` (256) as in
+  the C API. One JSON record on stderr with hashes, backend, cached and
+  suffix tokens, restores, snapshot bytes and the times up to the result
+  and up to the end. Needs `make geistr DECISION=1 DECISION_CONTEXT=1` and
+  the model's permission; `geistr decide-batch --help` says whether the
+  build has it.
 
 ### Engine
 

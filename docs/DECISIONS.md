@@ -155,8 +155,17 @@ geistr_decision_batch_result result = {.size = sizeof result};
 if (geistr_decision_context_score_batch(ctx, &batch, &result) == GEISTR_OK)
     for (size_t i = 0; i < result.n_answers; ++i)
         printf("%s %s\n", result.answers[i].question_id, result.answers[i].external_id);
+/* The same handle answers the next batch over the same context: the prefix
+ * is not prefilled again, and result's previous answers are now invalid. */
+const geistr_decision_batch next = {sizeof next, GEISTR_OPERATION_DECISION, 1, other_questions};
+if (geistr_decision_context_score_batch(ctx, &next, &result) != GEISTR_OK)
+    fprintf(stderr, "%s\n", geistr_decision_context_error(ctx)); /* no answers; ctx stays usable */
 geistr_decision_context_close(ctx);
 ```
+
+A long-lived caller keeps one handle per context and reuses it for every
+batch over that context. `geistr decide-batch` (below) is the one-shot form:
+one process opens the model, opens one context, scores one batch, closes both.
 
 **Open** copies the context and holds a model reference. It creates one
 private scoring handle (DENSE, FP32 KV, `max_prompt_tokens`) and one tokenizer.
@@ -326,6 +335,86 @@ Measure process entry through exit externally for that. No speed gate uses this
 field. Errors return 1, usage/invalid supplied syntax 2, cancellation 130.
 With `--decision-config`, offline catalog rows expose configured permission/profile and support
 `not_loaded`, verified=false; this is no inference or numerical validation.
+
+### `geistr decide-batch` (#164)
+
+Several questions over one shared context, with the C API above. EXPERIMENTAL
+and off by default like everything here: it needs `make geistr DECISION=1
+DECISION_CONTEXT=1` and the model's permission, and `--shared-context` must be
+given (V1 has no other operation). `geistr decide-batch --help` names both
+requirements and says whether this build has them.
+
+```sh
+geistr decide-batch gemma4-e2b --config decisions.json --shared-context \
+  --request-file request.json            # or --request-file - for stdin
+```
+
+```json
+{"context": "…", "questions": [
+  {"id": "q1", "question": "Which option equals 4?",
+   "options": [{"id": "four", "description": "4"}, {"id": "five", "description": "5"}]}]}
+```
+
+The request is program input, at most 1 MiB (the serialized-request limit),
+read bounded before parsing. Exactly these fields, each once, in any order;
+the context may be empty. Missing, unknown or duplicate fields, other JSON
+types, trailing input, raw controls in strings, `\u0000` and lone surrogates
+are refused. 1–32 questions with 1–26 options; question IDs follow the option
+ID rules and are unique; every question with the context meets the
+single-question limits. All of that is checked before the model is loaded
+(exit 2, naming the question). The context API then preflights every question
+again (tokens, cached prefix, capacity) before any is scored.
+
+| Flag | Default | Refused |
+| --- | --- | --- |
+| `--context-tokens N` | 512 (the C API's default); the model is loaded with this window | 0, non-decimal or above 2^32−1 (exit 2); above the loaded model's context (exit 1, before scoring) |
+| `--snapshot-budget-mib N` | 256 | 0, non-decimal or overflow (exit 2); a larger snapshot (exit 1) |
+| `--processor auto\|cpu\|gpu` | auto | anything else (exit 2) |
+| `--profile NAME` | the policy's | another name than the artifact's policy (exit 1) |
+
+`--models`, `--catalog`, `--config`, `--request-file` take one value each;
+every flag at most once. DENSE and FP32 KV only: a `selected_rows` policy, a
+disabled permission, a build without `DECISION_CONTEXT`, a backend without
+snapshots or an unknown profile fail with exit 1 and nothing is guessed. No
+download.
+
+Only when every question succeeded does stdout get one line per question in
+input order, `question_id<TAB>option_id<LF>`, staged in full and written once.
+IDs contain no controls, so they cannot inject a tab or newline. A rejected,
+failing or cancelled question anywhere in the batch leaves stdout empty; a
+failed write (closed stdout, full disk) is exit 1 with `selection output
+failed`, never success. Exit codes: 0, 1 execution failure, 2 usage or input
+syntax, 130 Ctrl-C.
+
+Once a model is loaded, the last stderr line is one JSON record (schema 1,
+`operation` `decision_batch`, `exit`). It has the profile, artifact, template
+and context hashes (the context hash is of the rendered prefix; the context
+text, questions and descriptions are never logged), runtime and engine
+revision/version, the actual backend, `kv_cache`, `activation` (null: not
+reported by the engine), `mode`, `prefill_chunk`, `max_prompt_tokens`,
+`cached_tokens`, `snapshot_bytes`, the budget, `setup_model_calls`, the
+question, `prepared_questions` and `restores` counts, `failed_index` and
+`failed_id`, and per question `prompt_tokens` and `uncached_tokens` (the
+suffix after the restore). Times in ms, each ending at a synchronous return:
+`load_ms` (configuration, catalog SHA check or hashing, model load),
+`context_ms` (context open: tokenizing, prefix prefill, snapshot),
+`preparation_ms`, `scoring_ms`, `batch_ms`, `until_result_ms` (command start to
+the batch result), `output_ms`, `teardown_ms` and `total_ms` (command start to
+after teardown). Context fields are absent when the context did not open.
+`until_result_ms` is not command latency; whole-command claims are measured
+from process start to exit outside the process (the tests check
+`total_ms` ≤ that).
+
+Tests: `tests/test_decide_cli.py` (in `make test`/`make sanitize`) drives the
+parser and validation through the stub: flags, numeric bounds, every shape
+refusal, Unicode and escaped IDs, reordered keys and whitespace, 32 questions,
+26 options, the 1 MiB bound for file and stdin, and feature-off.
+`make test-decision-cli DECISION=1 DECISION_CONTEXT=1` (`tests/test_decision_product_cli.py`)
+adds the real model: ordered Unicode IDs and the record, stdin with other key
+order, reversed questions and options, larger and too large capacity, a
+middle question over capacity, the snapshot budget, a closed stdout,
+permission/mode/profile refusals and Ctrl-C, after the ordinary `decide`
+cases. Without `DECISION_CONTEXT` it checks the explicit refusal.
 
 The installed wheel uses the same C implementation:
 

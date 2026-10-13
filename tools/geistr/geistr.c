@@ -16,6 +16,8 @@
  *   geistr chat --socket[=PATH]      chat with that service
  *   geistr decide <model> --config FILE --question TEXT --option ID DESC…
  *                                    fixed-option scoring (EXPERIMENTAL, default-off; docs/DECISIONS.md)
+ *   geistr decide-batch <model> --config FILE --shared-context --request-file FILE|-
+ *                                    several questions over one context, atomic (EXPERIMENTAL, #164)
  *   geistr catalog --decision-config FILE
  *                                    also show each model's decision permission (no model is loaded)
  *
@@ -111,6 +113,7 @@ static int usage(void) {
           "       geistr decide <model> --config FILE --question TEXT --option ID DESC [--option ID DESC…]\n"
           "decision: --question-file FILE|-  --context TEXT  --processor auto|cpu|gpu\n"
           "          --mode dense|selected_rows  --profile NAME\n"
+          "       geistr decide-batch <model> --config FILE --shared-context --request-file FILE|-  (see --help)\n"
           "catalog: --decision-config FILE (permission only; does not load a model)\n"
           "options: --models DIR  --catalog FILE  --cpu  --gpu  --threads N  --new (chat)\n"
           "         --files DIR (chat, run: answers from your files, #91)\n"
@@ -400,6 +403,7 @@ int resolve(const char *model, char *path, size_t cap, geistr_reasoning *reasoni
 }
 
 static geistr_decision *volatile running_decision;
+static geistr_decision_context *volatile running_context; /* decide-batch */
 
 /* geistr decide's Ctrl-C: cancels the scoring (an atomic store). */
 static void on_decide_interrupt(int signal) {
@@ -407,6 +411,8 @@ static void on_decide_interrupt(int signal) {
     interrupted = 1;
     if (running_decision)
         (void) geistr_decision_cancel(running_decision);
+    if (running_context)
+        (void) geistr_decision_context_cancel(running_context);
 }
 
 /* A single-threaded dispatcher. SIGINT is blocked while installing/clearing
@@ -417,6 +423,15 @@ static void decision_active(geistr_decision *decision, void *context) {
     if (sigprocmask(SIG_BLOCK, &set, &previous) != 0) abort();
     running_decision = decision;
     if (decision && interrupted && geistr_decision_cancel(decision) != GEISTR_OK) abort();
+    if (sigprocmask(SIG_SETMASK, &previous, nullptr) != 0) abort();
+}
+
+static void context_active(geistr_decision_context *context, void *host) {
+    (void) host;
+    sigset_t set, previous; sigemptyset(&set); sigaddset(&set, SIGINT);
+    if (sigprocmask(SIG_BLOCK, &set, &previous) != 0) abort();
+    running_context = context;
+    if (context && interrupted && geistr_decision_context_cancel(context) != GEISTR_OK) abort();
     if (sigprocmask(SIG_SETMASK, &previous, nullptr) != 0) abort();
 }
 
@@ -716,12 +731,27 @@ int main(int argc, char **argv) {
         else catalog_file = argv[first + 1];
         first += 2;
     }
-    if (first < argc && !strcmp(argv[first], "decide")) {
+    const bool batch = first < argc && !strcmp(argv[first], "decide-batch");
+    if (first < argc && (batch || !strcmp(argv[first], "decide"))) {
         if (first + 1 < argc && (!strcmp(argv[first + 1], "--help") || !strcmp(argv[first + 1], "-h"))) {
-            fputs("usage: geistr decide <model> --config FILE --question TEXT --option ID DESC [--option ID DESC…]\n"
-                  "       --question-file FILE|-  --context TEXT  --processor auto|cpu|gpu\n"
-                  "       --mode dense|selected_rows  --profile NAME  --models DIR  --catalog FILE\n",
-                  stdout);
+            if (!batch) {
+                fputs("usage: geistr decide <model> --config FILE --question TEXT --option ID DESC [--option ID DESC…]\n"
+                      "       --question-file FILE|-  --context TEXT  --processor auto|cpu|gpu\n"
+                      "       --mode dense|selected_rows  --profile NAME  --models DIR  --catalog FILE\n",
+                      stdout);
+                return OK;
+            }
+            printf("usage: geistr decide-batch <model> --config FILE --shared-context --request-file FILE|-\n"
+                   "       --processor auto|cpu|gpu  --context-tokens N (512)  --snapshot-budget-mib N (256)\n"
+                   "       --profile NAME  --models DIR  --catalog FILE\n"
+                   "EXPERIMENTAL, off by default: needs a build with DECISION=1 DECISION_CONTEXT=1 and the\n"
+                   "model's permission in --config. --shared-context is required (V1's only operation).\n"
+                   "DENSE, FP32 KV, 1..32 questions, no fallback, no download. The request (at most 1 MiB):\n"
+                   "  {\"context\":\"…\",\"questions\":[{\"id\":\"q1\",\"question\":\"…\",\n"
+                   "   \"options\":[{\"id\":\"yes\",\"description\":\"Yes\"},…]},…]}\n"
+                   "Only if every question succeeds: question_id TAB option_id per line, in input order.\n"
+                   "this build: decision engine %s, shared contexts %s\n",
+                   geistr_decision_available() ? "on" : "off", geistr_decision_context_available() ? "on" : "off");
             return OK;
         }
         if (!models_dir) {
@@ -733,8 +763,10 @@ int main(int argc, char **argv) {
         }
         struct sigaction sa = {.sa_handler = on_decide_interrupt}; sigemptyset(&sa.sa_mask);
         if (sigaction(SIGINT, &sa, nullptr) != 0) return ERROR;
-        const geistr_decide_host host = {models_dir, catalog_file, decide_catalog, decision_active, nullptr};
-        return geistr_decide_command((size_t)(argc - first - 1), (const char *const *)(argv + first + 1), &host);
+        const geistr_decide_host host = {models_dir, catalog_file, decide_catalog, decision_active, nullptr,
+                                         context_active};
+        return (batch ? geistr_decide_batch_command : geistr_decide_command)(
+            (size_t)(argc - first - 1), (const char *const *)(argv + first + 1), &host);
     }
     const char *args[64];
     int         n = 0;
