@@ -231,6 +231,10 @@ const char *tpl_generation_prompt(enum tpl_family family) {
     return family >= TPL_UNKNOWN && family <= TPL_BITNET ? prompts[family] : "";
 }
 
+const char *tpl_think_off(enum tpl_family family) {
+    return family == TPL_CHATML ? "<think>\n\n</think>\n\n" : nullptr;
+}
+
 const char *tpl_answer_close(enum tpl_family family, const char *end_marker) {
     const struct turn_fmt *f     = turn_fmt(family);
     const char            *close = family == TPL_BITNET ? "<|eot_id|>" : f ? f->close : "";

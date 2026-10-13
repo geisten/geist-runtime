@@ -9,6 +9,7 @@
  * 3. Family detection and stop token ids.
  */
 #include "template.h"
+#include "decision_profile.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -195,6 +196,23 @@ static void generation_prompts(void) {
     check(!strcmp(tpl_generation_prompt(TPL_UNKNOWN), ""), "unknown family: no prompt");
 }
 
+/* Thinking off (#212): Qwen3's template with enable_thinking=false. */
+static void thinking_off(void) {
+    struct tpl_state     st;
+    const geistr_message hi[] = {{"user", "Hi"}};
+    tpl_init(&st, TPL_CHATML);
+    char *p = tpl_render_send(&st, 1, hi);
+    char  prompt[256];
+    snprintf(prompt, sizeof prompt, "%s%s", p ? p : "", tpl_think_off(TPL_CHATML));
+    eq("qwen3 thinking off", "<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n", prompt);
+    eq("as the decision profile renders it", decision_profile_get(GEISTR_DECISION_BONSAI2_27B_PQ2)->thinking_off,
+       tpl_think_off(TPL_CHATML));
+    free(p);
+    tpl_free(&st);
+    for (enum tpl_family f = TPL_UNKNOWN; f <= TPL_BITNET; f++)
+        check((tpl_think_off(f) != nullptr) == (f == TPL_CHATML), "only ChatML has the switch");
+}
+
 static void close_texts(void) {
     eq("chatml close", "<|im_end|>\n", tpl_answer_close(TPL_CHATML, nullptr));
     eq("chatml close after marker", "\n", tpl_answer_close(TPL_CHATML, "<|im_end|>"));
@@ -245,6 +263,7 @@ int main(void) {
     goldens();
     incremental_equals_whole();
     generation_prompts();
+    thinking_off();
     close_texts();
     detection();
     stops();
@@ -252,6 +271,6 @@ int main(void) {
         fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;
     }
-    puts("templates: geist-serve goldens, incremental = whole for 5 families, generation prompts, closes, detection, stops passed");
+    puts("templates: geist-serve goldens, incremental = whole for 5 families, generation prompts, thinking off, closes, detection, stops passed");
     return 0;
 }

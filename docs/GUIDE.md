@@ -131,7 +131,9 @@ geistr catalog --json           # for scripts
 `name`, `quantization`, `file`, `url`, `sha256`, `bytes`,
 `recommended_ram_gib`, `state` (`available`, `unverified`, `installed`,
 `mismatch`, `corrupt`), `resource` (`fits`, `limited`, `unavailable`),
-`resource_reason` and `tokens_per_s` (`cpu`, `gpu`, or `null`).
+`resource_reason`, `tokens_per_s` (`cpu`, `gpu`, or `null`) and `thinking`
+(`on`, `off`, or `null` for a model that does not think). The list shows
+`thinking off` after a thinking model that has it off.
 
 The models in catalog revision 12:
 
@@ -282,12 +284,14 @@ Type `/` for the list; ↑↓ choose, Tab takes, Enter runs, Esc closes it.
 | `/temp 0.7` | set it, 0 to 2 (0: always the most likely word) |
 | `/system` | show the system prompt |
 | `/system Be brief.` | set it; `/system off` removes it |
-| `/info` | backend, model, chat format, context used of total (and %), temperature, CPU threads, system prompt |
+| `/think` | a thinking model: show whether it thinks |
+| `/think off`, `/think on` | answer at once, without reasoning; or reason again (`/save` keeps it for this model) |
+| `/info` | backend, model, chat format, context used of total (and %), temperature, CPU threads, thinking, system prompt |
 | `/files ~/Notes` | answers from a folder of your files; `/files off` (or `/files`) stops |
 | `/retry` | the last answer again (at temperature 0: this once at 0.7) |
 | `/copy` | the last answer (Markdown) to the clipboard |
 | `/copy code` | its last code block, without the fences |
-| `/save` | keep model, processor, temperature and system prompt for the next chat |
+| `/save` | keep model, processor, temperature and system prompt for the next chat, and thinking for this model |
 | `/clear` | a new conversation (the system prompt stays) |
 | `/help` | the commands and the keys |
 | `/exit`, `/quit` | end the chat (or Ctrl-D) |
@@ -384,6 +388,24 @@ Qwen3, Qwen3.5, Qwen3.8 and Bonsai 2 reason before they answer. While they
 do, the chat shows `⠋ thinking · N s`. The reasoning itself is not shown,
 not kept in the conversation and not sent back to the model; only the
 answer is. Over HTTP it is left out of the answer too.
+
+Reasoning takes time: with `qwen3-0.6b` on a CPU, about half of a short
+answer's wait. Whether it is worth it depends on the model, so it can be
+switched off per model:
+
+```sh
+geistr config qwen3-0.6b.thinking off   # this model answers at once
+geistr config qwen3-0.6b.thinking       # show it
+geistr config qwen3-0.6b.thinking ""    # back to the thinking setting
+geistr config thinking off              # every thinking model without its own value
+```
+
+Off, the model does not reason at all (its template's `enable_thinking=false`:
+an empty `<think></think>` opens the answer), so the chat goes from
+`reading` straight to the answer. It applies to `chat`, `run` and `serve`.
+In a chat, `/think off` and `/think on` switch it; `/save` keeps it for the
+model. A model that does not think refuses it (`geistr: gemma4-e2b does not
+think`)
 
 ### Embedding models do not chat
 
@@ -686,10 +708,13 @@ geistr config system ""               # back to the default (empty)
 | `history` | `on` | `on`, `off` | keep typed lines between chats |
 | `resume_tokens` | `2048` | 0 to 1000000 | what a resumed conversation re-reads at most |
 | `threads` | `0` | 0 to 1024 | CPU threads; 0: geistr chooses |
+| `thinking` | `on` | `on`, `off` | whether thinking models reason before they answer |
+| `<model>.thinking` | (the `thinking` setting) | `on`, `off` | the same for one model ([Thinking models](#thinking-models)) |
 
 A value with spaces needs no quotes: `geistr config system Answer in German.`
 An empty value (`""`) resets a key to its default. In a chat, `/save` writes
-the current model, processor, temperature and system prompt.
+the current model, processor, temperature and system prompt, and the
+model's thinking.
 
 The file is `geistr.conf`, plain `key = value` lines; you can edit it by
 hand. Lines starting with `#` are comments; an unknown or invalid line is

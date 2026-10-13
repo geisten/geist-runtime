@@ -9,7 +9,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-struct settings cfg = {.processor = "auto", .markdown = true, .stats = true, .intro = true, .resume = true, .history = true, .resume_tokens = 2048};
+struct settings cfg = {.processor = "auto", .markdown = true, .stats = true, .intro = true, .resume = true, .history = true, .thinking = true,
+                       .resume_tokens = 2048};
 char            config_path[4200], data_dir[4096];
 static char     config_dir[4096];
 
@@ -33,6 +34,7 @@ static const struct setting {
         {.key = "history", .kind = SWITCH, .at = &cfg.history},
         {.key = "resume_tokens", .kind = NUMBER, .at = &cfg.resume_tokens, .max = 1e6},
         {.key = "threads", .kind = NUMBER, .at = &cfg.threads, .max = 1024},
+        {.key = "thinking", .kind = SWITCH, .at = &cfg.thinking},
 };
 enum { N_SETTINGS = sizeof settings / sizeof *settings };
 
@@ -43,9 +45,53 @@ static const struct setting *find(const char *key) {
     return nullptr;
 }
 
+/* Thinking per model (#212): "<id>.thinking = off"; a model without a line
+ * of its own follows the thinking setting. */
+static struct {
+    char id[128];
+    bool on;
+} per_model[64];
+static size_t     n_per_model;
+static const char THINKING[] = ".thinking";
+
+/* A "<id>.thinking" key; the id's length in *n. */
+static bool thinking_key(const char *key, size_t *n) {
+    size_t len = strlen(key), k = sizeof THINKING - 1;
+    *n         = len > k ? len - k : 0;
+    return *n && *n < sizeof per_model[0].id && !strcmp(key + *n, THINKING);
+}
+
+static ptrdiff_t per_model_find(const char *id, size_t n) {
+    for (size_t i = 0; i < n_per_model; i++)
+        if (strlen(per_model[i].id) == n && !strncmp(per_model[i].id, id, n))
+            return (ptrdiff_t) i;
+    return -1;
+}
+
+bool thinking_on(const char *id) {
+    ptrdiff_t i = per_model_find(id, strlen(id));
+    return i >= 0 ? per_model[i].on : cfg.thinking;
+}
+
 /* nullptr when the value is valid for key and stored, else why not. */
 static const char *set(const char *key, const char *value) {
-    static char                 why[96];
+    static char why[96];
+    size_t      id_n;
+    if (thinking_key(key, &id_n)) { /* "" removes the model's own value */
+        if (*value && strcmp(value, "on") && strcmp(value, "off"))
+            return "the value is on or off";
+        ptrdiff_t i = per_model_find(key, id_n);
+        if (!*value && i >= 0)
+            per_model[i] = per_model[--n_per_model];
+        else if (*value && i < 0 && n_per_model == sizeof per_model / sizeof *per_model)
+            return "too many models with their own thinking";
+        else if (*value) {
+            if (i < 0)
+                snprintf(per_model[i = (ptrdiff_t) n_per_model++].id, sizeof per_model[0].id, "%.*s", (int) id_n, key);
+            per_model[i].on = strcmp(value, "off") != 0;
+        }
+        return nullptr;
+    }
     const struct setting *const s = find(key);
     if (!s)
         return "unknown key";
@@ -78,6 +124,12 @@ static const char *set(const char *key, const char *value) {
         break;
     }
     return nullptr;
+}
+
+void config_thinking(const char *id, bool on) {
+    char key[sizeof per_model[0].id + sizeof THINKING];
+    if (!strchr(id, '/') && !strstr(id, ".gguf")) /* a catalog id, not a path */
+        snprintf(key, sizeof key, "%s%s", id, THINKING), (void) set(key, on ? "on" : "off");
 }
 
 static void value_of(const struct setting *s, char *out, size_t cap) {
@@ -168,6 +220,8 @@ bool config_save(void) {
         value_of(&settings[i], value, sizeof value);
         fprintf(f, "%s = %s\n", settings[i].key, value);
     }
+    for (size_t i = 0; i < n_per_model; i++)
+        fprintf(f, "%s%s = %s\n", per_model[i].id, THINKING, per_model[i].on ? "on" : "off");
     bool ok = fclose(f) == 0 && rename(tmp, config_path) == 0;
     if (!ok)
         unlink(tmp);
@@ -186,17 +240,43 @@ int config(int n, const char **args) {
             value_of(&settings[i], value, sizeof value);
             printf("%-13s %s\n", settings[i].key, value);
         }
+        for (size_t i = 0; i < n_per_model; i++)
+            printf("%s%s %s\n", per_model[i].id, THINKING, per_model[i].on ? "on" : "off");
         return OK;
     }
     const struct setting *s = find(args[1]);
-    if (!s) {
+    size_t                id_len;
+    if (thinking_key(args[1], &id_len)) {
+        char id[sizeof per_model[0].id];
+        snprintf(id, sizeof id, "%.*s", (int) id_len, args[1]);
+        if (n == 2) {
+            puts(thinking_on(id) ? "on" : "off");
+            return OK;
+        }
+        /* Off only for a catalog model that thinks: its template has the switch. */
+        bool                        off = !strcmp(args[2], "off");
+        geistr_catalog             *c   = off ? load_catalog() : nullptr;
+        const geistr_catalog_entry *m   = nullptr;
+        for (size_t i = 0; c && i < geistr_catalog_count(c); i++)
+            if (!strcmp(geistr_catalog_get(c, i)->id, id))
+                m = geistr_catalog_get(c, i);
+        const char *why = !off ? nullptr
+                          : !m ? "is not a catalog model (geistr catalog lists them)"
+                          : !(m->reasoning_format && !strcmp(m->reasoning_format, "think_tags")) ? "does not think"
+                                                                                                 : nullptr;
+        geistr_catalog_free(c);
+        if (why) {
+            fprintf(stderr, "geistr: %s %s\n", id, why);
+            return USAGE;
+        }
+    } else if (!s) {
         fprintf(stderr, "geistr: unknown key %s (", args[1]);
         for (size_t i = 0; i < N_SETTINGS; i++)
             fprintf(stderr, "%s%s", i ? " " : "", settings[i].key);
-        fputs(")\n", stderr);
+        fputs(" <model>.thinking)\n", stderr);
         return USAGE;
     }
-    if (n == 2) {
+    if (n == 2 && s) {
         char value[2048];
         value_of(s, value, sizeof value);
         puts(value);

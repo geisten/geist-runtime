@@ -131,6 +131,7 @@ Start: `geistr chat qwen3-0.6b --new` in a terminal of 100 × 40.
 | D10 | resize the terminal between answers (wider, narrower) | the next answer and the editor use the new width | —; automated (`make test-geistr ONLY=terminal`) |
 | D11 | 40 and 48 columns | the chat's own lines (intro, `?`, `/help`, `/info`, hints) wrap at words; the intro's second line is dropped below 60; `?` lists one key per line | no line wider than the width |
 | D12 | a thinking model (`qwen3-0.6b`): ask "What is 17 × 23?" twice | `⠋ thinking · N s` while it reasons; the reasoning itself is not shown; the answer comes; the second question works and the first answer's reasoning is not sent again (`/info` context grows only by the visible turns) | screen, `/info` before and after |
+| D13 | `geistr config qwen3-0.6b.thinking off`, then `geistr chat qwen3-0.6b --cpu`: ask "What is 17 × 23?"; `/info`; `/think on`, ask again; `/think off`, `/save`; `geistr config gemma4-e2b.thinking off` (#212) | off: `reading` goes straight to the answer, no `thinking`; the time to the first word drops (`speed.tsv`, 4th column); `/info` shows `thinking off`; on: `thinking` again; `geistr.conf` has `qwen3-0.6b.thinking = off` and no other model is affected (`geistr catalog`: `thinking off` only on that row); gemma4-e2b refused: `does not think`, exit 2 | screen, `geistr.conf`, `speed.tsv` |
 
 ## E. The line editor
 

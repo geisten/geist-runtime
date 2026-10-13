@@ -96,7 +96,8 @@ A release is done when, in addition:
   `id`, `name`, `quantization`, `file`, `url`, `sha256`, `bytes`,
   `recommended_ram_gib`, `state` (available, unverified, installed, mismatch, corrupt),
   `resource` (fits, limited, unavailable), `resource_reason`, `tokens_per_s`
-  (`cpu`, `gpu`: measured here, or null).
+  (`cpu`, `gpu`: measured here, or null), `thinking` (on, off: `geistr config
+  <id>.thinking`, else `thinking`; null for a model that does not think).
 - `speed.tsv` in the data folder is only appended to, so it keeps the history
   to compare geistlib versions. A line: model, cpu|gpu, tokens/s, seconds to
   the first answer, Unix time, geistlib commit, source (`bench` or `answer`).

@@ -386,7 +386,7 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
     c->limit           = c->opts.max_tokens && c->opts.max_tokens < room ? c->opts.max_tokens : room;
     str_pieces_clear(&c->pieces);
     c->utf8 = (struct str_utf8) {};
-    str_output_init(&c->output, c->opts.reasoning == GEISTR_REASONING_THINK_TAGS);
+    str_output_init(&c->output, c->opts.reasoning != GEISTR_REASONING_NONE);
     str_output_thinking(&c->output, c->opts.thinking ? queue_thinking : nullptr);
     str_stops_free(&c->stop);
     str_stops_init(&c->stop, c->opts.n_stop, (const char *const *) c->stops);

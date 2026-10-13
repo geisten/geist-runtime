@@ -130,6 +130,14 @@ job in the stateful design (#4, `GEISTR_OVERFLOW_DROP_OLDEST`).
    shown. Up to 32 leading whitespace bytes are kept, so an answer may start
    with whitespace, as in geist-serve. A `<think>` after the answer has
    started is literal text.
+   `GEISTR_REASONING_THINK_OFF` (#212) is a thinking model told not to
+   think: the generation prompt ends in the empty block its template
+   renders for `enable_thinking=false` (ChatML/Qwen: `<think>\n\n</think>\n\n`,
+   `tpl_think_off`), so no thinking tokens are generated. It is part of the
+   prompt, not of the answer; it stays in the context after the answer, while
+   a conversation rendered anew (dropped turns, resume) has it only before the
+   new answer, as the template renders earlier turns. A chat format without such a switch makes `geistr_chat_open`
+   return `GEISTR_FORMAT`.
 3. **Stop strings** (D11): the answer ends before the first match; a
    possible start of one is held back across tokens.
 

@@ -61,6 +61,11 @@ char *tpl_render_send(struct tpl_state *state, size_t n, const geistr_message ms
  * TPL_UNKNOWN. */
 const char *tpl_generation_prompt(enum tpl_family family);
 
+/* What follows the generation prompt for a thinking model told not to
+ * think (GEISTR_REASONING_THINK_OFF): Qwen3's template with
+ * enable_thinking=false. nullptr where the family has no such switch. */
+const char *tpl_think_off(enum tpl_family family);
+
 /* Text that closes an answer turn, before the next send. If the model ended
  * the answer with an end marker of its own (end_marker, its text), only the
  * rest of the close is returned; otherwise (length, stop string, cancel, an

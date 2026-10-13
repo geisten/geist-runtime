@@ -717,6 +717,10 @@ geistr_status geistr_chat_open(geistr_model *m, const geistr_chat_opts *opts, ge
         snprintf(m->error, sizeof m->error, "this model's chat format is not supported");
         return GEISTR_FORMAT;
     }
+    if (o.reasoning == GEISTR_REASONING_THINK_OFF && !tpl_think_off(m->family)) {
+        snprintf(m->error, sizeof m->error, "this model's chat format cannot turn thinking off");
+        return GEISTR_FORMAT;
+    }
     geistr_chat  *c     = calloc(1, sizeof *c);
     char        **stops = nullptr;
     geistr_status s     = c ? stops_copy(&o, &stops) : GEISTR_NO_MEMORY;
@@ -909,6 +913,12 @@ static char *render_all(geistr_chat     *c,
     if (text && !answer_follows) { /* drop the generation prompt */
         const size_t g = strlen(tpl_generation_prompt(c->model->family)), n = strlen(text);
         text[n >= g ? n - g : 0] = 0;
+    } else if (text && c->opts.reasoning == GEISTR_REASONING_THINK_OFF) {
+        const char *off  = tpl_think_off(c->model->family); /* known at chat open */
+        char       *more = realloc(text, strlen(text) + strlen(off) + 1);
+        if (!more)
+            free(text);
+        text = more ? strcat(more, off) : nullptr;
     }
     return text;
 }
@@ -1095,8 +1105,11 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
         tpl_free(&st);
         return fail(c, GEISTR_NO_MEMORY, "out of memory");
     }
-    const char  *gen   = tpl_generation_prompt(c->model->family);
-    const size_t t_len = strlen(text), g_len = strlen(gen);
+    /* Thinking off (#212): the empty <think></think> belongs to the prompt. */
+    char gen[96];
+    snprintf(gen, sizeof gen, "%s%s", tpl_generation_prompt(c->model->family),
+             c->opts.reasoning == GEISTR_REASONING_THINK_OFF ? tpl_think_off(c->model->family) : "");
+    const size_t t_len = strlen(text), g_len = strlen(tpl_generation_prompt(c->model->family));
     text[t_len - g_len] = 0; /* the turns; gen follows */
     char *after_image   = c->image ? strrchr(text, '\x1f') : nullptr;
     if (after_image)
@@ -1266,7 +1279,7 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
     const uint32_t room = used + 1 < c->model->context ? (uint32_t) (c->model->context - used - 1) : 0;
     c->limit            = c->opts.max_tokens && c->opts.max_tokens < room ? c->opts.max_tokens : room;
     c->utf8             = (struct str_utf8) {};
-    str_output_init(&c->output, c->opts.reasoning == GEISTR_REASONING_THINK_TAGS);
+    str_output_init(&c->output, c->opts.reasoning != GEISTR_REASONING_NONE);
     str_output_thinking(&c->output, c->opts.thinking ? queue_thinking : nullptr);
     str_stops_free(&c->stop);
     str_stops_init(&c->stop, c->opts.n_stop, (const char *const *) c->stops);
