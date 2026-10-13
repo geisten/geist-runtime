@@ -2,16 +2,54 @@
 
 ## Unreleased
 
-### Release
+### Engine
 
-- The Linux wheels are built in the manylinux_2_28 image: `pip install geistr`
-  works on glibc 2.28 and newer (Debian 10+, Ubuntu 20.04+), not only on 2.38/2.39
-  as with 0.3.3. After each upload a `smoke` job installs the release on Debian
-  12, Ubuntu 22.04 and 24.04 (install.sh) and from PyPI on Debian 11 (#172).
-- www.geisten.net/download/geistr/ keeps the last 5 releases: after a release
-  the `prune` job deletes older version folders, never `latest`, `install.sh` or
-  the new one. `make test` fails while README.md or install.sh name another
-  version than the current one (#148).
+- geistlib `3841fa6` (from `d53560d`): snapshot-backed prefix scoring for
+  decisions (geistlib#5, built only with `DECISION_CONTEXT=1`). The range
+  also brings AVX2/FMA kernels for the native GEMM on x86 (geistlib#12) and
+  Vulkan attention for head_dim 96 (geistlib#739).
+
+### Decisions (EXPERIMENTAL)
+
+- `geistr decide-batch MODEL --config FILE --shared-context --request-file
+  FILE|-` (#164): the questions of one JSON request (a shared context, 1–32
+  questions with their options) over one context. stdout gets
+  `question_id<TAB>option_id` per question in input order, only when all of
+  them succeeded; otherwise nothing, and the failing question is named. The
+  request is read bounded (1 MiB) and checked completely before the model is
+  loaded. `--context-tokens` (512) and `--snapshot-budget-mib` (256) as in
+  the C API. One JSON record on stderr with hashes, backend, cached and
+  suffix tokens, restores, snapshot bytes and the times up to the result
+  and up to the end. Needs `make geistr DECISION=1 DECISION_CONTEXT=1` and
+  the model's permission; `geistr decide-batch --help` says whether the
+  build has it.
+- Reusable contexts and atomic question batches (#163):
+  `geistr_decision_context_open` prefills the context once into an engine
+  snapshot. `geistr_decision_context_score_batch` answers 1–32 independent
+  questions over it, restoring the snapshot before each. Every question is
+  checked before any is scored. Answers are published only when all
+  succeed; otherwise there are none, and the failing question is named.
+  There is also cancel, info (cached tokens, snapshot bytes, chunk, hashes)
+  and close. All of it is new, EXPERIMENTAL API; the existing calls are
+  unchanged. It needs `make runtime DECISION=1 DECISION_CONTEXT=1` and the
+  model's permission; otherwise every call answers "unsupported".
+- Preparation for several questions over one context (#162; the API follows
+  in #163): one registry entry per verified profile (artifact, template,
+  roles, thinking-off), a common prefix without question or IDs, a cached cut
+  before the prefix's last token on a prefill-chunk boundary, and an exact
+  prefix check of every full prompt. Single-question prompts are unchanged.
+  Native fixtures for both profiles (`*_context.json`).
+
+## 0.3.4
+
+### Security
+
+- `geistr serve --http` refuses requests from a web page of another site
+  (`Origin` header): before, any page could start answers on this computer
+  with a simple request (text/plain, no preflight), keeping the engine busy.
+  `GEISTR_ORIGINS` allows more origins, as Ollama's `OLLAMA_ORIGINS`. The
+  `Host` check no longer takes a name like `127.evil.example` for a loopback
+  address (#171).
 
 ### Features
 
@@ -60,62 +98,21 @@
 - `NO_COLOR` makes `geistr chat` plain: before, the `/` list, the hint, the
   Ctrl-R search line, "Ctrl-C again to exit" and the resumed `↻` line were
   still styled, and the intro and the spinner were left out altogether (#134).
+- The macOS binary of 0.3.2 and of the first 0.3.3 build needed macOS 27 (the
+  runner's own), so it did not start on macOS 15 or 26, and PyPI refused the
+  wheel tag `macosx_27_0`. Releases are built for macOS 15 and later now
+  (`minos 15.0`, checked); 0.3.3 was published again that way (#152).
 
-### Engine
+### Release
 
-- geistlib `3841fa6` (from `d53560d`): snapshot-backed prefix scoring for
-  decisions (geistlib#5, built only with `DECISION_CONTEXT=1`). The range
-  also brings AVX2/FMA kernels for the native GEMM on x86 (geistlib#12) and
-  Vulkan attention for head_dim 96 (geistlib#739).
-
-### Decisions (EXPERIMENTAL)
-
-- `geistr decide-batch MODEL --config FILE --shared-context --request-file
-  FILE|-` (#164): the questions of one JSON request (a shared context, 1–32
-  questions with their options) over one context. stdout gets
-  `question_id<TAB>option_id` per question in input order, only when all of
-  them succeeded; otherwise nothing, and the failing question is named. The
-  request is read bounded (1 MiB) and checked completely before the model is
-  loaded. `--context-tokens` (512) and `--snapshot-budget-mib` (256) as in
-  the C API. One JSON record on stderr with hashes, backend, cached and
-  suffix tokens, restores, snapshot bytes and the times up to the result
-  and up to the end. Needs `make geistr DECISION=1 DECISION_CONTEXT=1` and
-  the model's permission; `geistr decide-batch --help` says whether the
-  build has it.
-- Reusable contexts and atomic question batches (#163):
-  `geistr_decision_context_open` prefills the context once into an engine
-  snapshot. `geistr_decision_context_score_batch` answers 1–32 independent
-  questions over it, restoring the snapshot before each. Every question is
-  checked before any is scored. Answers are published only when all
-  succeed; otherwise there are none, and the failing question is named.
-  There is also cancel, info (cached tokens, snapshot bytes, chunk, hashes)
-  and close. All of it is new, EXPERIMENTAL API; the existing calls are
-  unchanged. It needs `make runtime DECISION=1 DECISION_CONTEXT=1` and the
-  model's permission; otherwise every call answers "unsupported".
-- Preparation for several questions over one context (#162): one registry
-  entry per verified profile (artifact, template, roles, thinking-off), a
-  common prefix without question or IDs, a cached cut
-  before the prefix's last token on a prefill-chunk boundary, and an exact
-  prefix check of every full prompt. Single-question prompts are unchanged.
-  Native fixtures for both profiles (`*_context.json`).
-
-### Security
-
-- `geistr serve --http` refuses requests from a web page of another site
-  (`Origin` header): before, any page could start answers on this computer
-  with a simple request (text/plain, no preflight), keeping the engine busy.
-  `GEISTR_ORIGINS` allows more origins, as Ollama's `OLLAMA_ORIGINS`. The
-  `Host` check no longer takes a name like `127.evil.example` for a loopback
-  address (#171).
-
-## Unreleased
-
-### Fixes
-
-- The macOS archive, the Homebrew binary and the macOS wheel were built with the
-  runner's own macOS (27) as the minimum, so they did not start on macOS 15 or
-  26 and PyPI refused the wheel tag `macosx_27_0`. They are built for macOS 15
-  and later now (`minos 15.0`, checked in the release workflow) (#152).
+- The Linux wheels are built in the manylinux_2_28 image: `pip install geistr`
+  works on glibc 2.28 and newer (Debian 10+, Ubuntu 20.04+), not only on 2.38/2.39
+  as with 0.3.3. After each upload a `smoke` job installs the release on Debian
+  12, Ubuntu 22.04 and 24.04 (install.sh) and from PyPI on Debian 11 (#172).
+- www.geisten.net/download/geistr/ keeps the last 5 releases: after a release
+  the `prune` job deletes older version folders, never `latest`, `install.sh` or
+  the new one. `make test` fails while README.md or install.sh name another
+  version than the current one (#148).
 
 ## 0.3.3
 
