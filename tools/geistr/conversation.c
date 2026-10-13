@@ -75,8 +75,8 @@ bool conv_system(struct conversation *c, const char *text) {
         memmove(c->mark + 1, c->mark, c->n - 1);
         c->role[0] = r, c->content[0] = t, c->mark[0] = MARK_NONE;
     }
-    if (c->n) /* a chat that read the old one reads the conversation anew */
-        c->carry = true;
+    if (c->n) /* a chat that read the old one reads the conversation anew; */
+        c->carry = true, conv_store(c); /* its file has it now, not with the next answer (#205) */
     return c->n > 0;
 }
 
@@ -191,7 +191,7 @@ const char *conv_last_question(const struct conversation *c, int *bytes) {
 }
 
 /* ---- its file: <data>/chats/<ms>-<pid>.jsonl ---------------------------------
- * A chat writes its own file after every answer (role and content per line);
+ * A chat writes its own file after every answer and /system (role and content per line);
  * the next chat continues the newest and, once it writes, removes it. */
 
 void conv_file_new(struct conversation *c) {

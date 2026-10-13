@@ -62,6 +62,17 @@ int main(void) {
     conv_answered(&c, "Because.", MARK_NONE);
     CHECK(conv_system(&c, "") && c.n == 4 && is(&c, 0, "user", "Hi"));
     CHECK(conv_system(&c, "New.") && c.n == 5 && is(&c, 0, "system", "New.") && is(&c, 1, "user", "Hi"));
+    /* … and is written at once: a chat that ends before the next message
+     * resumes with it (#205). */
+    struct conversation sys = {};
+    conv_resume(&sys);
+    CHECK(sys.n == 5 && !strcmp(sys.system, "New.") && is(&sys, 0, "system", "New."));
+    conv_free(&sys);
+    CHECK(conv_system(&c, "") && c.n == 4);
+    conv_resume(&sys);
+    CHECK(sys.n == 4 && !sys.system[0] && is(&sys, 0, "user", "Hi"));
+    conv_free(&sys);
+    CHECK(conv_system(&c, "New.") && c.n == 5);
     struct conversation empty = {};
     CHECK(!conv_system(&empty, "Only the setting.") && !empty.n && !strcmp(empty.system, "Only the setting."));
 
