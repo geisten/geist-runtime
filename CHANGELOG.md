@@ -61,11 +61,28 @@
   Ctrl-R search line, "Ctrl-C again to exit" and the resumed `↻` line were
   still styled, and the intro and the spinner were left out altogether (#134).
 
+### Engine
+
+- geistlib `3841fa6` (from `d53560d`): snapshot-backed prefix scoring for
+  decisions (geistlib#5, built only with `DECISION_CONTEXT=1`). The range
+  also brings AVX2/FMA kernels for the native GEMM on x86 (geistlib#12) and
+  Vulkan attention for head_dim 96 (geistlib#739).
+
 ### Decisions (EXPERIMENTAL)
 
-- Preparation for several questions over one context (#162; the API follows
-  in #163): one registry entry per verified profile (artifact, template,
-  roles, thinking-off), a common prefix without question or IDs, a cached cut
+- Reusable contexts and atomic question batches (#163):
+  `geistr_decision_context_open` prefills the context once into an engine
+  snapshot. `geistr_decision_context_score_batch` answers 1–32 independent
+  questions over it, restoring the snapshot before each. Every question is
+  checked before any is scored. Answers are published only when all
+  succeed; otherwise there are none, and the failing question is named.
+  There is also cancel, info (cached tokens, snapshot bytes, chunk, hashes)
+  and close. All of it is new, EXPERIMENTAL API; the existing calls are
+  unchanged. It needs `make runtime DECISION=1 DECISION_CONTEXT=1` and the
+  model's permission; otherwise every call answers "unsupported".
+- Preparation for several questions over one context (#162): one registry
+  entry per verified profile (artifact, template, roles, thinking-off), a
+  common prefix without question or IDs, a cached cut
   before the prefix's last token on a prefill-chunk boundary, and an exact
   prefix check of every full prompt. Single-question prompts are unchanged.
   Native fixtures for both profiles (`*_context.json`).

@@ -176,6 +176,116 @@ void geistr_decision_close(geistr_decision *decision);
 [[nodiscard]] geistr_status geistr_decision_cancel(geistr_decision *decision);
 const char *geistr_decision_error(const geistr_decision *decision);
 
+/* ---- Reusable contexts and atomic question batches (#163) ----------------
+ * EXPERIMENTAL. One immutable context, several independent questions: the
+ * context's common prefix is prefilled once and kept as a complete engine
+ * snapshot (KV, recurrent state, positions, pending logits); every question
+ * restores it, prefills only its own suffix and reads its options exactly as
+ * geistr_decision_score would read the same complete prompt. Requires the
+ * model's decision permission and an engine built with DECISION=1
+ * DECISION_CONTEXT=1; DENSE only, FP32 KV, no fallback. A changed context
+ * needs a new handle; snapshots are in-process only and never shared. */
+enum { GEISTR_DECISION_MAX_BATCH = 32, GEISTR_DECISION_SNAPSHOT_BYTES = 268435456 };
+
+typedef struct geistr_decision_context geistr_decision_context;
+
+typedef struct geistr_decision_context_opts {
+    size_t size;
+    geistr_decision_mode mode; /* DEFAULT/DENSE; SELECTED_ROWS (also via the policy) = FORMAT */
+    size_t max_prompt_tokens;  /* each full prompt; 0 = min(model context, 512); never expands context */
+    size_t max_snapshot_bytes; /* 0 = GEISTR_DECISION_SNAPSHOT_BYTES; a larger snapshot = NO_MEMORY */
+} geistr_decision_context_opts;
+#define GEISTR_DECISION_CONTEXT_OPTS_INIT {sizeof(geistr_decision_context_opts), GEISTR_DECISION_DEFAULT, 0, 0}
+
+/* One question; the ID follows the option ID rules and is unique per batch. */
+typedef struct geistr_decision_question {
+    size_t id_len, question_len, n_options;
+    const char *id, *question; /* lengths authoritative, no embedded NUL */
+    const geistr_decision_option *options;
+} geistr_decision_question;
+
+typedef struct geistr_decision_batch {
+    size_t size;
+    geistr_operation operation; /* must explicitly be DECISION */
+    size_t n_questions;         /* 1..GEISTR_DECISION_MAX_BATCH */
+    const geistr_decision_question *questions;
+} geistr_decision_batch;
+
+typedef struct geistr_decision_answer {
+    size_t n_options, best_index;
+    size_t prompt_tokens, uncached_tokens; /* full prompt; prefilled after the restore */
+    char question_id[GEISTR_DECISION_MAX_ID + 1], external_id[GEISTR_DECISION_MAX_ID + 1];
+    const float *logits;                    /* n_options, input order */
+    const double *selection_probabilities; /* softmax over the options only */
+} geistr_decision_answer;
+
+/* answers/arrays are owned by the context and borrowed until its next batch
+ * (including a failed one) or close; copy them for longer use. */
+typedef struct geistr_decision_batch_result {
+    size_t size;
+    size_t n_answers;                      /* n_questions on success, else 0 */
+    const geistr_decision_answer *answers; /* input order; nullptr on failure */
+    size_t failed_index;                   /* SIZE_MAX: none or not question-specific */
+    char failed_id[GEISTR_DECISION_MAX_ID + 1]; /* empty unless the failing ID itself was valid */
+    size_t prepared_questions;             /* passed preflight */
+    size_t model_calls;                    /* restore+suffix+readout attempts; 0 after a rejection */
+    double preparation_ms, scoring_ms, batch_ms;
+} geistr_decision_batch_result;
+
+/* Read-only, fixed at open. Wrapper allocations stay in
+ * geistr_decision_resources_get; snapshot_bytes is engine-owned memory. */
+typedef struct geistr_decision_context_info {
+    size_t size;
+    geistr_decision_profile profile;
+    geistr_decision_mode mode;  /* resolved: DENSE */
+    size_t cached_tokens;       /* restored per question; 0 is valid */
+    size_t snapshot_bytes, max_snapshot_bytes, prefill_chunk, max_prompt_tokens;
+    size_t setup_model_calls;   /* prefix prefills at open (0 when nothing is cached) */
+    double setup_ms;            /* open: rendering, tokenizing, engine setup, prefix, snapshot */
+    const char *backend, *engine_revision, *engine_version; /* borrowed until close */
+    const char *kv_cache;       /* "fp32" */
+    const char *activation;     /* nullptr: not reported by the engine; never implied FP32 */
+    char model_sha256[65], template_sha256[65];
+    char context_sha256[65];    /* of the rendered common prefix bytes */
+} geistr_decision_context_info;
+
+/* Build capability: false unless the linked engine has DECISION_CONTEXT=1.
+ * Model permission is geistr_decision_capability_get's `configured`; whether
+ * the loaded model/backend can snapshot is known only from a successful open.
+ * None of these implies quality eligibility. */
+[[nodiscard]] bool geistr_decision_context_available(void);
+/* Copies the context, holds a model reference, creates private tokenizer and
+ * scoring state, preallocates every per-batch buffer, prefills and snapshots
+ * the cached prefix. Never changes the model's policy, chats or weights.
+ * Disabled permission, unsupported engine/model/snapshot or a conflicting mode
+ * = FORMAT; invalid context = INVALID; too long = CONTEXT; snapshot budget =
+ * NO_MEMORY. On failure *out is nullptr; diagnostics go to the caller buffer.
+ * Setup/teardown are serialized with every operation on the model. */
+[[nodiscard]] geistr_status geistr_decision_context_open(geistr_model *model, size_t context_len, size_t error_cap,
+                                                         const char *context,
+                                                         const geistr_decision_context_opts *opts,
+                                                         geistr_decision_context **out, char *error);
+/* Synchronous, one caller per handle (except cancel). Every question is
+ * validated, rendered, tokenized and checked against the cached prefix before
+ * any is scored; then each restores the snapshot and is scored serially.
+ * Only a complete success publishes answers. Any failure (validation, engine,
+ * restore, non-finite, cancellation) returns zero answers, names the failing
+ * question where there is one and keeps the counts/timings; the context stays
+ * usable. No allocation after open. result.size must be the V1 size. */
+[[nodiscard]] geistr_status geistr_decision_context_score_batch(geistr_decision_context *context,
+                                                                const geistr_decision_batch *batch,
+                                                                geistr_decision_batch_result *result);
+/* Any thread; atomic, idempotent. Checked before preflight, per question, between
+ * tokenizer calls and before/after each restore+score; it cannot interrupt a
+ * running kernel. Consumed by the batch it cancels; the next batch runs. */
+[[nodiscard]] geistr_status geistr_decision_context_cancel(geistr_decision_context *context);
+[[nodiscard]] geistr_status geistr_decision_context_info_get(const geistr_decision_context *context,
+                                                             geistr_decision_context_info *out);
+/* The last batch's error; borrowed until the next batch or close. */
+const char *geistr_decision_context_error(const geistr_decision_context *context);
+/* Must not race score/cancel/getters. Releases the model reference. */
+void geistr_decision_context_close(geistr_decision_context *context);
+
 #ifdef __cplusplus
 }
 #endif

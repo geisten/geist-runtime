@@ -33,9 +33,10 @@ LDLIBS   += -lpthread
 LIB  := $(BUILD)/libgeistr-stub.a
 CORE := $(BUILD)/libgeistr-core.a
 FUZZERS := $(BUILD)/fuzz_catalog $(BUILD)/fuzz_json $(BUILD)/fuzz_http
-TEXT := $(BUILD)/template.o $(BUILD)/stream.o $(BUILD)/catalog.o $(BUILD)/fit.o $(BUILD)/decision_config.o $(BUILD)/decision_profile.o
+TEXT := $(BUILD)/template.o $(BUILD)/stream.o $(BUILD)/catalog.o $(BUILD)/fit.o $(BUILD)/decision_config.o $(BUILD)/decision_profile.o \
+        $(BUILD)/decision_batch.o
 
-all: $(LIB) $(CORE) $(BUILD)/test_api $(BUILD)/test_cxx $(BUILD)/test_template $(BUILD)/test_stream $(BUILD)/test_window $(BUILD)/test_catalog $(BUILD)/test_fit $(BUILD)/test_decision_config $(BUILD)/test_decision_profile $(BUILD)/test_render $(BUILD)/test_lineedit $(BUILD)/test_chat $(BUILD)/chat $(FUZZERS)
+all: $(LIB) $(CORE) $(BUILD)/test_api $(BUILD)/test_cxx $(BUILD)/test_template $(BUILD)/test_stream $(BUILD)/test_window $(BUILD)/test_catalog $(BUILD)/test_fit $(BUILD)/test_decision_config $(BUILD)/test_decision_profile $(BUILD)/test_decision_batch $(BUILD)/test_render $(BUILD)/test_lineedit $(BUILD)/test_chat $(BUILD)/chat $(FUZZERS)
 
 $(BUILD)/%.o: src/%.c src/*.h include/*.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -77,6 +78,9 @@ $(BUILD)/test_decision_config: tests/test_decision_config.c $(LIB)
 $(BUILD)/test_decision_profile: tests/test_decision_profile.c tests/native_cases.h tests/fixtures/decisions/*.h $(TEXT)
 	$(CC) $(CFLAGS) -Isrc $< $(TEXT) $(LDFLAGS) $(LDLIBS) -o $@
 
+$(BUILD)/test_decision_batch: tests/test_decision_batch.c tests/native_cases.h tests/fixtures/decisions/*.h $(LIB)
+	$(CC) $(CFLAGS) -Isrc $< $(LIB) $(LDFLAGS) $(LDLIBS) -o $@
+
 $(BUILD)/test_render: tests/test_render.c tools/geistr/render.c tools/geistr/render.h | $(BUILD)
 	$(CC) $(CFLAGS) -Itools/geistr tests/test_render.c tools/geistr/render.c $(LDFLAGS) -o $@
 
@@ -111,6 +115,7 @@ test: all $(BUILD)/test_decide_driver
 	$(BUILD)/test_catalog
 	$(BUILD)/test_decision_config
 	$(BUILD)/test_decision_profile
+	$(BUILD)/test_decision_batch
 	python3 tests/test_decide_cli.py $(BUILD)/test_decide_driver
 	python3 tests/test_decision_evidence.py
 	python3 tests/test_catalog.py $(BUILD)/test_catalog models/catalog.json
@@ -131,9 +136,13 @@ test: all $(BUILD)/test_decide_driver
 ENGINE_GOALS := runtime test-clients test-upgrade test-real test-embed fetch-embed-model fetch-rerank-model chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python $(BUILD)/test_decision_real $(BUILD)/bench_decision
 ifneq (,$(filter $(ENGINE_GOALS),$(MAKECMDGOALS)))
 GEIST_REPO ?= https://github.com/geisten/geistlib.git
-GEIST_REF  ?= d53560d743ccbee1652aafc338405071d79f9f18
+GEIST_REF  ?= 3841fa68e277b8ce33211aa84e4728dd61c133de
 GEISTLIB   ?= geistlib
 DECISION   ?= 0
+DECISION_CONTEXT ?= 0
+ifeq ($(DECISION)$(DECISION_CONTEXT),01)
+$(error DECISION_CONTEXT=1 requires DECISION=1)
+endif
 ENGINE := $(shell GEIST_REPO='$(GEIST_REPO)' GEIST_REF='$(GEIST_REF)' \
                   GEISTLIB='$(GEISTLIB)' sh scripts/sync-engine.sh >&2 && echo ok)
 ifneq ($(ENGINE),ok)
@@ -163,7 +172,8 @@ ENGINE_CFLAGS = -DGEISTR_ENGINE_REVISION=\"$(GEIST_REF)\"
 # goes into libgeistr.so too.
 $(ENGINE_LIB): FORCE
 	$(MAKE) -C $(GEISTLIB) lib TARGET=$(TARGET) MODE=$(ENGINE_MODE) \
-		GEMM_PROVIDER=$(GEMM_PROVIDER) BACKENDS="$(BACKENDS)" CC="$(CC) -fPIC" DECISION=$(DECISION)
+		GEMM_PROVIDER=$(GEMM_PROVIDER) BACKENDS="$(BACKENDS)" CC="$(CC) -fPIC" DECISION=$(DECISION) \
+		DECISION_CONTEXT=$(DECISION_CONTEXT)
 
 $(BUILD)/runtime.o: src/runtime.c src/*.h include/*.h $(ENGINE_LIB) | $(BUILD)
 	$(CC) $(CFLAGS) $(ENGINE_CFLAGS) -isystem $(GEISTLIB)/include -c $< -o $@

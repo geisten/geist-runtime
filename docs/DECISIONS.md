@@ -103,9 +103,8 @@ establish neither numerical parity nor quality-matched performance.
 
 ## Reusable contexts: profiles and token preparation (#162)
 
-Internal preparation for several questions over one immutable context
-(epic #161); the C API that opens such a context is #163, so nothing here is
-reachable yet and chat stays the default. A verified profile
+Preparation for several questions over one immutable context (epic #161);
+the C API that opens such a context follows below (#163). A verified profile
 (`src/decision_profile.c`) is one registry entry: name/version, exact artifact
 SHA-256, embedded template hash, native BOS and role markers and the
 thinking-off generation prompt. The configuration resolves names and
@@ -135,9 +134,112 @@ engine resolves exactly that chunk. The test refuses fixtures whose profile
 name or template hash differs from the registry: a changed profile gets a
 new version and new fixtures; old manifests are then marked `historical`.
 
+## Reusable contexts and atomic question batches (#163)
+
+EXPERIMENTAL, default-off. It needs the build flag (`make runtime DECISION=1
+DECISION_CONTEXT=1`; `DECISION=0 DECISION_CONTEXT=1` is refused), the model's
+decision permission and an explicit `geistr_decision_context_open`. The engine
+is geistlib with geistlib#5 (`3841fa6`). Off builds and the stub keep every
+symbol: `geistr_decision_context_available()` is false and open returns
+`GEISTR_FORMAT`.
+
+```c
+geistr_decision_context *ctx = nullptr;
+char error[256];
+if (geistr_decision_context_open(model, context_len, sizeof error, context, nullptr, &ctx, error) != GEISTR_OK)
+    ...;
+const geistr_decision_question questions[] = {
+    {2, question_len, n_options, "q1", question, options}, ...};
+const geistr_decision_batch batch = {sizeof batch, GEISTR_OPERATION_DECISION, 2, questions};
+geistr_decision_batch_result result = {.size = sizeof result};
+if (geistr_decision_context_score_batch(ctx, &batch, &result) == GEISTR_OK)
+    for (size_t i = 0; i < result.n_answers; ++i)
+        printf("%s %s\n", result.answers[i].question_id, result.answers[i].external_id);
+geistr_decision_context_close(ctx);
+```
+
+**Open** copies the context and holds a model reference. It creates one
+private scoring handle (DENSE, FP32 KV, `max_prompt_tokens`) and one tokenizer.
+It preallocates the workspace for 32 complete prompts and reads the engine's
+resolved prefill chunk. It cuts the common prefix there (#162), then prefills
+and snapshots the cached tokens once (`geist_decision_prefix_prepare`). The
+snapshot holds every KV row, the recurrent state, positions and pending logits.
+A short context may cache zero tokens; the info says so. Open never changes
+the model's policy, its chats or its weights. Weights are shared with chat and
+with other decisions; KV, recurrent state and results are not. Another
+context needs another handle. Nothing is cached globally or kept on disk.
+
+| Option | Default | Refused |
+| --- | --- | --- |
+| `mode` | the policy's; must be DENSE | SELECTED_ROWS, explicit or via the policy: `GEISTR_FORMAT` |
+| `max_prompt_tokens` (each full prompt) | min(model context, 512) | above the loaded context: `GEISTR_CONTEXT` |
+| `max_snapshot_bytes` | 256 MiB | a larger snapshot: `GEISTR_NO_MEMORY`, nothing allocated |
+
+The KV cache is always FP32; there is no cache override to conflict with. A
+context, model or chunk change needs a new handle.
+
+**A batch** has 1–32 questions; each has 1–26 options. Question IDs follow
+the option ID rules (byte-exact, no controls) and are unique per batch. Each
+question with the context obeys the single-question limits. The whole batch
+is preflighted before anything is scored: lengths, UTF-8, IDs, rendering,
+native tokenization, the exact cached-prefix match, the one-token keys and the
+full prefix+suffix capacity. Then each question restores the snapshot,
+prefills only its suffix (the uncached context tail included) and reads its
+options from the ordinary DENSE logits. Questions run serially; none sees
+another's state. The answers are staged and published in input order only
+when every question succeeded.
+
+**Failure** of any kind (validation, tokenizer, engine, restore, a non-finite
+logit or cancellation) returns zero answers and `answers == nullptr`. Nothing
+staged survives. `failed_index` and `failed_id` name the question where there
+is one. `prepared_questions`, `model_calls` and the timings stay defined; a
+rejection in preflight has `model_calls == 0`. The context stays usable, and
+the next valid batch succeeds. Answers are borrowed until the next batch
+(including a failed one) or close; copy them to keep them.
+
+**Cancellation** (`geistr_decision_context_cancel`, any thread) is atomic and
+idempotent. It is checked before preflight, before each question, between
+tokenizer calls, and before and after each restore+score. It cannot interrupt
+a running kernel. The cancelled batch's results are discarded and the
+cancellation is consumed; the next batch runs.
+
+**Concurrency.** One caller uses a context at a time, except cancel. Close must
+not race scoring, cancel or getters. Setup and teardown take the model's
+setup lock; every engine call takes the operation lock, and Metal/Vulkan calls
+stay serialized per model. The caller may close the model first: the context
+keeps it alive. Distinct contexts share only the weights.
+
+**Diagnostics.** `geistr_decision_context_info_get` reports the resolved mode,
+`cached_tokens`, `snapshot_bytes` (engine-owned), the budget, the prefill chunk,
+the prompt capacity, the prefix prefills and `setup_ms` at open. It also
+reports the backend, engine revision/version, `kv_cache` "fp32" and the
+model, template and context hashes. The context hash is the SHA-256 of the
+rendered common prefix. `activation` is nullptr: the engine does not report its
+activation arithmetic (int8 on the quantized CPU paths), so nothing claims
+FP32 compute. Each answer has `prompt_tokens` and `uncached_tokens`; each
+batch has `model_calls` (one restore each) and preparation/scoring/batch
+milliseconds. The context's wrapper allocations (the handle and one workspace)
+count in `geistr_decision_resources_get`. Snapshot bytes are separate, and
+RSS and the Metal counter keep their own scopes. Per batch nothing is
+allocated.
+
+Tests: `tests/test_decision_batch.c` (in `make test` and `make sanitize`)
+runs the batch core on the native context fixtures. An injected engine fails,
+returns NaN or cancels at the first, middle and last question. It also covers
+zero/33 questions, duplicate and invalid IDs, invalid UTF-8, reserved
+controls, a mismatched cached prefix, prompts over capacity, recovery,
+reorder/addition identity, independent handles and the off stubs.
+`make test-decision-real DECISION=1 DECISION_CONTEXT=1` adds the real model, for every
+fixture context. It checks the native cut and the batch, reversed and per
+question bit for bit. It compares against the full-prompt single-question
+API, interleaves with chat, closes the model first, and checks the budget,
+mode and capacity refusals. No speed or quality claim follows from these;
+that evidence is #165/#166.
+
 ## Execution, ownership and concurrency
 
-Build the optional engine with `make runtime DECISION=1` (or `make geistr
+Build the optional engine with `make runtime DECISION=1` (add
+`DECISION_CONTEXT=1` for reusable contexts, #163) (or `make geistr
 DECISION=1 PULL=0`, `make wheel DECISION=1`). `DECISION=0` remains the default;
 all decision symbols stay linkable and return explicit unsupported errors.
 The engine is the Makefile's pin (`GEIST_REF`). The recorded validation evidence
