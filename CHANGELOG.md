@@ -18,6 +18,13 @@
   the right file is now first for 86 % of the questions (was 64 %) and among
   the four passages put before the question for 97 % (was 92 %). Existing
   indexes stay valid: passages are embedded as before (#157).
+- `scripts/retrieval-bench.py --sources` measures which files `sources:`
+  would name: the questions are labelled with the files that answer them,
+  with 3 questions that need two files and 16 (English and German) that no
+  file answers; it scores rules for picking files from the top 4 by precision,
+  recall and how often an off-topic question gets no source, and `--rerank`
+  adds a cross-encoder for comparison. No cosine rule separates relevant from
+  unrelated files, so `sources:` stays as it is (#150).
 - `geistr index` says which files it leaves out and why: a PDF without text
   (a scan), a PDF when `pdftotext` is missing, an unreadable file. Before they
   were skipped without a word (#173).

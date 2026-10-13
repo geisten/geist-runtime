@@ -1,4 +1,4 @@
-# file	question — one per passage (paragraph) of files/, in order; some cross the language
+# relevant files (comma-separated; - for none)	question. The first 36: one per passage (paragraph) of files/, in order; some cross the language
 garden/shed.md	What is the code for the lock on the shed?
 garden/shed.md	Where do we keep the fuel for the lawn mower?
 garden/shed.md	Which box should the kitchen scraps go into?
@@ -35,3 +35,24 @@ life/book-club.md	How can someone new join the club?
 life/sportverein.md	Was kostet die Mitgliedschaft im Volleyballverein für Studenten?
 life/sportverein.md	When is volleyball practice?
 life/sportverein.md	Wer darf bei der Vorstandswahl abstimmen?
+# answered only by two files together
+life/book-club.md,home/server-migration.md	What happens in November?
+home/heizung.md,life/sportverein.md	Was kosten der Wärmepumpenstrom und der Volleyballverein?
+life/dog.md,life/book-club.md	When is the vet open and when does the book club meet?
+# answered by no file: unrelated, or close to a file's topic (near misses)
+-	What is the password for the guest WiFi?
+-	When is my next dentist appointment?
+-	How much does the car insurance cost per year?
+-	How many vacation days do I have left this year?
+-	What does the cat eat?
+-	Which hotel do we stay at in Rome?
+-	What time does the swimming pool open on Sundays?
+-	Who repairs the washing machine?
+-	Wann ist der nächste Elternabend in der Schule?
+-	Wie viel kostet die Hausratversicherung?
+-	Wer gewinnt dieses Jahr die Bundesliga?
+-	Was gibt es heute in der Kantine zum Mittagessen?
+-	Welche Tomatensorten wachsen im Gewächshaus?
+-	Wann fährt der Zug nach Hamburg?
+-	Wie lautet die PIN der Bankkarte?
+-	Wie viel Miete zahlen wir für die Wohnung?
