@@ -12,6 +12,9 @@
  *      "prefill_ms":40.1,"generation_ms":95.3,"total_ms":136.2}
  *   ← {"error":"…","status":"context"}        (instead, on failure)
  *
+ * status: "context" (the conversation does not fit), "invalid" (not a request),
+ * "too_large" (a line over --max-request), "error" (anything else).
+ *
  * A client sends the whole conversation every time; the service keeps up to
  * N conversations (KV caches) and continues the one that matches best: it
  * goes back to where the request differs and processes only the rest. A

@@ -13,6 +13,11 @@
   server for a bogus range. `geistr chat --socket` clamps token counts from
   the service's stats line that are negative or too large: casting them was
   undefined behaviour (#203).
+- `geistr serve`: a socket line over `--max-request` is answered
+  `{"error":"the request is over the limit of N MiB (geistr serve
+  --max-request=MiB)","status":"too_large"}`, as HTTP's 413 says it. Before it
+  was `"one JSON object per line"` with the status `invalid`, as bad JSON
+  (#207).
 
 ### Changed
 
