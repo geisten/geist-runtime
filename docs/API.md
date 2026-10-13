@@ -62,7 +62,7 @@ push. `examples/chat.c` is a complete terminal chat with Ctrl-C cancellation.
 | D8 | Context: by default the model's **full window, reduced to what fits into memory** (`info.context` says what was chosen). Overflow is explicit: `REFUSE` (default, the chat stays unchanged) or `DROP_OLDEST` (a leading system message stays; the kept turns are processed again) | Long conversations as far as the device allows, without a fixed cap; never a silent truncation. |
 | D11 | Stop strings in the chat options; the answer ends before the first match, which is never delivered | Editors and agents need them (geistd has them); a partial match is held back across tokens. |
 | D9 | Catalog and device fit get their own header (`geistr_catalog.h`, #5/#6) that works **without loading geistlib** | geist-app ranks and verifies models without an engine in its process. |
-| D10 | Out of scope for now: token-level access, audio in messages. Images came as `geistr_chat_image` (#92), tool calls in the HTTP layer, embeddings as `geistr_embed` (#91) | Token level stays geistlib/geistd (agents such as geistshell). The others are later additions to `geistr_message`/options, possible without breaking the ABI (D6). |
+| D10 | Out of scope for now: token-level access, audio in messages. Images came as `geistr_chat_image` (#92), tool calls in the HTTP layer, embeddings as `geistr_embed` (#91), the logits of given tokens after a prompt as `geistr_logits` (a reranker's yes/no, #150) | Token level stays geistlib/geistd (agents such as geistshell). The others are later additions to `geistr_message`/options, possible without breaking the ABI (D6). |
 
 ## Thread safety
 
@@ -206,8 +206,10 @@ network needed:
   `models/catalog.json` started as geist-serve's file.
 - `geistr_catalog_check(entry, models_dir, hash)` gives the install state:
   `MISSING`, `UNVERIFIED` (right size, not hashed yet), `OK` (SHA-256
-  matches) or `MISMATCH` (wrong size or hash, or not a regular file: never
-  load it). Nothing is deleted.
+  matches), `CORRUPT` (the right size but another SHA-256: a damaged or
+  changed copy, #149) or `MISMATCH` (another size, or not a regular file,
+  such as a symlink: links are not followed, #151). Never load either of
+  the last two; nothing is deleted.
 - Receipts: a match writes `<models>/.verified/<sha256>` with the file's
   device, inode, size, mode, owner, links, mtime and ctime (geist-serve's
   stamp). While these are unchanged, `check` answers without hashing; so

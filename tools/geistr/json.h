@@ -23,6 +23,8 @@ char  *json_string(const struct json *j, int t);        /* unescaped, malloc'd; 
 const char *json_raw(const struct json *j, int t, size_t *len);
 int         json_parent(const struct json *j, int t); /* the token t belongs to; -1 at the top */
 double json_number(const struct json *j, int t, double dflt);
+/* A count (max tokens): a negative number 0, past UINT_MAX UINT_MAX; dflt if no number. */
+unsigned json_unsigned(const struct json *j, int t, unsigned dflt);
 bool   json_bool(const struct json *j, int t, bool dflt); /* true or false, else dflt */
 
 /* A top-level string or number of one object as text into out ("" if absent). */

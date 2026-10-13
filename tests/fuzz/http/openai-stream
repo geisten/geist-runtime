@@ -1,0 +1,7 @@
+POST /v1/chat/completions HTTP/1.1
+Host: 127.0.0.1:8080
+Origin: http://localhost:3000
+Content-Type: application/json
+Content-Length: 193
+
+{"messages": [{"role": "developer", "content": "x"}, {"role": "user", "content": [{"type": "text", "text": "What?"}]}], "stream": true, "stream_options": {"include_usage": true}, "stop": "END"}

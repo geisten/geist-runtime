@@ -1,7 +1,8 @@
 #!/bin/sh
 # install.sh — geistr for this computer from a release on www.geisten.net:
 #   curl -fsSL https://www.geisten.net/download/geistr/install.sh | sh
-# GEISTR_VERSION=v0.1.0 picks a release (default: the latest);
+# GEISTR_VERSION=v0.3.4 picks a release (default: the latest); the server keeps the
+# last 5 releases (release.yml, KEEP), none before 0.3.2.
 # PREFIX=~/.local installs to ~/.local/bin (default: /usr/local, with sudo if needed).
 set -eu
 site=https://www.geisten.net/download/geistr

@@ -1,0 +1,5 @@
+POST /v1/chat/completions HTTP/1.1
+Host: localhost
+Content-Length: 61
+
+{"messages":[{"role":"user","content":"Hi"}],"max_tokens":-4}

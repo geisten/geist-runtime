@@ -49,6 +49,7 @@ struct le {
     unsigned       menu_rows;   /* list rows of the last drawing */
     bool           pasting;     /* inside a bracketed paste: Enter is a line break, not send */
     bool           pasted_cr;   /* the last pasted byte was \r (\r\n is one break) */
+    bool           plain;       /* no styles (NO_COLOR): the chosen entry marked with ›, no dim hint */
     unsigned char  ahead[256];  /* keys typed while the answer ran: read first */
     size_t         n_ahead;
     /* Set by the caller's SIGINT handler: a Ctrl-C that came while the

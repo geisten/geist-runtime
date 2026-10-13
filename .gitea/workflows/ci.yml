@@ -52,7 +52,7 @@ jobs:
       - name: deps (linux)
         if: runner.os == 'Linux'
         timeout-minutes: 12
-        run: sh scripts/apt-need.sh gcc-14 g++-14 clang-18
+        run: sh scripts/apt-need.sh gcc-14 g++-14 clang-18 rsync
       - name: build and test
         run: mkdir -p build/logs && make test 2>&1 | tee build/logs/test.log
       - name: sanitizers (ASan, UBSan; leaks on Linux)
@@ -126,6 +126,13 @@ jobs:
           key: geist-model-bitnet-embed-0.6b-c89c64f05a2d
       - name: fetch embedding model (from the catalog, SHA-verified)
         run: make fetch-embed-model
+      - name: cache reranker (Qwen3-Reranker 0.6B)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: geistlib/gguf_artifacts/Qwen3-Reranker-0.6B.Q8_0.gguf
+          key: geist-model-qwen3-reranker-0.6b-c525a7449243
+      - name: fetch reranker (from the catalog, SHA-verified)
+        run: make fetch-rerank-model
       # #91: geistr_embed: the model card's vector, retrieval, threads
       - name: embeddings
         run: make test-embed 2>&1 | tee build/logs/test-embed.log
@@ -136,7 +143,11 @@ jobs:
         env:
           GEISTR_TEST_TOOLS_MODEL: geistlib/gguf_artifacts/Qwen3-0.6B-Q8_0.gguf  # #92: tool calls
           GEISTR_TEST_EMBED_MODEL: geistlib/gguf_artifacts/bitnet-embeddings-0.6b-bf16-i2_s.gguf  # #91: embeddings
+          GEISTR_TEST_RERANK_MODEL: geistlib/gguf_artifacts/Qwen3-Reranker-0.6B.Q8_0.gguf  # #150: --files' reranker
         run: make test-geistr PULL=1 2>&1 | tee build/logs/test-geistr.log
+      # #132: serve --http against the OpenAI SDK and the Ollama library (pinned, in a venv)
+      - name: real clients (openai, ollama)
+        run: make test-clients 2>&1 | tee build/logs/test-clients.log
       # #174: the latest release's data folder (settings, receipts, a chat, history,
       # an index) used by this build. Linux only: one platform is enough for the format.
       - name: upgrade from the latest release
@@ -182,7 +193,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: deps
         timeout-minutes: 12
-        run: sh scripts/apt-need.sh gcc-14 curl-config:libcurl4-openssl-dev
+        run: sh scripts/apt-need.sh gcc-14 curl-config:libcurl4-openssl-dev rsync
       - name: engine
         run: make runtime
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

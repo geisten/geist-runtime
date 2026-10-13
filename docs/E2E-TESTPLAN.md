@@ -3,9 +3,11 @@
 A manual (human) or agent-driven test of the shipped apps: the `geistr` CLI,
 its install paths, the chat, the service APIs and the Python package. It
 complements the automated suites (`make test`, `make test-real`,
-`make test-geistr`, `make test-python`). Those pin behaviour in a pty with a
+`make test-geistr`, `make test-clients`, `make test-python`). Those pin behaviour in a pty with a
 tiny model. This plan checks what a user sees, on real terminals, real models
-and real hardware, before a release or after larger changes.
+and real hardware, before a release or after larger changes. A case marked
+*automated* also runs in `make test-geistr` (a pty, SmolLM2 on the CPU), so a
+regression shows in CI; a release run still looks at it on a real terminal.
 
 Each case has an **ID**, **steps**, the **expected** result and, where it can
 be checked mechanically, an **agent check**. A run records pass/fail per ID
@@ -93,10 +95,11 @@ Rules that keep agent runs reliable:
 | B3 | `geistr pull smollm2-360m` | progress, verify, ✓ in `geistr catalog` | `catalog --installed` lists it |
 | B4 | interrupt `geistr pull qwen3-0.6b` with Ctrl-C halfway, run it again | it resumes (doesn't restart at 0), verifies | the `.part` file grew; final ✓ |
 | B5 | corrupt a byte of an installed model file | `catalog` marks it `✗ checksum differs (damaged file?)` (JSON state `corrupt`; a file of another size is `⟳`/`mismatch`); `run` refuses with "is damaged …; geistr pull …" (#149) | exit 1 |
-| B6 | `geistr pull` with no id after a catalog update that replaced a file | the ⟳ model is downloaded again; the old file stays until the new one is verified | — |
+| B6 | `geistr catalog`, then `geistr pull` with no id, after a catalog update that replaced a file (another size); and with the damaged file of B5 | `catalog` shows the replaced one as `⟳ not this catalog's file` (JSON `mismatch`), not `✗`; `run` says "does not match the catalog"; `pull` downloads both again (the ✗ one too); the old file stays until the new one is verified (#149) | `catalog --json` states; both ✓ after the pull |
 | B7 | `geistr catalog --installed`, `--available` | only those rows | — |
 | B8 | `geistr pull qwen3-0.6b`, then cut the network halfway (Wi-Fi off, or `sudo ifconfig en0 down` / `ip link set … down`), then on again and pull again | a clear error and exit 1 (not a hang: it gives up within about a minute); the `.part` stays; the second pull resumes and verifies | exit code, time to the error, `.part` grew |
 | B9 | pull into a folder on a disk that is too small (macOS: `hdiutil create -size 200m -fs APFS -volname small small.dmg` and attach; Linux: `mount -t tmpfs -o size=200m tmpfs /mnt/small`): `geistr pull smollm2-360m --models /Volumes/small` | "no space left" (or the like), exit 1; no ✓ in `catalog`; nothing half-written left that `run` would load | exit code, `catalog --models …` |
+| B10 | a symlink to a verified model file from another models folder: `mkdir m2; ln -s <models>/Qwen3-0.6B-Q8_0.gguf m2/`; `geistr catalog --models m2`, `geistr run qwen3-0.6b hi --models m2`, then `geistr pull qwen3-0.6b --models m2` | `catalog`: `⟳ a symlink, not used: copy the file or use a hard link`; `run`: "is a symlink; geistr does not follow links …", exit 1; `pull` says the download replaces the link, the link's target is unchanged (#151) | exit code; `ls -l m2`; `shasum` of the target before and after |
 
 ## C. One answer: `geistr run`
 
@@ -122,10 +125,10 @@ Start: `geistr chat qwen3-0.6b --new` in a terminal of 100 × 40.
 | D4 | while waiting for the first word | a dim `⠋ reading · N s` (or `thinking` for a thinking model) | screen |
 | D5 | after each answer | `NN.N tok/s · N.N s` dim | screen |
 | D6 | fill the context past 50 % (a long paste; or a small window in a test build with `GEISTR_TEST_CONTEXT=512`) | the prompt shows `⚙ 62% >`, yellow from 80 %, red from 95 %; `/info` shows `context N of M tokens (P %)` | screen |
-| D7 | Esc during an answer | it stops, `[stopped]`, the prompt returns | screen |
+| D7 | Esc during an answer | it stops, `[stopped]`, the prompt returns | screen; automated (`make test-geistr ONLY=terminal`) |
 | D8 | Ctrl-C on an empty line, twice | "Ctrl-C again to exit", then the chat ends; the terminal is normal again (echo, line editing) | after exit, `stty -a` shows `icanon echo` |
-| D9 | `NO_COLOR=1 geistr chat …` | no colours or styles | no `\e[` SGR in `capture-pane -e` |
-| D10 | resize the terminal between answers (wider, narrower) | the next answer and the editor use the new width | — |
+| D9 | `NO_COLOR=1 geistr chat …` | no colours or styles | no `\e[` SGR in `capture-pane -e`; automated (`make test-geistr ONLY=terminal`) |
+| D10 | resize the terminal between answers (wider, narrower) | the next answer and the editor use the new width | —; automated (`make test-geistr ONLY=terminal`) |
 | D11 | 40 and 48 columns | the chat's own lines (intro, `?`, `/help`, `/info`, hints) wrap at words; the intro's second line is dropped below 60; `?` lists one key per line | no line wider than the width |
 | D12 | a thinking model (`qwen3-0.6b`): ask "What is 17 × 23?" twice | `⠋ thinking · N s` while it reasons; the reasoning itself is not shown; the answer comes; the second question works and the first answer's reasoning is not sent again (`/info` context grows only by the visible turns) | screen, `/info` before and after |
 
@@ -136,12 +139,12 @@ Start: `geistr chat qwen3-0.6b --new` in a terminal of 100 × 40.
 | E1 | type `/` | the command list under the line; ↑↓ choose; Tab takes; Enter runs; Esc closes | screen |
 | E2 | `/model ` then Tab | the installed models, best fit for this computer first | screen |
 | E3 | ↑ after a restart of the chat | the last line of the previous chat | screen |
-| E4 | Ctrl-R, type part of an earlier line | `search: …` under the line, the match in it; Ctrl-R again → older; Enter takes it; Esc restores the line | screen |
+| E4 | Ctrl-R, type part of an earlier line | `search: …` under the line, the match in it; Ctrl-R again → older; Enter takes it; Esc restores the line | screen; automated (`make test-geistr ONLY=terminal`) |
 | E5 | a line starting with a space, then restart and ↑ | it is not in the history | `$GEISTEN_HOME/history` lacks it |
 | E6 | Ctrl-J, Alt/Option-Enter, and `\` + Enter in the middle of a message | each adds a line break (`↵`); Enter sends; the model gets the breaks | the chat file has `\n` in the message |
 | E7 | paste three lines (bracketed paste) | one message with `↵`, not three | the chat file has one user message |
-| E8 | type ahead while an answer runs, including Enter | the keys appear at the next prompt; Enter sends (it is not a line break) | screen |
-| E9 | UTF-8: type `Grüße 👋`, move with ←→, delete with Backspace | whole characters move and vanish; the cursor stays aligned | screen |
+| E8 | type ahead while an answer runs, including Enter | the keys appear at the next prompt; Enter sends (it is not a line break) | screen; automated (`make test-geistr ONLY=terminal`) |
+| E9 | UTF-8: type `Grüße 👋`, move with ←→, delete with Backspace | whole characters move and vanish; the cursor stays aligned | screen; automated (`make test-geistr ONLY=terminal`) |
 | E10 | `?` on an empty line | the shortcuts | screen |
 | E11 | type `one two three`, then Ctrl-A, Ctrl-E, Ctrl-W, Ctrl-U, type again, Ctrl-A + Ctrl-K, Ctrl-L (in iTerm2, Terminal.app, a Linux terminal and tmux) | start/end of line, the word before the cursor gone, the line cleared to the start / to the end, the screen cleared with the prompt kept | screen after each key |
 
@@ -152,9 +155,9 @@ Start: `geistr chat qwen3-0.6b --new` in a terminal of 100 × 40.
 | F1 | `/model gemma4-e2b` (GPU machine) | `⚡ vulkan` or `metal` `· gemma4-e2b · the conversation moves along`; the next answer knows the earlier conversation | screen + a question about the earlier answer |
 | F2 | `/model qwen3-0.6b`, back to `/model gemma4-e2b` (both GPU-capable) | each switch works; no "out of device memory" (the current model is closed first on a GPU switch) | screen |
 | F3 | `/model doesnotexist` | an error; the current model stays | screen |
-| F4 | `/cpu`, `/gpu`, `/auto` | the prompt symbol changes ⚙/⚡; the conversation moves along | screen |
+| F4 | `/cpu`, `/gpu`, `/auto` | the prompt symbol changes ⚙/⚡; the conversation moves along | screen; automated (`make test-geistr ONLY=terminal`; /gpu only where there is a GPU) |
 | F5 | `/temp`, `/temp 0.7`, `/temp 3` | shows the value; sets it; refuses 3 | screen |
-| F6 | `/system Answer like a pirate.`, `/system`, `/system off` | set, shown, removed; answers follow it | screen |
+| F6 | `/system Answer like a pirate.`, `/system`, `/system off` | set, shown, removed; answers follow it | screen; automated (`make test-geistr ONLY=terminal`), except whether answers follow it (a 360M model does not reliably) |
 | F7 | `/info` | backend, model, chat format, context fill, temperature, system | screen |
 | F8 | `/save`, restart `geistr chat` without a model | model, processor, temperature and system prompt are back | `geistr config` |
 | F9 | `/clear` | `○ a new conversation`; the old chat file stays; the context meter resets | a second file in `chats/` |
@@ -169,13 +172,13 @@ Start: `geistr chat qwen3-0.6b --new` in a terminal of 100 × 40.
 | G1 | chat three exchanges, exit, `geistr chat` | `↻ 6 · „last question…“ · /clear new`; the model remembers ("What did I ask first?") | screen |
 | G2 | resume a long conversation (80+ messages; copy one into `chats/`) | `↻ 80 · … · resumes the last N`; the first answer comes within seconds on the CPU | time to first word < 10 s (idle machine) |
 | G3 | `geistr chat --new` | starts fresh; the previous file stays | — |
-| G4 | `geistr config resume off`, chat, restart | nothing resumed, no files written; `history` not written either | `chats/` empty |
+| G4 | `geistr config resume off`, chat, restart | nothing resumed, no files written; `history` not written either | `chats/` empty; automated (`make test-geistr ONLY=terminal`) |
 | G5 | `geistr config history off` | the conversation is still kept; typed lines are not | `history` unchanged |
 | G6 | `echo hi \| geistr chat qwen3-0.6b` | answers; keeps nothing | no new files |
 | G7 | file permissions | `chats/*.jsonl` and `history` are 0600, `chats/` 0700 | `stat` |
 | G8 | a conversation that outgrows the context (small window or many long messages) | `↥ N oldest messages left out to fit the context …` once | screen |
 | G9 | a small model that loops (SmolLM2: "Say hello in five words." several times) | the loop guard ends it: `⟲ it repeated itself: kept up to the repeat · /retry or /clear`; the next answers do not grow | the chat file has `"cut": true`; later answers stay short |
-| G10 | Esc an answer, exit, resume | `↻ … · its last answer was stopped` | file has `"stopped": true` |
+| G10 | Esc an answer, exit, resume | `↻ … · its last answer was stopped` | file has `"stopped": true`; automated (`make test-geistr ONLY=terminal`) |
 
 ## H. Service: socket and HTTP
 
@@ -186,8 +189,8 @@ Start: `geistr chat qwen3-0.6b --new` in a terminal of 100 × 40.
 | H3 | `echo '{"op":"chat","messages":[{"role":"user","content":"Hi"}]}' \| nc -U …/geistr.sock` | JSON lines: parts, then `done` with tokens and times | `jq` on the last line |
 | H4 | `geistr serve qwen3-0.6b --http`; `curl …/v1/chat/completions -d '{"messages":[…]}'` | an OpenAI completion | `jq .choices[0].message.content` |
 | H5 | the same with `"stream":true` and `stream_options.include_usage` | SSE chunks: role first, content, finish, usage, `[DONE]` | — |
-| H6 | the OpenAI Python SDK example from the README | prints an answer | exit 0 |
-| H7 | Ollama: `curl …/api/chat -d '{"messages":[…]}'`, `/api/tags`, `/api/version` | NDJSON stream; the model; a version | — |
+| H6 | the OpenAI Python SDK example from the README | prints an answer | exit 0 (automated: `make test-clients`, #132: the pinned SDK, one answer, stream, `max_tokens`, `stop`, usage, a tool call, embeddings) |
+| H7 | Ollama: `curl …/api/chat -d '{"messages":[…]}'`, `/api/tags`, `/api/version` | NDJSON stream; the model; a version | automated with the `ollama` Python library: `make test-clients` (#132; `/api/version` by `make test-geistr`) |
 | H8 | Open WebUI: add `http://127.0.0.1:11434` as Ollama (and `/v1` as OpenAI) | chat works through the UI | screenshot |
 | H9 | `curl -H 'Host: evil.example' …` | 403 (DNS-rebinding guard) | status code |
 | H9b | `curl …/v1/chat/completions -H 'Origin: https://evil.example' -H 'Content-Type: text/plain' -d …` (what a page of another site can send without a preflight); the same with `Origin: http://localhost:3000`; then with `GEISTR_ORIGINS=https://evil.example` | 403 naming `GEISTR_ORIGINS`; 200; 200 (#171) | status codes |
