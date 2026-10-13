@@ -252,8 +252,8 @@ test-clients: geistr
 	$(BUILD)/clients-venv/bin/pip install -q $(CLIENTS)
 	$(BUILD)/clients-venv/bin/python -u tests/test_clients.py $(BUILD)/geistr "$(GEIST_TEST_MODEL)" "$(GEIST_TEST_TOOLS_MODEL)" "$(GEIST_TEST_EMBED_MODEL)"
 
-$(BUILD)/test_embed: tests/test_embed.c $(RUNTIME) $(ENGINE_LIB)
-	$(CC) $(CFLAGS) -isystem $(GEISTLIB)/include $< $(RUNTIME) $(ENGINE_LINK) $(LDFLAGS) $(LDLIBS) -lm -o $@
+$(BUILD)/test_embed: tests/test_embed.c tools/geistr/files.h $(RUNTIME) $(ENGINE_LIB)
+	$(CC) $(CFLAGS) -Itools/geistr -isystem $(GEISTLIB)/include $< $(RUNTIME) $(ENGINE_LINK) $(LDFLAGS) $(LDLIBS) -lm -o $@
 
 # #91: geistr_embed against BitNet-embedding-0.6B (make fetch-embed-model).
 GEIST_TEST_EMBED_MODEL ?= $(GEISTLIB)/gguf_artifacts/bitnet-embeddings-0.6b-bf16-i2_s.gguf

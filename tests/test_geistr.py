@@ -819,7 +819,7 @@ def section_embed():
             assert time.time() < deadline and service.poll() is None, service.stderr.read()
             time.sleep(.5)
     try:
-        query = 'Instruct: Given a question, retrieve passages that answer the question\nQuery: Where does the cat sleep?'
+        query = 'Where does the cat sleep?'  # nothing before it, as the README says (#157)
         docs = ['The cat sleeps on the red sofa.', 'Die Katze schläft auf dem Sofa.', 'Revenue grew by twelve percent.']
         # OpenAI: a list, floats; the vectors are unit length, in order, with usage
         status, out = call('/v1/embeddings', {'model': 'x', 'input': [query] + docs, 'encoding_format': 'float'})

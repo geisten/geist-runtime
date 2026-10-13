@@ -11,6 +11,13 @@
 
 ### Fixes
 
+- `--files` finds the right passages more often: the question is embedded as
+  it is, without the `Instruct: …\nQuery: ` line before it, which made the
+  ranking almost independent of the question. On the new retrieval benchmark
+  (`scripts/retrieval-bench.py`, 36 English and German passages in 12 files)
+  the right file is now first for 86 % of the questions (was 64 %) and among
+  the four passages put before the question for 97 % (was 92 %). Existing
+  indexes stay valid: passages are embedded as before (#157).
 - `geistr index` says which files it leaves out and why: a PDF without text
   (a scan), a PDF when `pdftotext` is missing, an unreadable file. Before they
   were skipped without a word (#173).

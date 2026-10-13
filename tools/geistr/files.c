@@ -26,8 +26,9 @@ extern char **environ;
 #define FILE_MAX (8 << 20) /* larger files are left out */
 #define DIMS_MAX 8192
 
-static const char *const QUERY = "Instruct: Given a question, retrieve passages from the user's files that answer it\n"
-                                 "Query: ";
+/* The index file's first line. A new one when FILES_PASSAGE_PREFIX or how
+ * chunks are embedded changes: an index of another version is made anew. */
+#define INDEX_VERSION "geistr-index 1\n"
 
 struct chunk {
     char  *path; /* relative to the folder */
@@ -61,6 +62,21 @@ static void chunks_free(struct chunk *c, size_t n) {
     for (size_t i = 0; i < n; i++)
         free(c[i].path), free(c[i].text), free(c[i].vec);
     free(c);
+}
+
+/* prefix and text embedded into vec */
+static geistr_status embed(struct files *f, const char *prefix, const char *text, float *vec, size_t cap,
+                           size_t *dims) {
+    if (!*prefix)
+        return geistr_embed(f->model, text, vec, cap, dims, nullptr);
+    size_t n = strlen(prefix) + strlen(text) + 1;
+    char  *s = malloc(n);
+    if (!s)
+        return GEISTR_NO_MEMORY;
+    snprintf(s, n, "%s%s", prefix, text);
+    geistr_status status = geistr_embed(f->model, s, vec, cap, dims, nullptr);
+    free(s);
+    return status;
 }
 
 /* ---- the folder -------------------------------------------------------------- */
@@ -203,7 +219,7 @@ static bool load(struct files *f, struct chunk **old, size_t *n_old) {
         return errno == ENOENT;
     char   line[4400], dir[4096] = "", model[256] = "";
     size_t dims = 0;
-    bool   ok   = fgets(line, sizeof line, in) && !strcmp(line, "geistr-index 1\n") && fgets(dir, sizeof dir, in) &&
+    bool   ok   = fgets(line, sizeof line, in) && !strcmp(line, INDEX_VERSION) && fgets(dir, sizeof dir, in) &&
                 fgets(line, sizeof line, in) && sscanf(line, "%255s %zu", model, &dims) == 2;
     dir[strcspn(dir, "\n")] = 0;
     /* another model's vectors do not compare: the folder is indexed anew */
@@ -232,7 +248,7 @@ static bool save(const struct files *f) {
     snprintf(part, sizeof part, "%s.%ld", f->index, (long) getpid());
     int   fd  = open(part, O_WRONLY | O_CREAT | O_TRUNC, 0600); /* private: your files' text */
     FILE *out = fd >= 0 ? fdopen(fd, "wb") : nullptr;
-    bool  ok  = out && fprintf(out, "geistr-index 1\n%s\n%s %zu\n", f->dir, f->model_file, f->dims) > 0;
+    bool  ok  = out && fprintf(out, INDEX_VERSION "%s\n%s %zu\n", f->dir, f->model_file, f->dims) > 0;
     for (size_t i = 0; ok && i < f->n; i++) {
         const struct chunk *c = &f->c[i];
         ok = fprintf(out, "%s %zu %zu\n", c->sha, strlen(c->path), strlen(c->text)) > 0 &&
@@ -363,7 +379,7 @@ struct files *files_open(const char *dir, bool quiet) {
             size_t got = 0;
             memcpy(c.sha, sha, sizeof c.sha);
             ok = c.path && c.text && c.vec;
-            geistr_status s = ok ? geistr_embed(f->model, c.text, c.vec, f->dims, &got, nullptr) : GEISTR_NO_MEMORY;
+            geistr_status s = ok ? embed(f, FILES_PASSAGE_PREFIX, c.text, c.vec, f->dims, &got) : GEISTR_NO_MEMORY;
             if (s != GEISTR_OK || !push(f, c)) {
                 free(c.path), free(c.text), free(c.vec);
                 ok = s == GEISTR_CONTEXT; /* ponytail: an overlong chunk (dense non-Latin text) is left out */
@@ -407,13 +423,8 @@ char *files_ask(struct files *f, const char *question, char *sources, size_t cap
     sources[0] = 0;
     if (!f->n)
         return strdup(question);
-    size_t n = strlen(QUERY) + strlen(question) + 1, dims = 0;
-    char  *q = malloc(n);
-    if (!q)
-        return nullptr;
-    snprintf(q, n, "%s%s", QUERY, question);
-    geistr_status s = geistr_embed(f->model, q, f->query, DIMS_MAX, &dims, nullptr);
-    free(q);
+    size_t        dims = 0;
+    geistr_status s    = embed(f, FILES_QUERY_PREFIX, question, f->query, DIMS_MAX, &dims);
     if (s != GEISTR_OK || dims != f->dims)
         return nullptr;
     size_t best[TOP];
