@@ -1343,6 +1343,10 @@ def pull_vision():
     assert r.returncode == 1 and 'out of date' in r.stderr and len(ranges) == 6 and not os.path.exists(target), (r.stderr, ranges)
     r = run('0' * 64)  # the catalog says another tower: fetched again, refused, removed
     assert r.returncode == 1 and 'does not match' in r.stderr and not os.path.exists(target), r.stderr
+    files[f'/x/y/resolve/{rev}/model.safetensors'] = checkpoint.replace(b'[64,88]', b'[-8,88]')  # a bad offset (#203)
+    n = len(ranges)
+    r = run(hashlib.sha256(tower).hexdigest())  # refused after the header: no data asked for
+    assert r.returncode == 1 and 'bad tensor model.vision_tower.a' in r.stderr and len(ranges) == n + 2, (r.stderr, ranges)
     server.shutdown()
 
 def section_pull():

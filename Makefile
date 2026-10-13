@@ -35,7 +35,7 @@ CORE := $(BUILD)/libgeistr-core.a
 FUZZERS := $(BUILD)/fuzz_catalog $(BUILD)/fuzz_json $(BUILD)/fuzz_http
 TEXT := $(BUILD)/template.o $(BUILD)/stream.o $(BUILD)/catalog.o $(BUILD)/fit.o $(BUILD)/decision_config.o $(BUILD)/decision_profile.o
 
-all: $(LIB) $(CORE) $(BUILD)/test_api $(BUILD)/test_cxx $(BUILD)/test_template $(BUILD)/test_stream $(BUILD)/test_window $(BUILD)/test_catalog $(BUILD)/test_fit $(BUILD)/test_decision_config $(BUILD)/test_decision_profile $(BUILD)/test_render $(BUILD)/test_lineedit $(BUILD)/test_chat $(BUILD)/chat $(FUZZERS)
+all: $(LIB) $(CORE) $(BUILD)/test_api $(BUILD)/test_cxx $(BUILD)/test_template $(BUILD)/test_stream $(BUILD)/test_window $(BUILD)/test_catalog $(BUILD)/test_fit $(BUILD)/test_decision_config $(BUILD)/test_decision_profile $(BUILD)/test_render $(BUILD)/test_lineedit $(BUILD)/test_chat $(BUILD)/test_service $(BUILD)/chat $(FUZZERS)
 
 $(BUILD)/%.o: src/%.c src/*.h include/*.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -87,6 +87,9 @@ $(BUILD)/test_chat: tests/test_chat.c $(CHAT_PARTS) tools/geistr/cli.h tools/gei
 $(BUILD)/test_lineedit: tests/test_lineedit.c tools/geistr/lineedit.c tools/geistr/lineedit.h | $(BUILD)
 	$(CC) $(CFLAGS) -Itools/geistr tests/test_lineedit.c tools/geistr/lineedit.c $(LDFLAGS) -o $@
 
+$(BUILD)/test_service: tests/test_service.c tools/geistr/service.c tools/geistr/http.c tools/geistr/json.c tools/geistr/*.h $(LIB) | $(BUILD)
+	$(CC) $(CFLAGS) -Itools/geistr -Isrc $< tools/geistr/service.c tools/geistr/http.c tools/geistr/json.c $(LIB) $(LDFLAGS) $(LDLIBS) -o $@
+
 # #133: the fuzz harnesses. Built with FUZZ_MAIN (tests/fuzz/replay.c) they run
 # their seeds and found crashes in make test; make fuzz builds them on libFuzzer.
 FUZZ_MAIN    ?= tests/fuzz/replay.c
@@ -118,6 +121,7 @@ test: all $(BUILD)/test_decide_driver
 	$(BUILD)/test_render
 	$(BUILD)/test_lineedit
 	$(BUILD)/test_chat
+	$(BUILD)/test_service
 	$(BUILD)/fuzz_catalog tests/fuzz/catalog/*
 	$(BUILD)/fuzz_json tests/fuzz/json/*
 	$(BUILD)/fuzz_http tests/fuzz/http/*

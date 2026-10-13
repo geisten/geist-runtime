@@ -551,9 +551,9 @@ geistr_status service_chat(const char *path, size_t n, const geistr_message *m, 
                     char *finish = json_string(&j, json_field(&j, 0, "finish"));
                     snprintf(stats->finish, sizeof stats->finish, "%s", finish ? finish : "");
                     free(finish);
-                    stats->input_tokens   = (unsigned) json_number(&j, json_field(&j, 0, "input_tokens"), 0);
-                    stats->context_tokens = (unsigned) json_number(&j, json_field(&j, 0, "context_tokens"), 0);
-                    stats->output_tokens  = (unsigned) json_number(&j, json_field(&j, 0, "output_tokens"), 0);
+                    stats->input_tokens   = json_unsigned(&j, json_field(&j, 0, "input_tokens"), 0);
+                    stats->context_tokens = json_unsigned(&j, json_field(&j, 0, "context_tokens"), 0);
+                    stats->output_tokens  = json_unsigned(&j, json_field(&j, 0, "output_tokens"), 0);
                     stats->prefill_ms     = json_number(&j, json_field(&j, 0, "prefill_ms"), -1);
                     stats->generation_ms  = json_number(&j, json_field(&j, 0, "generation_ms"), -1);
                     stats->total_ms       = json_number(&j, json_field(&j, 0, "total_ms"), -1);

@@ -8,6 +8,11 @@
   "gemma4-e2b"` to a qwen3-0.6b service) gets 404 `model_not_found` instead of
   an answer from the served model. Its id, `id:latest`, its file name or no
   model are accepted as before (#193).
+- `geistr pull` refuses a vision tower checkpoint whose header has a negative,
+  fractional or huge tensor offset, naming the tensor, instead of asking the
+  server for a bogus range. `geistr chat --socket` clamps token counts from
+  the service's stats line that are negative or too large: casting them was
+  undefined behaviour (#203).
 
 ### Changed
 
