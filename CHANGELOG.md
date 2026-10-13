@@ -13,6 +13,29 @@
   the new one. `make test` fails while README.md or install.sh name another
   version than the current one (#148).
 
+### Features
+
+- `--files` names only the files that answer: with the new catalog model
+  `qwen3-reranker-0.6b` installed (Qwen3-Reranker-0.6B, Q8_0, 639 MB, Apache
+  2.0), each paragraph of the 8 nearest passages is judged by the reranker,
+  only the passages it finds relevant go before the question (at most 4),
+  and `sources:` names only their files. A question the files do not
+  answer gets no passages, no `sources:` line and the note `nothing relevant
+  in your files`. Without the reranker `--files` works as before and says
+  once how to get it. On `scripts/retrieval-bench.py --sources`: precision
+  0.95 (was 0.24), recall 0.90 (was 0.90), no file named for 88 % of the
+  off-topic questions (was 0 %); about 1.3 s per question on an M1 Max's GPU,
+  6 s on its CPU. Same for `/files` and `run --files`; HTTP is unchanged
+  (#150).
+- `geistr_logits` (C API): the model's logits of given tokens after a
+  prompt, without generating; a reranker's yes/no (#150).
+- The catalog knows the kind `"reranker"` (`embedding` = 2 in
+  `geistr_catalog_entry`): not a chat model, never recommended (#150).
+- `scripts/retrieval-bench.py --rerank-gguf … [--pieces] [--lib libgeistr]`
+  scores a Qwen3-Reranker GGUF (through llama-server or `geistr_logits`), with
+  a leave-one-out threshold row and recall split by questions in the files'
+  language and across it (#150).
+
 ### Fixes
 
 - `--files` finds the right passages more often: the question is embedded as

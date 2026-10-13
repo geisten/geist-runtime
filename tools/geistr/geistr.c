@@ -324,12 +324,12 @@ static int catalog(bool installed_only, bool available_only, bool json) {
 }
 
 /* A catalog id → its verified file; a path stays a path. */
-int resolve(const char *model, char *path, size_t cap, geistr_reasoning *reasoning, bool *embedding) {
+int resolve(const char *model, char *path, size_t cap, geistr_reasoning *reasoning, int *embedding) {
     geistr_catalog *c   = load_catalog();
     const char     *base = strrchr(model, '/') ? strrchr(model, '/') + 1 : model;
     *reasoning           = GEISTR_REASONING_NONE;
     if (embedding)
-        *embedding = false;
+        *embedding = 0;
     bool is_path         = strchr(model, '/') || strstr(model, ".gguf") || !strncmp(model, "stub:", 5);
     for (size_t i = 0; c && i < geistr_catalog_count(c); i++) {
         const geistr_catalog_entry *m = geistr_catalog_get(c, i);

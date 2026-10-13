@@ -332,10 +332,15 @@ int session_open(struct session *x, const char *name, const char *processor, dou
                         bool interactive) {
     char             path[4200] = "";
     geistr_reasoning reasoning;
-    bool             embedding;
+    int              embedding;
     int              rc = resolve(name, path, sizeof path, &reasoning, &embedding);
     if (rc != OK)
         return rc;
+    if (embedding == 2) {
+        fprintf(stderr, "geistr: %s is a reranker: --files uses it to pick the excerpts that answer, "
+                        "but it does not chat or serve\n", name);
+        return ERROR;
+    }
     if (embedding && !serving) {
         fprintf(stderr, "geistr: %s is an embedding model: it serves /v1/embeddings (geistr serve %s --http) "
                         "and geistr index, but does not chat\n", name, name);
@@ -353,7 +358,7 @@ int session_open(struct session *x, const char *name, const char *processor, dou
         mo.context = (uint32_t) strtoul(getenv("GEISTR_TEST_CONTEXT"), nullptr, 10);
 #endif
     char error[256];
-    *x = (struct session) {.temperature = temperature, .reasoning = reasoning, .embedding = embedding};
+    *x = (struct session) {.temperature = temperature, .reasoning = reasoning, .embedding = embedding == 1};
     spinner_start(name, path);
     geistr_status opened = geistr_model_open(path, &mo, &x->model, error, sizeof error);
     spinner_stop();
@@ -570,12 +575,15 @@ int answer_once(const char *name, const char *prompt, const char *processor) {
     char *asked = nullptr;
     if (files_option) {
         struct files *f = files_open(files_option, true);
-        asked           = f ? files_ask(f, prompt, sources, sizeof sources) : nullptr;
+        bool          nothing = false;
+        asked                 = f ? files_ask(f, prompt, sources, sizeof sources, &nothing) : nullptr;
         files_close(f);
         if (!asked) {
             session_close(&x);
             return ERROR;
         }
+        if (nothing)
+            fputs("geistr: nothing relevant in your files\n", stderr);
     }
     turn[n++]        = (geistr_message) {"user", asked ? asked : prompt};
     struct shown out = {};
@@ -946,9 +954,12 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
         /* --files: the nearest excerpts of your files before the question; not
          * again on /retry, whose question has them already */
         char  sources[1024] = "";
-        char *asked         = files && !retrying ? files_ask(files, line, sources, sizeof sources) : nullptr;
+        bool  nothing       = false;
+        char *asked         = files && !retrying ? files_ask(files, line, sources, sizeof sources, &nothing) : nullptr;
         if (files && !retrying && !asked)
             say("%s  (the files could not be searched: asked without them)%s\n", dim(tty_out()), normal(tty_out()));
+        if (nothing)
+            say("%s  (nothing relevant in your files)%s\n", dim(tty_out()), normal(tty_out()));
         /* Normally only the new message; after a switch, the conversation once. */
         size_t from = conv_say(&said, asked ? asked : line, remote != nullptr);
         free(asked);

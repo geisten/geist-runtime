@@ -161,6 +161,10 @@ geistr chat --files ~/Notes        # or /files ~/Notes in a chat
 
 Each question gets the most relevant passages of your files put in front of
 it, and the answer shows where they came from (`sources: garden/shed.md`).
+With the reranker installed (`geistr pull qwen3-reranker-0.6b`, 639 MB) only
+the passages that answer the question go in front of it and only their files
+are named; for a question your files do not answer it says `nothing relevant
+in your files`. Without it, the four nearest passages are used and named.
 `geistr run --files ~/Notes "…"` does the same once. The index is updated by
 file hash whenever you use the folder, so only new and changed files are
 read again. It stays on your computer, readable only by you, in the data

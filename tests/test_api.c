@@ -143,6 +143,11 @@ static void test_abi(void) {
                   geistr_embed(model, nullptr, vec, 4, &dims, nullptr) == GEISTR_INVALID &&
                   geistr_embed(model, "hi", nullptr, 4, &dims, nullptr) == GEISTR_INVALID,
           "embeddings: a model that generates text refuses (#91)");
+    const char *yes_no[] = {"yes", "no"};
+    CHECK(geistr_logits(model, "hi", 2, yes_no, vec) == GEISTR_FORMAT &&
+                  geistr_logits(model, nullptr, 2, yes_no, vec) == GEISTR_INVALID &&
+                  geistr_logits(model, "hi", 2, yes_no, nullptr) == GEISTR_INVALID,
+          "logits: no stub model has them, bad arguments refused (#150)");
     struct collected got;
     CHECK(geistr_chat_send(chat, 1, &hi) == GEISTR_OK && drain(chat, &got) == GEISTR_OK, "answer");
     geistr_stats stats = {.size = offsetof(geistr_stats, prefill_ms)};
