@@ -236,6 +236,8 @@ permission file (see [docs/DECISIONS.md](DECISIONS.md)).
 | K2 | without permission (`enabled: false`) | refused ("disabled"), exit 1, nothing on stdout | exit code |
 | K3 | a duplicate option id; `--mode auto` | usage error, exit 2 | exit code |
 | K4 | `geistr catalog --decision-config FILE --json` | the `decision` object per model | `jq` |
+| K5 | `make geistr DECISION=1 DECISION_CONTEXT=1`; `geistr decide-batch <gemma4-e2b> --config FILE --shared-context --request-file req.json` with three questions | stdout `id<TAB>option` per question in input order; one JSON record last on stderr | lines, `exit` 0 |
+| K6 | K5 with one question over capacity (`--context-tokens 64` or a long question), then Ctrl-C during loading, then a build without `DECISION_CONTEXT` | nothing on stdout; exit 1 naming the question; 130; exit 1 "DECISION_CONTEXT=1" | exit codes |
 
 ## L. Since 0.1.2: files, tools, images, embeddings, first run, threads, ranking
 

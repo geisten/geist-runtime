@@ -821,6 +821,6 @@ anywhere on the line:
 Exit codes: 0 ok, 1 error, 2 usage (a wrong command or value), 130 stopped
 with Ctrl-C.
 
-`geistr decide` and `catalog --decision-config` belong to an experimental
+`geistr decide`, `geistr decide-batch` and `catalog --decision-config` belong to an experimental
 feature that is off by default and not in the release builds; see
 [DECISIONS.md](DECISIONS.md).
