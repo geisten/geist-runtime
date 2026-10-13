@@ -181,6 +181,77 @@ def rerank(name, qs, top, cs):
     return out, sorted(took)[len(took) // 2]
 
 
+QWEN3_RERANK_PREFIX = ('<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and '
+                       'the Instruct provided. Note that the answer can only be "yes" or "no".<|im_end|>\n<|im_start|>user\n')
+QWEN3_RERANK_SUFFIX = '<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n'
+QWEN3_RERANK_INSTRUCT = 'Given a web search query, retrieve relevant passages that answer the query'  # the model card's default
+
+
+def qwen3_prompt(instruct, q, doc):
+    """The Qwen3-Reranker prompt of the model card, exactly."""
+    return QWEN3_RERANK_PREFIX + f'<Instruct>: {instruct}\n<Query>: {q}\n<Document>: {doc}' + QWEN3_RERANK_SUFFIX
+
+
+def rerank_gguf(path, qs, top, cs, ngl, instruct):
+    """Qwen3-Reranker GGUF through llama-server: P(yes) = softmax(logit yes, logit no)
+    of the token after the prompt, for each of a question's top chunks."""
+    import math
+    probe = socket.socket(); probe.bind(('127.0.0.1', 0)); port = probe.getsockname()[1]; probe.close()
+    p = subprocess.Popen(['llama-server', '-m', path, '--port', str(port), '-ngl', str(ngl), '-c', '4096', '-np', '1',
+                          '--no-webui'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.time() + 120
+        while True:
+            try:
+                c = http.client.HTTPConnection('127.0.0.1', port, timeout=5); c.request('GET', '/health')
+                ok = c.getresponse().status == 200; c.close()
+                if ok:
+                    break
+            except OSError:
+                pass
+            if time.time() > deadline or p.poll() is not None:
+                sys.exit('llama-server did not start')
+            time.sleep(.3)
+
+        def ask(prompt):
+            c = http.client.HTTPConnection('127.0.0.1', port, timeout=600)
+            c.request('POST', '/completion', body=json.dumps({'prompt': prompt, 'n_predict': 1, 'n_probs': 50,
+                                                              'temperature': 0, 'cache_prompt': True}))
+            r = json.loads(c.getresponse().read()); c.close()
+            lp = {t['token']: t['logprob'] for t in r['completion_probabilities'][0]['top_logprobs']}
+            floor = min(lp.values())
+            y, n = lp.get('yes', floor), lp.get('no', floor)
+            return 1 / (1 + math.exp(n - y))
+        ask(qwen3_prompt(instruct, 'warm up', 'warm up'))
+        out, took = [], []  # P(yes) and seconds per pair
+        for (_, q), t in zip(qs, top):
+            ps, ts = [], []
+            for j in t:
+                start = time.time()
+                ps.append(ask(qwen3_prompt(instruct, q, cs[j][1])))
+                ts.append(time.time() - start)
+            out.append(ps), took.append(ts)
+        return out, took
+    finally:
+        p.send_signal(signal.SIGTERM); p.wait(30)
+
+
+def loo(rel, top, p, cs):
+    """The threshold chosen leave-one-question-out: for each question the
+    threshold that maximises precision + recall + off-topic share on the
+    other questions, applied to this one."""
+    cands = sorted({x for pj in p for x in pj})
+    picked = []
+    for i in range(len(rel)):
+        others = [k for k in range(len(rel)) if k != i]
+
+        def picks(t, ks):
+            return [{cs[j][0] for j, x in zip(top[k], p[k]) if x >= t} for k in ks]
+        best = max(cands, key=lambda t: sum(score([rel[k] for k in others], picks(t, others))[:3]))
+        picked.append(picks(best, [i])[0])
+    return picked
+
+
 def sources(service, o):
     """What sources: would name (#150): the files of the top-4 chunks a rule
     keeps, against the files that answer the question."""
@@ -213,6 +284,23 @@ def sources(service, o):
         rules += [(f'{name} ≥ {t}', [{cs[j][0] for j, x in zip(tj, pj) if x >= t} for tj, pj in zip(top, p)])
                   for t in (0.001, 0.003, 0.01, 0.1, 0.5)]
         print(f'{name}: {took:.2f} s per question (4 pairs, median, CPU)')
+        rules.append((f'{name}, threshold leave-one-out', loo(rel, top, p, cs)))
+    if o.rerank_gguf:
+        top8 = [sorted(range(len(cs)), key=lambda j: -s[j])[:8] for s in scores]
+        p8, took = rerank_gguf(o.rerank_gguf, qs, top8, cs, o.ngl, o.instruct)
+        name = os.path.basename(o.rerank_gguf)
+        for k in (4, 8):
+            tk, pk = [t[:k] for t in top8], [x[:k] for x in p8]
+            rules += [(f'{name} top {k}, P(yes) ≥ {t}', [{cs[j][0] for j, x in zip(tj, pj) if x >= t}
+                                                         for tj, pj in zip(tk, pk)])
+                      for t in (0.01, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7)]
+            rules.append((f'{name} top {k}, threshold leave-one-out', loo(rel, tk, pk, cs)))
+            med = sorted(sum(x[:k]) for x in took)[len(took) // 2]
+            print(f'{name}: {med:.2f} s per question ({k} pairs, median, llama-server -ngl {o.ngl})')
+        if o.dump:
+            json.dump({'questions': [q for _, q in qs], 'rel': [sorted(r) for r in rel],
+                       'top': [[cs[j][0] for j in t] for t in top8], 'p': p8, 'seconds': took},
+                      open(o.dump, 'w'), ensure_ascii=False, indent=0)
     print('| rule | precision | recall | off-topic: no file | answerable: no file |')
     print('|---|---|---|---|---|')
     for name, picked in rules:
@@ -226,6 +314,10 @@ def main():
     a.add_argument('--compare', action='store_true')
     a.add_argument('--sources', action='store_true')
     a.add_argument('--rerank', metavar='HF_MODEL')
+    a.add_argument('--rerank-gguf', metavar='GGUF', help='a Qwen3-Reranker GGUF, scored through llama-server')
+    a.add_argument('--ngl', type=int, default=0, help='llama-server -ngl for --rerank-gguf (0: CPU)')
+    a.add_argument('--instruct', default=QWEN3_RERANK_INSTRUCT, help='the <Instruct> line for --rerank-gguf')
+    a.add_argument('--dump', metavar='JSON', help='write the --rerank-gguf scores to this file')
     o = a.parse_args()
     o.query, o.passage = o.query.replace('\\n', '\n'), o.passage.replace('\\n', '\n')
     ps = passages()
