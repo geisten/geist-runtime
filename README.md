@@ -5,7 +5,7 @@ binary, no Python, no Docker, no account. The model runs locally, on the CPU
 or the GPU.
 
 > [!WARNING]
-> **geistr is at an early stage (v0.3.3).** It works and every change is tested
+> **geistr is at an early stage (v0.3.4).** It works and every change is tested
 > on Linux and macOS, but expect rough edges: commands, settings and file formats may
 > still change between versions, and the model list is small. Please
 > [report what breaks or confuses you](https://github.com/geisten/geist-runtime/issues);
@@ -37,7 +37,7 @@ on; another one is reported as "no release …"):
 
 ```sh
 curl -fsSL https://www.geisten.net/download/geistr/install.sh | PREFIX=~/.local sh
-curl -fsSL https://www.geisten.net/download/geistr/install.sh | GEISTR_VERSION=v0.3.3 sh
+curl -fsSL https://www.geisten.net/download/geistr/install.sh | GEISTR_VERSION=v0.3.4 sh
 ```
 
 <details>
