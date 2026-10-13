@@ -305,12 +305,13 @@ int geistr_pull_vision(const geistr_catalog_entry *m, const char *dir) {
             continue;
         int    v       = i + 1, offsets = json_field(&j, v, "data_offsets");
         int    a       = json_next(&j, offsets, -1), b = json_next(&j, offsets, a);
-        struct tensor x = {.name = key, .n_name = kn,
-                           .from = (uint64_t) json_number(&j, a, -1), .to = (uint64_t) json_number(&j, b, -1)};
+        struct tensor x = {.name = key, .n_name = kn};
         x.dtype = json_raw(&j, json_field(&j, v, "dtype"), &x.n_dtype);
         x.shape = json_raw(&j, json_field(&j, v, "shape"), &x.n_shape);
-        if (!x.dtype || !x.shape || a < 0 || b < 0 || x.to < x.from)
+        if (!x.dtype || !x.shape || !json_offset(&j, a, &x.from) || !json_offset(&j, b, &x.to) || x.to < x.from) {
+            fprintf(stderr, "geistr: vision tower: bad tensor %.*s in %s\n", (int) kn, key, m->vision_url);
             goto done;
+        }
         t[count++] = x, total += x.to - x.from;
     }
     if (!count) {

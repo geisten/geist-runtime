@@ -195,10 +195,36 @@ int main(void) {
         }
         free(shown);
     }
+    /* a choice from a list (#189): ↑↓ and k/j move within it, Enter takes, Ctrl-C twice cancels */
+    {
+        static const char *const rows[] = {"gemma4-e2b", "gemma4-e4b", "smollm2-360m"};
+        char  *shown = nullptr;
+        size_t size  = 0;
+        FILE  *out   = open_memstream(&shown, &size);
+        struct le_pick p = {.out = out, .rows = rows, .n = 3};
+        le_pick_draw(&p);
+        CHECK(p.sel == 0 && p.drawn == 3, "the list: three rows, the first chosen");
+        enum le_pick_event ev = LE_PICK_MORE;
+        for (const char *k = "\033[B\033[Bj\033[A"; *k; k++) /* ↓ ↓ j (at the end: stays) ↑ */
+            ev = le_pick_feed(&p, (unsigned char) *k);
+        CHECK(ev == LE_PICK_MORE && p.sel == 1, "↓ ↓ j ↑ ends on the second row");
+        CHECK(le_pick_feed(&p, 'k') == LE_PICK_MORE && p.sel == 0 && le_pick_feed(&p, 'k') == LE_PICK_MORE && p.sel == 0,
+              "k at the top stays");
+        CHECK(le_pick_feed(&p, '\r') == LE_PICK_TAKE && p.sel == 0, "Enter takes the chosen row");
+        CHECK(le_pick_feed(&p, 3) == LE_PICK_MORE && p.armed, "one Ctrl-C asks for a second");
+        fflush(out);
+        CHECK(strstr(shown, "Ctrl-C again to cancel") != nullptr, "the hint is shown");
+        CHECK(le_pick_feed(&p, 'j') == LE_PICK_MORE && !p.armed, "another key: the first Ctrl-C no longer counts");
+        CHECK(le_pick_feed(&p, 3) == LE_PICK_MORE && le_pick_feed(&p, 3) == LE_PICK_CANCEL, "Ctrl-C twice cancels");
+        fflush(out);
+        CHECK(strstr(shown, "❯ gemma4-e4b") != nullptr, "the chosen row is marked");
+        fclose(out);
+        free(shown);
+    }
     if (failures) {
         fprintf(stderr, "lineedit: %d failures\n", failures);
         return 1;
     }
-    puts("lineedit: UTF-8 editing, keys, selection list, hint, Esc, Ctrl-C, ?, history, Ctrl-R search, multi-line, wrapping, paste passed");
+    puts("lineedit: UTF-8 editing, keys, selection list, hint, Esc, Ctrl-C, ?, history, Ctrl-R search, multi-line, wrapping, paste, a choice from a list passed");
     return 0;
 }

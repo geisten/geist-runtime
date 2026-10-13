@@ -53,17 +53,22 @@ says so and exits. To build from source instead, see
 ## Quick start
 
 ```sh
-geistr chat                    # the first time: suggests a model for this computer,
-                               # downloads and verifies it on Enter, then chats
+geistr chat                    # the first time: the models that run here, the best
+                               # first; choose with ↑↓ and Enter, it downloads, verifies
+                               # and chats
 ```
 
 Or choose yourself:
 
 ```sh
 geistr catalog                 # which models fit this computer
-geistr pull qwen3-0.6b         # download and verify one (640 MB)
-geistr chat qwen3-0.6b         # talk to it
+geistr chat qwen3-0.6b         # talk to it; not installed yet: Enter downloads it (640 MB)
 ```
+
+`geistr pull qwen3-0.6b` downloads without starting anything: for scripts and
+servers (without a terminal geistr never downloads unasked), the embedding
+model of `--files`, and with no id, the update of all installed models after a
+new geistr.
 
 Or a single answer, for scripts:
 
@@ -239,7 +244,9 @@ before them, as `--files` does: on `scripts/retrieval-bench.py` (#157) that
 put the right file among the four nearest passages most often (97 %), ahead of
 an `Instruct: …\nQuery: ` task before the question (92 %) or `query: ` /
 `passage: ` (89–94 %). An embedding model does not chat, and a chat model does not
-embed (400). Not supported yet: more than one model per service.
+embed (400). A service runs one model, the one in `/v1/models`; a request
+that names another gets 404 (`model_not_found`) instead of this model's answer.
+For a second model, start a second service on another port.
 
 Without `--http`, `geistr serve` listens on a Unix socket only (owner only,
 0600), and `geistr chat --socket` chats through it. `--chats N` sets how many
