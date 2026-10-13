@@ -101,6 +101,40 @@ Integration order: #13 contract/configuration → #14 verified native profiles �
 #15 isolated engine bridge → #16 CLI → #17 evidence. Successful contract tests
 establish neither numerical parity nor quality-matched performance.
 
+## Reusable contexts: profiles and token preparation (#162)
+
+Internal preparation for several questions over one immutable context
+(epic #161); the C API that opens such a context is #163, so nothing here is
+reachable yet and chat stays the default. A verified profile
+(`src/decision_profile.c`) is one registry entry: name/version, exact artifact
+SHA-256, embedded template hash, native BOS and role markers and the
+thinking-off generation prompt. The configuration resolves names and
+artifacts from it; a new model adds an entry, never a family or filename
+guess, and V1 has no pre-prompt/template override.
+
+The common prefix is the BOS, system pre-prompt, user role and the context
+block; question, options and any batch question ID never enter it. Every
+complete question prompt is byte-identical to the single-question profile
+above. Preparation tokenizes the common prefix natively and caches a cut
+strictly before its last token (text after it may merge with that token),
+aligned down to the engine's resolved prefill chunk; a short context may
+cache zero tokens. Batch preflight checks that the cached IDs are an exact
+prefix of each full prompt's own native IDs; the rest, including the
+uncached context tail, is the question's suffix. Keys map A..Z as before:
+full prompt plus key must add exactly one distinct token. A mismatch fails
+explicitly; nothing is guessed, truncated or re-templated.
+
+`tests/fixtures/decisions/{bonsai2,gemma4}_context.json` (with generated
+`.h`, `tools/prepare_profile_oracles.py --contexts`) are the native fixtures:
+common prefixes, cuts for explicit prefill chunks 16 and 64, full prompt IDs
+and key candidates for empty, short, Unicode/whitespace/trailing-newline,
+template-lookalike and long contexts with reordered options. Each manifest
+binds the artifact, profile version, template hash, oracle revision and
+binary/source/library hashes, and the chunks. A cut applies only where the
+engine resolves exactly that chunk. The test refuses fixtures whose profile
+name or template hash differs from the registry: a changed profile gets a
+new version and new fixtures; old manifests are then marked `historical`.
+
 ## Execution, ownership and concurrency
 
 Build the optional engine with `make runtime DECISION=1` (or `make geistr

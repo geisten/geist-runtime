@@ -73,4 +73,20 @@ for name in ('x86-d53560d/records-gemma4-cpu-x86.jsonl', 'apple-17/contract-94-d
 for section in (manifest, manifest['x86_cpu'], manifest['apple_17'], manifest['x86_cpu_d53560d']):
     for name, record in section['records'].items():
         assert hashlib.sha256((validation / name).read_bytes()).hexdigest() == record['sha256'], name
-print('evidence verifier: independent Gemma drift FAIL preserved (Apple NEON, Metal and x86 records, both contracts); finite complete output required; manifest hashes match')
+# #162: each context fixture header is generated from its manifest, which binds the artifact, template,
+# oracle and chunks of the single-question fixture and is current, not historical; every cut is an exact prefix
+for profile in ('bonsai2', 'gemma4'):
+    path = root / f'tests/fixtures/decisions/{profile}_context.json'
+    ctx = json.loads(path.read_text())
+    header = (root / f'tests/fixtures/decisions/{profile}_context.h').read_text()
+    assert f'{profile}_context_manifest[] = "{hashlib.sha256(path.read_bytes()).hexdigest()}"' in header, profile
+    single = json.loads((root / f'tests/fixtures/decisions/{profile}.json').read_text())
+    for key in ('artifact_sha256', 'template_sha256', 'reference_revision', 'reference_binary_sha256'):
+        assert ctx[key] == single[key], (profile, key)
+    assert ctx['historical'] is False and ctx['prefill_chunks'], profile
+    for c in ctx['contexts']:
+        for chunk, cut in c['cuts'].items():
+            assert cut == (len(c['prefix_ids']) - 1) // int(chunk) * int(chunk), (profile, c['id'])
+            for q in c['questions']:
+                assert q['prompt'].startswith(c['prefix']) and q['ids'][:cut] == c['prefix_ids'][:cut]
+print('evidence verifier: independent Gemma drift FAIL preserved (Apple NEON, Metal and x86 records, both contracts); finite complete output required; manifest hashes match; context fixtures bound and current')

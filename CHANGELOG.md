@@ -61,6 +61,15 @@
   Ctrl-R search line, "Ctrl-C again to exit" and the resumed `↻` line were
   still styled, and the intro and the spinner were left out altogether (#134).
 
+### Decisions (EXPERIMENTAL)
+
+- Preparation for several questions over one context (#162; the API follows
+  in #163): one registry entry per verified profile (artifact, template,
+  roles, thinking-off), a common prefix without question or IDs, a cached cut
+  before the prefix's last token on a prefill-chunk boundary, and an exact
+  prefix check of every full prompt. Single-question prompts are unchanged.
+  Native fixtures for both profiles (`*_context.json`).
+
 ### Security
 
 - `geistr serve --http` refuses requests from a web page of another site
