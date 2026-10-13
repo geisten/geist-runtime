@@ -163,6 +163,36 @@ def score(rel, picked):
     return tp / max(n_picked, 1), tp / n_rel, off / n_off, empty / n_ans
 
 
+GERMAN = set('der die das und ist nicht mit für wir wie wann wo was wer bei auf den dem ein eine ich im zu von'.split())
+ENGLISH = set('the and is not with for we how when where what who which at on a i to of does do our is are'.split())
+
+
+def language(text):
+    """'de' or 'en' by function words: enough for the fixtures."""
+    words = [w.strip('.,?!:;()"').lower() for w in text.split()]
+    de = sum(w in GERMAN for w in words) + any(c in text for c in 'äöüßÄÖÜ')
+    return 'de' if de > sum(w in ENGLISH for w in words) else 'en'
+
+
+def by_language(qs, picked):
+    """Recall and answerable-with-no-file for the answerable questions in the
+    language of their files and for those across the language (#150)."""
+    root, out = os.path.join(HERE, 'files'), []
+    lang = {}
+    for (r, q), p in zip(qs, picked):
+        if not r:
+            continue
+        for f in r:
+            lang.setdefault(f, language(open(os.path.join(root, f), encoding='utf-8').read()))
+        cross = any(lang[f] != language(q) for f in r)
+        out.append((cross, len(p & r), len(r), not p))
+    res = []
+    for cross in (False, True):
+        g = [x for x in out if x[0] == cross]
+        res += [sum(x[1] for x in g) / max(sum(x[2] for x in g), 1), sum(x[3] for x in g) / max(len(g), 1), len(g)]
+    return res
+
+
 def rerank(name, qs, top, cs):
     """A cross-encoder (Hugging Face transformers, e.g. BAAI/bge-reranker-v2-m3):
     the relevance of each of a question's top-4 chunks, 0 to 1."""
@@ -192,9 +222,56 @@ def qwen3_prompt(instruct, q, doc):
     return QWEN3_RERANK_PREFIX + f'<Instruct>: {instruct}\n<Query>: {q}\n<Document>: {doc}' + QWEN3_RERANK_SUFFIX
 
 
-def rerank_gguf(path, qs, top, cs, ngl, instruct):
+PIECE = 400  # bytes a paragraph piece may have (--pieces)
+
+
+def paragraphs(text):
+    """A chunk in paragraphs (blank-line separated); a longer one cut after
+    sentences into pieces of at most about PIECE bytes; a short one (a
+    heading) joined to the next."""
+    import re
+    out, carry = [], ''
+    for para in (p.strip() for p in text.split('\n\n')):
+        if not para:
+            continue
+        para = (carry + '\n\n' + para) if carry else para
+        carry = ''
+        if len(para.encode()) < 80:
+            carry = para
+            continue
+        piece = ''
+        for sentence in re.split(r'(?<=[.!?])\s+|\n', para):
+            if piece and len((piece + ' ' + sentence).encode()) > PIECE:
+                out.append(piece); piece = ''
+            piece = (piece + ' ' + sentence).strip()
+        if piece:
+            out.append(piece)
+    if carry and out:
+        out[-1] += '\n\n' + carry
+    elif carry:
+        out.append(carry)
+    return out or [text]
+
+
+def judge(ask, qs, top, cs, instruct, split):
+    """P(yes) per question and chunk (the best of its pieces), and seconds."""
+    ask(qwen3_prompt(instruct, 'warm up', 'warm up'))
+    out, took = [], []
+    for (_, q), t in zip(qs, top):
+        ps, ts = [], []
+        for j in t:
+            start = time.time()
+            ps.append(max(ask(qwen3_prompt(instruct, q, d)) for d in split(cs[j][1])))
+            ts.append(time.time() - start)
+        out.append(ps), took.append(ts)
+    return out, took
+
+
+def rerank_gguf(path, qs, top, cs, ngl, instruct, split=lambda t: [t]):
     """Qwen3-Reranker GGUF through llama-server: P(yes) = softmax(logit yes, logit no)
-    of the token after the prompt, for each of a question's top chunks."""
+    of the token after the prompt, for each of a question's top chunks; with
+    split, the best of the chunk's pieces. ponytail: yes/no from the top 50
+    tokens; one missing takes the 50th's log-prob (both missing: 0.5)."""
     import math
     probe = socket.socket(); probe.bind(('127.0.0.1', 0)); port = probe.getsockname()[1]; probe.close()
     p = subprocess.Popen(['llama-server', '-m', path, '--port', str(port), '-ngl', str(ngl), '-c', '4096', '-np', '1',
@@ -222,18 +299,37 @@ def rerank_gguf(path, qs, top, cs, ngl, instruct):
             floor = min(lp.values())
             y, n = lp.get('yes', floor), lp.get('no', floor)
             return 1 / (1 + math.exp(n - y))
-        ask(qwen3_prompt(instruct, 'warm up', 'warm up'))
-        out, took = [], []  # P(yes) and seconds per pair
-        for (_, q), t in zip(qs, top):
-            ps, ts = [], []
-            for j in t:
-                start = time.time()
-                ps.append(ask(qwen3_prompt(instruct, q, cs[j][1])))
-                ts.append(time.time() - start)
-            out.append(ps), took.append(ts)
-        return out, took
+        return judge(ask, qs, top, cs, instruct, split)
     finally:
         p.send_signal(signal.SIGTERM); p.wait(30)
+
+
+def rerank_geistr(lib, path, qs, top, cs, gpu, instruct, split=lambda t: [t]):
+    """The same through geistr itself: geistr_logits of libgeistr (make
+    shared), exact yes/no logits, as --files runs it."""
+    import ctypes as C, math
+    g = C.CDLL(lib)
+
+    class Opts(C.Structure):
+        _fields_ = [('size', C.c_size_t), ('processor', C.c_int), ('threads', C.c_uint32), ('context', C.c_uint32),
+                    ('chat_format', C.c_char_p), ('decision', C.c_void_p)]
+    g.geistr_model_open.argtypes = [C.c_char_p, C.POINTER(Opts), C.POINTER(C.c_void_p), C.c_char_p, C.c_size_t]
+    g.geistr_logits.argtypes = [C.c_void_p, C.c_char_p, C.c_size_t, C.POINTER(C.c_char_p), C.POINTER(C.c_float)]
+    g.geistr_model_error.restype = C.c_char_p
+    model, error = C.c_void_p(), C.create_string_buffer(256)
+    opts = Opts(C.sizeof(Opts), 2 if gpu else 1, 0, 2048, None, None)
+    if g.geistr_model_open(path.encode(), C.byref(opts), C.byref(model), error, 256) != 0:
+        sys.exit(f'geistr_model_open: {error.value.decode()}')
+    words, logit = (C.c_char_p * 2)(b'yes', b'no'), (C.c_float * 2)()
+
+    def ask(prompt):
+        if g.geistr_logits(model, prompt.encode(), 2, words, logit) != 0:
+            sys.exit(f'geistr_logits: {g.geistr_model_error(model).decode()}')
+        return 1 / (1 + math.exp(logit[1] - logit[0]))
+    try:
+        return judge(ask, qs, top, cs, instruct, split)
+    finally:
+        g.geistr_model_close(model)
 
 
 def loo(rel, top, p, cs):
@@ -287,8 +383,13 @@ def sources(service, o):
         rules.append((f'{name}, threshold leave-one-out', loo(rel, top, p, cs)))
     if o.rerank_gguf:
         top8 = [sorted(range(len(cs)), key=lambda j: -s[j])[:8] for s in scores]
-        p8, took = rerank_gguf(o.rerank_gguf, qs, top8, cs, o.ngl, o.instruct)
-        name = os.path.basename(o.rerank_gguf)
+        split = paragraphs if o.pieces else lambda t: [t]
+        p8, took = (rerank_geistr(o.lib, o.rerank_gguf, qs, top8, cs, o.ngl > 0, o.instruct, split) if o.lib else
+                    rerank_gguf(o.rerank_gguf, qs, top8, cs, o.ngl, o.instruct, split))
+        name = os.path.basename(o.rerank_gguf) + (', paragraphs' if o.pieces else '')
+        if o.pieces:
+            n = [len(paragraphs(t)) for _, t in cs]
+            print(f'paragraph pieces: {sum(n)} in {len(cs)} chunks (max {max(n)} per chunk)')
         for k in (4, 8):
             tk, pk = [t[:k] for t in top8], [x[:k] for x in p8]
             rules += [(f'{name} top {k}, P(yes) ≥ {t}', [{cs[j][0] for j, x in zip(tj, pj) if x >= t}
@@ -296,15 +397,20 @@ def sources(service, o):
                       for t in (0.01, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7)]
             rules.append((f'{name} top {k}, threshold leave-one-out', loo(rel, tk, pk, cs)))
             med = sorted(sum(x[:k]) for x in took)[len(took) // 2]
-            print(f'{name}: {med:.2f} s per question ({k} pairs, median, llama-server -ngl {o.ngl})')
+            print(f'{name}: {med:.2f} s per question ({k} chunks, median, '
+                  f'{"geistr_logits, " + ("GPU" if o.ngl else "CPU") if o.lib else f"llama-server -ngl {o.ngl}"})')
         if o.dump:
             json.dump({'questions': [q for _, q in qs], 'rel': [sorted(r) for r in rel],
                        'top': [[cs[j][0] for j in t] for t in top8], 'p': p8, 'seconds': took},
                       open(o.dump, 'w'), ensure_ascii=False, indent=0)
-    print('| rule | precision | recall | off-topic: no file | answerable: no file |')
-    print('|---|---|---|---|---|')
+    same, cross = (sum(1 for (r, q) in qs if r and (any(language(open(os.path.join(HERE, 'files', f), encoding='utf-8')
+                   .read()) != language(q) for f in r)) == c) for c in (False, True))
+    print(f'| rule | precision | recall | off-topic: no file | answerable: no file | recall same / cross language '
+          f'({same} / {cross} questions) | answerable: no file, same / cross |')
+    print('|---|---|---|---|---|---|---|')
     for name, picked in rules:
-        print('| %s | %.2f | %.2f | %.2f | %.2f |' % (name, *score(rel, picked)))
+        rs, es, _, rc, ec, _ = by_language(qs, picked)
+        print('| %s | %.2f | %.2f | %.2f | %.2f | %.2f / %.2f | %.2f / %.2f |' % (name, *score(rel, picked), rs, rc, es, ec))
 
 
 def main():
@@ -318,6 +424,10 @@ def main():
     a.add_argument('--ngl', type=int, default=0, help='llama-server -ngl for --rerank-gguf (0: CPU)')
     a.add_argument('--instruct', default=QWEN3_RERANK_INSTRUCT, help='the <Instruct> line for --rerank-gguf')
     a.add_argument('--dump', metavar='JSON', help='write the --rerank-gguf scores to this file')
+    a.add_argument('--lib', metavar='LIBGEISTR', help='--rerank-gguf through geistr_logits of this libgeistr '
+                   '(make shared) instead of llama-server; --ngl > 0: the GPU')
+    a.add_argument('--pieces', action='store_true',
+                   help='--rerank-gguf judges each chunk in paragraphs; a chunk scores its best piece')
     o = a.parse_args()
     o.query, o.passage = o.query.replace('\\n', '\n'), o.passage.replace('\\n', '\n')
     ps = passages()
