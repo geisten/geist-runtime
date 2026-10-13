@@ -4,6 +4,17 @@
 
 ### Features
 
+- Thinking can be switched off per model: `geistr config
+  qwen3-0.6b.thinking off` (or `geistr config thinking off` for every
+  thinking model without its own value), `/think off` and `/think on` in a
+  chat, kept by `/save`. Off, the model does not reason at all: the prompt
+  ends as its template renders `enable_thinking=false`, so the chat goes
+  from `reading` straight to the answer (qwen3-0.6b on an M1 Max CPU,
+  `geistr run`: the first word after 0.10–0.14 s instead of 1.6–10.6 s). A
+  model that does not think refuses it. `/info` and `geistr catalog`
+  (`--json`: `thinking`) show the setting. In the C API:
+  `GEISTR_REASONING_THINK_OFF` (#212).
+
 - `geistr serve --http` without a model offers every installed model:
   `/v1/models` and `/api/tags` list them (Open WebUI shows them all), and a
   request's `model` chooses. Only one model is in memory: a request for

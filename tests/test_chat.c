@@ -18,6 +18,17 @@ static int failures;
         }                                                                \
     } while (0)
 
+geistr_catalog *load_catalog(void) { /* geistr.c's: here the shipped catalog (make test runs in the repository) */
+    static char     text[1 << 17];
+    FILE           *f   = fopen("models/catalog.json", "r");
+    size_t          len = f ? fread(text, 1, sizeof text, f) : 0;
+    geistr_catalog *c   = nullptr;
+    char            error[256];
+    if (f)
+        fclose(f);
+    return geistr_catalog_parse(text, len, &c, error, sizeof error) == GEISTR_OK ? c : nullptr;
+}
+
 static bool is(const struct conversation *c, size_t i, const char *role, const char *content) {
     return i < c->n && !strcmp(c->role[i], role) && !strcmp(c->content[i], content);
 }
@@ -177,12 +188,38 @@ int main(void) {
     uint32_t chosen = engine_threads();
     CHECK(chosen == 0 || (chosen == dev.cores && dev.cores < dev.logical_cpus));
 
+    /* Thinking per model (#212): geistr config <id>.thinking off persists for
+     * that model only; the others follow the thinking setting; a model that
+     * does not think, or no catalog model, is refused. */
+    CHECK(setenv("GEISTEN_HOME", tmp, 1) == 0 && data_folder());
+    CHECK(thinking_on("qwen3-0.6b") && thinking_on("qwen38-27b-q4"));
+    CHECK(config(3, (const char *[]) {"config", "qwen3-0.6b.thinking", "off"}) == OK);
+    CHECK(!thinking_on("qwen3-0.6b") && thinking_on("qwen38-27b-q4"));
+    CHECK(config(3, (const char *[]) {"config", "gemma4-e2b.thinking", "off"}) == USAGE); /* does not think */
+    CHECK(config(3, (const char *[]) {"config", "nope.thinking", "off"}) == USAGE);
+    CHECK(config(3, (const char *[]) {"config", "qwen3-0.6b.thinking", "maybe"}) == USAGE);
+    CHECK(config(3, (const char *[]) {"config", "thinking", "off"}) == OK);
+    CHECK(!thinking_on("qwen38-27b-q4"));
+    CHECK(config(3, (const char *[]) {"config", "qwen3-0.6b.thinking", "on"}) == OK);
+    FILE *conf = fopen(config_path, "r");
+    char  text[4096] = "";
+    CHECK(conf && fread(text, 1, sizeof text - 1, conf) > 0);
+    if (conf)
+        fclose(conf);
+    CHECK(strstr(text, "\nthinking = off\n") && strstr(text, "\nqwen3-0.6b.thinking = on\n"));
+    cfg.thinking = true; /* read back: the file's values return */
+    config_thinking("qwen3-0.6b", false);
+    config_load();
+    CHECK(thinking_on("qwen3-0.6b") && !thinking_on("qwen38-27b-q4"));
+    CHECK(config(3, (const char *[]) {"config", "qwen3-0.6b.thinking", ""}) == OK); /* back to the setting */
+    CHECK(!thinking_on("qwen3-0.6b"));
+
     conv_free(&c), conv_free(&next), conv_free(&empty);
     char cmd[64];
     snprintf(cmd, sizeof cmd, "rm -rf %s", tmp);
     CHECK(system(cmd) == 0);
     if (failures)
         return 1;
-    puts("chat conversation: what each send carries, system prompt, /clear, store and resume, resume budget, retry and copy, looping and stopped answers, engine threads passed");
+    puts("chat conversation: what each send carries, system prompt, /clear, store and resume, resume budget, retry and copy, looping and stopped answers, engine threads, thinking per model passed");
     return 0;
 }

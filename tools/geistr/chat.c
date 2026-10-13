@@ -397,6 +397,7 @@ static const struct le_candidate commands[] = {
         {"/model ", "another model, same conversation"},
         {"/temp ", "sampling temperature, 0 to 2"},
         {"/system ", "system prompt (off: none)"},
+        {"/think ", "a thinking model: on, or off (answers at once)"},
         {"/info", "what runs now"},
         {"/files ", "answers from a folder of your files (off: none)"},
         {"/save", "keep these settings for the next chat"},
@@ -770,6 +771,21 @@ static int command(struct session *x, struct conversation *said, char *line, con
         if (conv_system(said, strcmp(arg, "off") ? arg : "") && !remote && !reopen(x, said))
             return LEAVE;
         puts(said->system[0] ? "system prompt set" : "no system prompt");
+    } else if (!strcmp(line, "/think")) { /* #212 */
+        bool on = !strcmp(arg, "on"), off = !strcmp(arg, "off");
+        if (remote)
+            usage("the service has its model: geistr config <model>.thinking off, then geistr serve");
+        else if (x->reasoning == GEISTR_REASONING_NONE)
+            printf("%s does not think\n", x->name);
+        else if (!on && !off) {
+            printf("thinking %s\n", x->reasoning == GEISTR_REASONING_THINK_OFF ? "off" : "on");
+            usage("/think on · /think off (no thinking: the answer comes at once) · /save keeps it");
+        } else {
+            x->reasoning = off ? GEISTR_REASONING_THINK_OFF : GEISTR_REASONING_THINK_TAGS;
+            if (!reopen(x, said))
+                return LEAVE;
+            printf("thinking %s\n", arg);
+        }
     } else if (!strcmp(line, "/files")) {
         if (!*arg || !strcmp(arg, "off")) {
             files_close(files), files = nullptr;
@@ -786,8 +802,12 @@ static int command(struct session *x, struct conversation *said, char *line, con
         char threads[32] = ""; /* the CPU's share: what the engine runs on (#93) */
         if (!remote && !on_gpu(x) && engine_threads())
             snprintf(threads, sizeof threads, " · %u threads", engine_threads());
-        say("chat format %s · context %u of %u tokens (%u %%) · temperature %g%s%s%s\n", x->format, x->used,
-               x->context, fill(x), x->temperature, threads, said->system[0] ? " · system: " : "", said->system);
+        say("chat format %s · context %u of %u tokens (%u %%) · temperature %g%s%s%s%s\n", x->format, x->used,
+               x->context, fill(x), x->temperature, threads,
+               x->reasoning == GEISTR_REASONING_NONE        ? ""
+               : x->reasoning == GEISTR_REASONING_THINK_OFF ? " · thinking off"
+                                                            : " · thinking on",
+               said->system[0] ? " · system: " : "", said->system);
     } else if (!strcmp(line, "/copy")) {
         size_t      len;
         bool        code = !strcmp(arg, "code");
@@ -805,6 +825,8 @@ static int command(struct session *x, struct conversation *said, char *line, con
         if (!remote) { /* a service's model is not this chat's choice */
             snprintf(cfg.model, sizeof cfg.model, "%s", x->name);
             snprintf(cfg.processor, sizeof cfg.processor, "%s", x->processor);
+            if (x->reasoning != GEISTR_REASONING_NONE) /* for this model (#212) */
+                config_thinking(x->name, x->reasoning == GEISTR_REASONING_THINK_TAGS);
         }
         snprintf(cfg.system, sizeof cfg.system, "%s", said->system);
         cfg.temperature = x->temperature;

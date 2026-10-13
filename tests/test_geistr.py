@@ -74,7 +74,7 @@ def listing():
     assert set(doc) == {'schema', 'models_dir', 'models'} and doc['schema'] == 1 and doc['models_dir'] == models
     types = {'id': str, 'name': str, 'quantization': (str, type(None)), 'file': str, 'url': str, 'sha256': str,
              'bytes': int, 'recommended_ram_gib': int, 'state': str, 'resource': str, 'resource_reason': str,
-             'tokens_per_s': dict}
+             'tokens_per_s': dict, 'thinking': (str, type(None))}
     for m in doc['models']:
         assert set(m) == set(types), m
         assert all(isinstance(m[k], t) for k, t in types.items()), m
@@ -256,6 +256,8 @@ def section_run():
     assert geistr_run('config', 'processor', 'turbo').returncode == 2
     assert geistr_run('config', 'temperature', '3').returncode == 2
     assert geistr_run('config', 'colour', 'blue').returncode == 2
+    r = geistr_run('config', 'ref.thinking', 'off')  # #212: only a model that thinks can stop
+    assert r.returncode == 2 and 'ref does not think' in r.stderr, r.stderr
     assert geistr_run('config', 'system', 'Answer', 'in', 'one', 'word.').returncode == 0
     assert geistr_run('config', 'system').stdout.strip() == 'Answer in one word.'
     assert geistr_run('config', 'stats', 'off').returncode == 0

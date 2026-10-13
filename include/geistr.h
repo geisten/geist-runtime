@@ -168,7 +168,11 @@ const char *geistr_model_error(const geistr_model *model);
 
 typedef enum geistr_reasoning {
     GEISTR_REASONING_NONE = 0,  /* the model writes only an answer */
-    GEISTR_REASONING_THINK_TAGS /* <think>…</think> before the answer */
+    GEISTR_REASONING_THINK_TAGS, /* <think>…</think> before the answer */
+    GEISTR_REASONING_THINK_OFF   /* a THINK_TAGS model told not to think: the generation
+                                    prompt ends in an empty <think></think>, as its template
+                                    renders enable_thinking=false (#212); geistr_chat_open
+                                    returns GEISTR_FORMAT if the chat format has no such switch */
 } geistr_reasoning;
 
 typedef enum geistr_overflow {

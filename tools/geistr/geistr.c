@@ -97,7 +97,9 @@ static int usage(void) {
           "       geistr catalog [--installed | --available] [--json]\n"
           "       geistr pull [id]               a model, or: update the installed ones to this catalog\n"
           "       geistr config [key [value]]   keys: model processor temperature system markdown stats\n"
-          "                                     intro resume history resume_tokens threads\n"
+          "                                     intro resume history resume_tokens threads thinking\n"
+          "       geistr config <model>.thinking [on|off]\n"
+          "                                     a thinking model's own; off: it answers without reasoning\n"
           "       geistr bench [model…]          tokens/s on ⚙ CPU and ⚡ GPU, shown in geistr catalog\n"
           "       geistr bench --compare [A [B]] two geistlib commits' bench speeds and the change in %\n"
           "       geistr serve <model> [--socket=PATH] [--chats N] [--http[=ADDR:PORT]] [--max-request=MiB]\n"
@@ -282,6 +284,8 @@ static int catalog(bool installed_only, bool available_only, bool json) {
                 printf(",\"gpu\":");
                 local[i].gpu.rate > 0 ? (void) printf("%.1f", local[i].gpu.rate) : (void) printf("null");
                 printf("}");
+                bool thinks = m->reasoning_format && !strcmp(m->reasoning_format, "think_tags");
+                printf(",\"thinking\":%s", !thinks ? "null" : thinking_on(m->id) ? "\"on\"" : "\"off\"");
                 if (decision_config_file) {
                     printf(",\"decision\":{\"configured\":%s,\"profile\":", permission && permission->enabled ? "true" : "false");
                     if (permission && permission->profile) json_write(stdout, geistr_decision_profile_name(permission->profile));
@@ -310,6 +314,8 @@ static int catalog(bool installed_only, bool available_only, bool json) {
                 else if (f->resource != GEISTR_RESOURCE_FITS)
                     printf("  %s %s", f->resource == GEISTR_RESOURCE_UNAVAILABLE ? "✗" : "⚠",
                            limit_text(f->resource_reason));
+                if (m->reasoning_format && !strcmp(m->reasoning_format, "think_tags") && !thinking_on(m->id))
+                    printf("  thinking off");
                 if (permission && permission->enabled)
                     printf("  decision configured (%s; support not loaded)", geistr_decision_profile_name(permission->profile));
                 putchar('\n');
@@ -357,8 +363,8 @@ int resolve(const char *model, char *path, size_t cap, geistr_reasoning *reasoni
         const geistr_catalog_entry *m = geistr_catalog_get(c, i);
         if (is_path ? strcmp(base, m->file) : strcmp(model, m->id))
             continue;
-        if (m->reasoning_format && !strcmp(m->reasoning_format, "think_tags"))
-            *reasoning = GEISTR_REASONING_THINK_TAGS;
+        if (m->reasoning_format && !strcmp(m->reasoning_format, "think_tags")) /* off: geistr config (#212) */
+            *reasoning = thinking_on(m->id) ? GEISTR_REASONING_THINK_TAGS : GEISTR_REASONING_THINK_OFF;
         if (embedding)
             *embedding = m->embedding;
         if (!is_path) {

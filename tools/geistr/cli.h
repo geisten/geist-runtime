@@ -20,6 +20,7 @@ struct settings {
     double temperature, resume_tokens; /* resume_tokens: what a resumed conversation re-reads at most */
     double threads;                    /* CPU threads for the engine; 0: geistr chooses (engine_threads) */
     bool   markdown, stats, intro, resume, history;
+    bool   thinking; /* for thinking models without a <id>.thinking of their own (#212) */
 };
 extern struct settings cfg;
 extern char            config_path[4200], data_dir[4096]; /* "" when unknown */
@@ -27,6 +28,10 @@ extern char            config_path[4200], data_dir[4096]; /* "" when unknown */
 bool data_folder(void); /* find both; false without HOME or GEISTEN_HOME */
 void config_load(void);
 bool config_save(void);
+/* Whether the model with this catalog id thinks: its <id>.thinking, else the
+ * thinking setting (#212). */
+bool thinking_on(const char *id);
+void config_thinking(const char *id, bool on); /* its own value, for config_save (/save) */
 int  config(int n, const char **args); /* geistr config [key [value]] */
 
 bool make_dirs(const char *path, unsigned mode); /* mkdir -p */
