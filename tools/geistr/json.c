@@ -4,6 +4,7 @@
 #define JSMN_STRICT
 #define JSMN_PARENT_LINKS
 #include "jsmn.h"
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -111,6 +112,11 @@ int json_parent(const struct json *j, int t) {
 
 double json_number(const struct json *j, int t, double dflt) {
     return t >= 0 && T(j)[t].type == JSMN_PRIMITIVE ? strtod(j->s + T(j)[t].start, nullptr) : dflt;
+}
+
+unsigned json_unsigned(const struct json *j, int t, unsigned dflt) {
+    double v = json_number(j, t, dflt); /* a cast of one out of range is undefined (#133) */
+    return !(v > 0) ? 0 : v >= (double) UINT_MAX ? UINT_MAX : (unsigned) v;
 }
 
 bool json_bool(const struct json *j, int t, bool dflt) {

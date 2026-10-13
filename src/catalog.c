@@ -300,11 +300,11 @@ static const char *entry(geistr_catalog *c, const struct json *j, int i, uint64_
         return "bad reference";
     if (get(j, i, "vision") >= 0 && !vision(c, j, get(j, i, "vision"), m))
         return "bad vision";
-    if (get(j, i, "kind") >= 0) { /* "chat" (the default) or "embedding" */
+    if (get(j, i, "kind") >= 0) { /* "chat" (the default), "embedding" or "reranker" */
         const char *kind = string(c, j, i, "kind", 16);
-        if (!kind || (strcmp(kind, "chat") && strcmp(kind, "embedding")))
+        if (!kind || (strcmp(kind, "chat") && strcmp(kind, "embedding") && strcmp(kind, "reranker")))
             return "bad kind";
-        m->embedding = !strcmp(kind, "embedding");
+        m->embedding = !strcmp(kind, "embedding") ? 1 : !strcmp(kind, "reranker") ? 2 : 0;
     }
     if (schema == 2) {
         m->group_id     = string(c, j, i, "group_id", 63);

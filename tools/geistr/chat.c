@@ -116,8 +116,9 @@ static void *spinner(void *unused) {
     double                   start    = seconds();
     for (unsigned i = 0; !atomic_load(&spin.stop); i++) {
         if (seconds() - start > 0.3) /* quick loads stay quiet */
-            fprintf(stdout, "\r\033[2K\033[2m%s %s · %.0f s\033[0m", frames[i % 10],
-                    atomic_load(&spin.phase) ? atomic_load(&spin.phase) : spin.label, seconds() - start);
+            fprintf(stdout, "\r\033[2K%s%s %s · %.0f s%s", dim(tty_out()), frames[i % 10],
+                    atomic_load(&spin.phase) ? atomic_load(&spin.phase) : spin.label, seconds() - start,
+                    normal(tty_out()));
         fflush(stdout);
         struct timespec pause = {.tv_nsec = 100000000};
         nanosleep(&pause, nullptr);
@@ -130,7 +131,7 @@ static void spinner_start(const char *name, const char *path) {
     char        size[24] = "";
     if (stat(path, &st) == 0)
         snprintf(size, sizeof size, " · %.1f GB", (double) st.st_size / 1e9);
-    spin.on = tty_out() && strncmp(path, "stub:", 5) != 0;
+    spin.on = isatty(STDOUT_FILENO) && strncmp(path, "stub:", 5) != 0;
     if (!spin.on)
         return;
     snprintf(spin.label, sizeof spin.label, "loading %s%s", name, size);
@@ -141,7 +142,7 @@ static void spinner_start(const char *name, const char *path) {
 
 /* Between sending and the first word: "⠋ reading · 3 s", then "thinking". */
 static void spinner_wait(void) {
-    spin.on = tty_out();
+    spin.on = isatty(STDOUT_FILENO);
     if (!spin.on)
         return;
     atomic_store(&spin.phase, "reading");
@@ -298,13 +299,14 @@ static void shortcuts(void) {
 }
 
 static void intro(const char *name, const char *backend, bool gpu) {
-    if (!cfg.intro || !tty_out())
+    if (!cfg.intro || !isatty(STDOUT_FILENO))
         return;
-    say("\033[2mgeistr · %s on %s %s   (⚙ CPU · ⚡ GPU)\033[0m\n", name, gpu ? "⚡" : "⚙", backend);
+    bool faint = tty_out(); /* NO_COLOR: plain, not missing */
+    say("%sgeistr · %s on %s %s   (⚙ CPU · ⚡ GPU)%s\n", dim(faint), name, gpu ? "⚡" : "⚙", backend, normal(faint));
     unsigned w = columns();
     if (!w || w >= 60) /* narrower: ? shows the keys */
-        say("\033[2m/ commands · ? shortcuts · Esc stops an answer · Ctrl-C twice exits · geistr config intro "
-            "off\033[0m\n");
+        say("%s/ commands · ? shortcuts · Esc stops an answer · Ctrl-C twice exits · geistr config intro off%s\n",
+            dim(faint), normal(faint));
 }
 
 void session_close(struct session *x) {
@@ -330,10 +332,15 @@ int session_open(struct session *x, const char *name, const char *processor, dou
                         bool interactive) {
     char             path[4200] = "";
     geistr_reasoning reasoning;
-    bool             embedding;
+    int              embedding;
     int              rc = resolve(name, path, sizeof path, &reasoning, &embedding);
     if (rc != OK)
         return rc;
+    if (embedding == 2) {
+        fprintf(stderr, "geistr: %s is a reranker: --files uses it to pick the excerpts that answer, "
+                        "but it does not chat or serve\n", name);
+        return ERROR;
+    }
     if (embedding && !serving) {
         fprintf(stderr, "geistr: %s is an embedding model: it serves /v1/embeddings (geistr serve %s --http) "
                         "and geistr index, but does not chat\n", name, name);
@@ -351,7 +358,7 @@ int session_open(struct session *x, const char *name, const char *processor, dou
         mo.context = (uint32_t) strtoul(getenv("GEISTR_TEST_CONTEXT"), nullptr, 10);
 #endif
     char error[256];
-    *x = (struct session) {.temperature = temperature, .reasoning = reasoning, .embedding = embedding};
+    *x = (struct session) {.temperature = temperature, .reasoning = reasoning, .embedding = embedding == 1};
     spinner_start(name, path);
     geistr_status opened = geistr_model_open(path, &mo, &x->model, error, sizeof error);
     spinner_stop();
@@ -568,12 +575,15 @@ int answer_once(const char *name, const char *prompt, const char *processor) {
     char *asked = nullptr;
     if (files_option) {
         struct files *f = files_open(files_option, true);
-        asked           = f ? files_ask(f, prompt, sources, sizeof sources) : nullptr;
+        bool          nothing = false;
+        asked                 = f ? files_ask(f, prompt, sources, sizeof sources, &nothing) : nullptr;
         files_close(f);
         if (!asked) {
             session_close(&x);
             return ERROR;
         }
+        if (nothing)
+            fputs("geistr: nothing relevant in your files\n", stderr);
     }
     turn[n++]        = (geistr_message) {"user", asked ? asked : prompt};
     struct shown out = {};
@@ -856,6 +866,7 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
         find_installed();
         le_init(&editor, stdout, 80, complete_line, nullptr);
         editor.interrupted = &interrupted;
+        editor.plain       = !tty_out();
         history_load(&editor);
         keys_only(true);
     }
@@ -875,8 +886,8 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
         if (mark != MARK_NONE) /* how the last answer ended */
             snprintf(part + strlen(part), sizeof part - strlen(part), " · %s",
                      mark == MARK_STOPPED ? "its last answer was stopped" : "its last answer looped (cut)");
-        say("\033[2m↻ %zu · „%.*s%s“%s · /clear new\033[0m\n", said.n, bytes, last, last[bytes] ? "…" : "",
-               part);
+        say("%s↻ %zu · „%.*s%s“%s · /clear new%s\n", dim(tty_out()), said.n, bytes, last, last[bytes] ? "…" : "",
+            part, normal(tty_out()));
     }
     for (;;) {
         if (!edit) /* the editor takes a Ctrl-C that came between two reads */
@@ -891,7 +902,7 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
                 if (seconds() - last_ctrl_c < 2)
                     break;
                 last_ctrl_c = seconds();
-                puts("\033[2m  Ctrl-C again to exit\033[0m");
+                printf("%s  Ctrl-C again to exit%s\n", dim(tty_out()), normal(tty_out()));
                 continue;
             }
             if (ev == LE_HELP) {
@@ -943,9 +954,12 @@ int chat(const char *name, const char *processor, const char *remote, bool fresh
         /* --files: the nearest excerpts of your files before the question; not
          * again on /retry, whose question has them already */
         char  sources[1024] = "";
-        char *asked         = files && !retrying ? files_ask(files, line, sources, sizeof sources) : nullptr;
+        bool  nothing       = false;
+        char *asked         = files && !retrying ? files_ask(files, line, sources, sizeof sources, &nothing) : nullptr;
         if (files && !retrying && !asked)
             say("%s  (the files could not be searched: asked without them)%s\n", dim(tty_out()), normal(tty_out()));
+        if (nothing)
+            say("%s  (nothing relevant in your files)%s\n", dim(tty_out()), normal(tty_out()));
         /* Normally only the new message; after a switch, the conversation once. */
         size_t from = conv_say(&said, asked ? asked : line, remote != nullptr);
         free(asked);

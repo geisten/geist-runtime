@@ -10,6 +10,8 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
+#include <math.h>
 #include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,11 +25,13 @@ extern char **environ;
 
 #define CHUNK    1200     /* bytes a chunk aims at: a few paragraphs, ~300 tokens */
 #define TOP      4        /* chunks put before a question */
+#define NEAREST  8        /* with a reranker: the nearest chunks it judges */
 #define FILE_MAX (8 << 20) /* larger files are left out */
 #define DIMS_MAX 8192
 
-static const char *const QUERY = "Instruct: Given a question, retrieve passages from the user's files that answer it\n"
-                                 "Query: ";
+/* The index file's first line. A new one when FILES_PASSAGE_PREFIX or how
+ * chunks are embedded changes: an index of another version is made anew. */
+#define INDEX_VERSION "geistr-index 1\n"
 
 struct chunk {
     char  *path; /* relative to the folder */
@@ -38,6 +42,8 @@ struct chunk {
 
 struct files {
     geistr_model *model;
+    geistr_model *rerank; /* the catalog's reranker when installed (#150), else nullptr */
+    bool          rerank_tried; /* opened at the first question, not for geistr index */
     char          dir[4096], index[4400], model_file[256];
     size_t        dims;
     struct chunk *c;
@@ -61,6 +67,21 @@ static void chunks_free(struct chunk *c, size_t n) {
     for (size_t i = 0; i < n; i++)
         free(c[i].path), free(c[i].text), free(c[i].vec);
     free(c);
+}
+
+/* prefix and text embedded into vec */
+static geistr_status embed(struct files *f, const char *prefix, const char *text, float *vec, size_t cap,
+                           size_t *dims) {
+    if (!*prefix)
+        return geistr_embed(f->model, text, vec, cap, dims, nullptr);
+    size_t n = strlen(prefix) + strlen(text) + 1;
+    char  *s = malloc(n);
+    if (!s)
+        return GEISTR_NO_MEMORY;
+    snprintf(s, n, "%s%s", prefix, text);
+    geistr_status status = geistr_embed(f->model, s, vec, cap, dims, nullptr);
+    free(s);
+    return status;
 }
 
 /* ---- the folder -------------------------------------------------------------- */
@@ -203,7 +224,7 @@ static bool load(struct files *f, struct chunk **old, size_t *n_old) {
         return errno == ENOENT;
     char   line[4400], dir[4096] = "", model[256] = "";
     size_t dims = 0;
-    bool   ok   = fgets(line, sizeof line, in) && !strcmp(line, "geistr-index 1\n") && fgets(dir, sizeof dir, in) &&
+    bool   ok   = fgets(line, sizeof line, in) && !strcmp(line, INDEX_VERSION) && fgets(dir, sizeof dir, in) &&
                 fgets(line, sizeof line, in) && sscanf(line, "%255s %zu", model, &dims) == 2;
     dir[strcspn(dir, "\n")] = 0;
     /* another model's vectors do not compare: the folder is indexed anew */
@@ -232,7 +253,7 @@ static bool save(const struct files *f) {
     snprintf(part, sizeof part, "%s.%ld", f->index, (long) getpid());
     int   fd  = open(part, O_WRONLY | O_CREAT | O_TRUNC, 0600); /* private: your files' text */
     FILE *out = fd >= 0 ? fdopen(fd, "wb") : nullptr;
-    bool  ok  = out && fprintf(out, "geistr-index 1\n%s\n%s %zu\n", f->dir, f->model_file, f->dims) > 0;
+    bool  ok  = out && fprintf(out, INDEX_VERSION "%s\n%s %zu\n", f->dir, f->model_file, f->dims) > 0;
     for (size_t i = 0; ok && i < f->n; i++) {
         const struct chunk *c = &f->c[i];
         ok = fprintf(out, "%s %zu %zu\n", c->sha, strlen(c->path), strlen(c->text)) > 0 &&
@@ -264,7 +285,7 @@ static bool embedding_model(char *path, size_t cap, char *file, size_t file_cap)
     geistr_catalog *c  = load_catalog();
     const char     *id = nullptr;
     for (size_t i = 0; c && i < geistr_catalog_count(c) && !id; i++)
-        if (geistr_catalog_get(c, i)->embedding)
+        if (geistr_catalog_get(c, i)->embedding == 1)
             id = geistr_catalog_get(c, i)->id;
     char             wanted_id[64] = "";
     geistr_reasoning reasoning;
@@ -279,6 +300,36 @@ static bool embedding_model(char *path, size_t cap, char *file, size_t file_cap)
     }
     path[0] = 0;
     return resolve(wanted_id, path, cap, &reasoning, nullptr) == OK; /* says: geistr pull … */
+}
+
+/* The catalog's reranker (#150) when it is installed; else nullptr and a
+ * hint how to get it. Never a download prompt: --files works without it. */
+static geistr_model *reranker_open(void) {
+    geistr_catalog             *c = load_catalog();
+    const geistr_catalog_entry *m = nullptr;
+    for (size_t i = 0; c && i < geistr_catalog_count(c) && !m; i++)
+        if (geistr_catalog_get(c, i)->embedding == 2)
+            m = geistr_catalog_get(c, i);
+    geistr_install state = GEISTR_INSTALL_MISSING;
+    char           path[4400];
+    if (m && (geistr_catalog_check(m, models_dir, true, &state) != GEISTR_OK || state != GEISTR_INSTALL_OK))
+        fprintf(stderr, "geistr: sources name all files searched; for only the ones that answer: geistr pull %s\n",
+                m->id);
+    geistr_model *model = nullptr;
+    if (m && state == GEISTR_INSTALL_OK) {
+        snprintf(path, sizeof path, "%s/%s", models_dir, m->file);
+        char              error[256];
+        geistr_model_opts mo = GEISTR_MODEL_OPTS_INIT;
+        mo.processor         = GEISTR_PROCESSOR_GPU; /* 1.3 s a question on an M1 Max's GPU, 6.3 s on its CPU */
+        mo.context           = 2048;                 /* a question and a piece in the reranker's prompt */
+        mo.threads           = engine_threads();
+        if (geistr_model_open(path, &mo, &model, error, sizeof error) != GEISTR_OK)
+            mo.processor = GEISTR_PROCESSOR_CPU, model = nullptr;
+        if (!model && geistr_model_open(path, &mo, &model, error, sizeof error) != GEISTR_OK)
+            fprintf(stderr, "geistr: cannot open the reranker (%s): sources name all files searched\n", error);
+    }
+    geistr_catalog_free(c);
+    return model;
 }
 
 struct files *files_open(const char *dir, bool quiet) {
@@ -363,7 +414,7 @@ struct files *files_open(const char *dir, bool quiet) {
             size_t got = 0;
             memcpy(c.sha, sha, sizeof c.sha);
             ok = c.path && c.text && c.vec;
-            geistr_status s = ok ? geistr_embed(f->model, c.text, c.vec, f->dims, &got, nullptr) : GEISTR_NO_MEMORY;
+            geistr_status s = ok ? embed(f, FILES_PASSAGE_PREFIX, c.text, c.vec, f->dims, &got) : GEISTR_NO_MEMORY;
             if (s != GEISTR_OK || !push(f, c)) {
                 free(c.path), free(c.text), free(c.vec);
                 ok = s == GEISTR_CONTEXT; /* ponytail: an overlong chunk (dense non-Latin text) is left out */
@@ -394,6 +445,7 @@ void files_close(struct files *f) {
         return;
     chunks_free(f->c, f->n);
     geistr_model_close(f->model);
+    geistr_model_close(f->rerank);
     free(f);
 }
 
@@ -403,35 +455,148 @@ const char *files_dir(const struct files *f) {
 
 /* ---- a question -------------------------------------------------------------- */
 
-char *files_ask(struct files *f, const char *question, char *sources, size_t cap) {
+/* The reranker (Qwen3-Reranker-0.6B, #150) judges a question and a piece of
+ * a chunk (a paragraph) in the prompt of its model card; a chunk answers when
+ * P("yes") over "yes" and "no" reaches RERANK_MIN for one of its pieces.
+ * Measured with scripts/retrieval-bench.py --sources --rerank-gguf --pieces
+ * (55 questions, 16 off-topic): the 8 nearest chunks, this instruction (in
+ * English, as Qwen recommends) and 0.2 named the right files with precision
+ * 0.95, recall 0.90, and nothing for 88 % of the off-topic questions; whole
+ * chunks reached a recall of 0.74 at most. */
+#define RERANK_INSTRUCT \
+    "Given a question, judge whether the passage from the user's notes contains the information that answers it"
+#define RERANK_MIN 0.2f
+#define PIECE      400 /* bytes a piece aims at at most: a paragraph, a long one cut after a sentence */
+#define PIECE_MIN  80  /* a shorter paragraph (a heading) goes with the next */
+
+/* P(yes) for text[0..len), or -1 when the reranker failed. */
+static float relevance(geistr_model *r, const char *question, const char *text, size_t len) {
+    static const char form[] =
+            "<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the "
+            "Instruct provided. Note that the answer can only be \"yes\" or \"no\".<|im_end|>\n<|im_start|>user\n"
+            "<Instruct>: %s\n<Query>: %s\n<Document>: %.*s<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n";
+    size_t n      = sizeof form + strlen(RERANK_INSTRUCT) + strlen(question) + len;
+    char  *prompt = malloc(n);
+    if (!prompt || len > INT_MAX)
+        return free(prompt), -1;
+    snprintf(prompt, n, form, RERANK_INSTRUCT, question, (int) len, text);
+    static const char *const yes_no[] = {"yes", "no"};
+    float                    logit[2];
+    geistr_status            s = geistr_logits(r, prompt, 2, yes_no, logit);
+    free(prompt);
+    return s == GEISTR_OK ? 1.0f / (1.0f + expf(logit[1] - logit[0])) : -1;
+}
+
+/* Where a piece of at most PIECE bytes from s ends in s[0..len): after the
+ * last sentence (". ", "! ", "? ") or line that fits, else at a space. */
+static size_t piece_end(const char *s, size_t len) {
+    if (len <= PIECE)
+        return len;
+    size_t space = 0;
+    for (size_t i = PIECE; i > 0; i--) {
+        if (s[i] == '\n' || ((s[i] == ' ') && strchr(".!?", s[i - 1])))
+            return i;
+        if (!space && s[i] == ' ')
+            space = i;
+    }
+    if (space)
+        return space;
+    size_t e = PIECE; /* one long word: never inside a UTF-8 character */
+    while (e < len && ((unsigned char) s[e] & 0xC0) == 0x80)
+        e++;
+    return e;
+}
+
+/* The best P(yes) of the chunk's pieces, or -1 when the reranker failed. */
+static float chunk_relevance(geistr_model *r, const char *question, const char *text) {
+    float  best = 0;
+    size_t len = strlen(text), at = 0;
+    while (at < len) {
+        while (at < len && strchr(" \t\r\n", text[at]))
+            at++;
+        if (at >= len)
+            break;
+        size_t      end = at; /* paragraphs until the piece is long enough */
+        const char *gap;
+        do {
+            gap = strstr(text + end, "\n\n");
+            end = gap ? (size_t) (gap - text) : len;
+        } while (end - at < PIECE_MIN && gap && (end += 2) < len);
+        for (size_t from = at; from < end;) { /* a long paragraph in sentences */
+            size_t n = piece_end(text + from, end - from);
+            float  p = relevance(r, question, text + from, n);
+            if (p < 0)
+                return -1;
+            best = p > best ? p : best;
+            from += n;
+            while (from < end && strchr(" \t\r\n", text[from]))
+                from++;
+        }
+        at = end;
+    }
+    return best;
+}
+
+char *files_ask(struct files *f, const char *question, char *sources, size_t cap, bool *nothing) {
     sources[0] = 0;
+    *nothing   = false;
     if (!f->n)
         return strdup(question);
-    size_t n = strlen(QUERY) + strlen(question) + 1, dims = 0;
-    char  *q = malloc(n);
-    if (!q)
-        return nullptr;
-    snprintf(q, n, "%s%s", QUERY, question);
-    geistr_status s = geistr_embed(f->model, q, f->query, DIMS_MAX, &dims, nullptr);
-    free(q);
+    size_t        dims = 0;
+    geistr_status s    = embed(f, FILES_QUERY_PREFIX, question, f->query, DIMS_MAX, &dims);
     if (s != GEISTR_OK || dims != f->dims)
         return nullptr;
-    size_t best[TOP];
-    float  score[TOP];
-    size_t k = 0;
-    for (size_t i = 0; i < f->n; i++) { /* the TOP nearest, nearest first */
+    if (!f->rerank_tried)
+        f->rerank = reranker_open(), f->rerank_tried = true;
+    const size_t want = f->rerank ? NEAREST : TOP;
+    size_t       best[NEAREST];
+    float        score[NEAREST];
+    size_t       k = 0;
+    for (size_t i = 0; i < f->n; i++) { /* the want nearest, nearest first */
         float d = 0;
         for (size_t j = 0; j < dims; j++)
             d += f->query[j] * f->c[i].vec[j];
-        size_t at = k < TOP ? k++ : TOP;
+        size_t at = k < want ? k++ : want;
         while (at > 0 && score[at - 1] < d) {
-            if (at < TOP)
+            if (at < want)
                 best[at] = best[at - 1], score[at] = score[at - 1];
             at--;
         }
-        if (at < TOP)
+        if (at < want)
             best[at] = i, score[at] = d;
     }
+    if (f->rerank) { /* only the chunks that answer, the most likely first, at most TOP */
+        size_t pick[TOP], kept = 0;
+        float  prob[TOP];
+        bool   failed = false;
+        for (size_t i = 0; i < k && !failed; i++) {
+            float p = chunk_relevance(f->rerank, question, f->c[best[i]].text);
+            if ((failed = p < 0)) { /* the nearest, as without a reranker */
+                fprintf(stderr, "geistr: the reranker failed (%s): sources name all files searched\n",
+                        geistr_model_error(f->rerank));
+                geistr_model_close(f->rerank), f->rerank = nullptr;
+            }
+            if (failed || p < RERANK_MIN)
+                continue;
+            size_t at = kept < TOP ? kept++ : TOP;
+            while (at > 0 && prob[at - 1] < p) {
+                if (at < TOP)
+                    pick[at] = pick[at - 1], prob[at] = prob[at - 1];
+                at--;
+            }
+            if (at < TOP)
+                pick[at] = best[i], prob[at] = p;
+        }
+        if (!failed) {
+            memcpy(best, pick, kept * sizeof *pick), k = kept;
+            if (!k) { /* nothing relevant: the question alone */
+                *nothing = true;
+                return strdup(question);
+            }
+        }
+    }
+    if (k > TOP)
+        k = TOP;
     char  *out = nullptr;
     size_t len = 0;
     FILE  *m   = open_memstream(&out, &len);

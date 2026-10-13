@@ -360,7 +360,7 @@ static void chat_request(const struct svc_options *o, struct held *pool, FILE *o
     struct svc_request r = {.messages    = calloc(n ? n : 1, sizeof *r.messages),
                             .n           = n,
                             .temperature = json_number(j, json_field(j, 0, "temperature"), 0),
-                            .max         = (unsigned) json_number(j, json_field(j, 0, "max"), 0)};
+                            .max         = json_unsigned(j, json_field(j, 0, "max"), 0)};
     bool ok   = r.messages && n;
     int  item = -1;
     for (size_t k = 0; ok && k < n; k++) {

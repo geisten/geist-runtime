@@ -122,6 +122,8 @@ struct geistr_model {
     bool            vision;   /* a vision tower is loaded (#92) */
     pthread_mutex_t embed_lock; /* geistr_embed's session, made on its first call (#91) */
     struct geist_session *embed;
+    geist_token_t        *scored; /* geistr_logits: the last prompt's tokens, in embed's cache */
+    size_t                n_scored;
     char            error[256];
 };
 
@@ -449,6 +451,7 @@ geistr_status geistr_model_wrap(struct geist_model     *gm,
 static void model_release(geistr_model *m) {
     if (m && atomic_fetch_sub(&m->refs, 1) == 1) {
         geist_session_destroy(m->embed);
+        free(m->scored);
         pthread_mutex_destroy(&m->embed_lock);
         if (!m->borrowed) {
             geist_model_destroy(m->m);
@@ -503,6 +506,7 @@ geistr_status geistr_embed(geistr_model *m, const char *text, float *out, size_t
     }
     if (es == GEIST_OK)
         es = geist_session_truncate(m->embed, 0); /* the pooling spans all that was prefilled */
+    m->n_scored = 0;
     if (es == GEIST_OK && !(v = malloc(room * sizeof *v)))
         s = GEISTR_NO_MEMORY;
     /* wrapped as the model was trained: geistlib's verified card vector (#91) */
@@ -543,6 +547,69 @@ geistr_status geistr_embed(geistr_model *m, const char *text, float *out, size_t
              : s == GEISTR_INVALID              ? "out has no room for the vector: see dims"
              : m->embed                         ? geist_session_errmsg(m->embed)
                                                 : geist_backend_errmsg(m->be));
+    pthread_mutex_unlock(&m->embed_lock);
+    free(v);
+    return s;
+}
+
+geistr_status geistr_logits(geistr_model *m, const char *prompt, size_t n_tokens, const char *const tokens[],
+                            float out[]) {
+    if (!m || !prompt || (n_tokens && (!tokens || !out)))
+        return GEISTR_INVALID;
+    pthread_mutex_lock(&m->embed_lock);
+    geistr_status     s  = GEISTR_OK;
+    enum geist_status es = GEIST_OK;
+    const char       *why = nullptr;
+    size_t            n = 0, room = strlen(prompt) + 2; /* a token is at least one byte; BOS */
+    geist_token_t    *v = malloc(room * sizeof *v);
+    engine_lock(m);
+    if (!v)
+        s = GEISTR_NO_MEMORY;
+    if (s == GEISTR_OK && !m->embed) {
+        struct geist_session_opts so = {.max_seq_len = m->context, .top_p = 1.0f};
+        es                           = geist_session_create(m->m, m->be, &so, &m->embed);
+    }
+    const geist_token_t bos = geist_model_bos_token(m->m);
+    if (s == GEISTR_OK && es == GEIST_OK && geist_model_add_bos(m->m) && bos >= 0)
+        v[n++] = bos;
+    size_t got = 0;
+    if (s == GEISTR_OK && es == GEIST_OK)
+        es = geist_session_tokenize(m->embed, prompt, room - n, v + n, &got);
+    n += got;
+    if (s == GEISTR_OK && es == GEIST_OK && (!n || n + 1 > m->context))
+        s = n ? GEISTR_CONTEXT : GEISTR_INVALID, why = n ? "the prompt is longer than the context window"
+                                                          : "nothing to score";
+    /* What the last call left in the cache stays where this prompt begins
+     * the same (a reranker's question before each passage): only the rest
+     * is processed. */
+    size_t keep = 0;
+    while (keep < m->n_scored && keep + 1 < n && m->scored[keep] == v[keep])
+        keep++;
+    if (s == GEISTR_OK && es == GEIST_OK && geist_session_truncate(m->embed, keep) != GEIST_OK)
+        keep = 0, es = geist_session_truncate(m->embed, 0);
+    m->n_scored = 0;
+    if (s == GEISTR_OK && es == GEIST_OK)
+        es = geist_session_prefill_tokens(m->embed, n - keep, v + keep);
+    size_t       vocab  = 0;
+    const float *logits = s == GEISTR_OK && es == GEIST_OK ? geist_session_peek_logits(&vocab, m->embed) : nullptr;
+    if (s == GEISTR_OK && es != GEIST_OK)
+        s = from_engine(es);
+    else if (s == GEISTR_OK && !logits)
+        s = GEISTR_FORMAT, why = "the model has no next-token logits (an embedding model?)";
+    for (size_t i = 0; s == GEISTR_OK && i < n_tokens; i++) {
+        const geist_token_t t = tokens[i] ? geist_model_token_by_text(m->m, tokens[i]) : GEIST_TOKEN_NONE;
+        if (t == GEIST_TOKEN_NONE || t < 0 || (size_t) t >= vocab)
+            s = GEISTR_INVALID, why = "a token text is not one token of the model";
+        else
+            out[i] = logits[t];
+    }
+    if (s == GEISTR_OK) { /* the cache now holds v: the next call may reuse its start */
+        free(m->scored);
+        m->scored = v, m->n_scored = n, v = nullptr;
+    }
+    engine_unlock(m);
+    snprintf(m->error, sizeof m->error, "%s",
+             s == GEISTR_OK ? "" : why ? why : m->embed ? geist_session_errmsg(m->embed) : geist_backend_errmsg(m->be));
     pthread_mutex_unlock(&m->embed_lock);
     free(v);
     return s;
