@@ -149,6 +149,8 @@ static int contexts(geistr_model *m, geistr_chat *chat, size_t history, bool gem
                    "\"full_prompt_max_abs_delta\":%.9g,\"same_choice\":%s}\n",
                    profile_name, backend, c, i, (double)delta,
                    full.best_index == r.answers[0].best_index ? "true" : "false");
+            /* The cut sits on a prefill-chunk boundary: the same passes, the same bits. */
+            REQUIRE(delta == 0.0f && full.best_index == r.answers[0].best_index);
         }
         REQUIRE(geistr_chat_length(chat) == history);
     }
