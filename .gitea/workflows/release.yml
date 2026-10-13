@@ -289,12 +289,13 @@ jobs:
       - name: one model for all, with the released binary
         run: |
           curl -fsSL https://www.geisten.net/download/geistr/install.sh | GEISTR_VERSION="$TAG" PREFIX="$RUNNER_TEMP/g" sh
-          GEISTEN_HOME="$RUNNER_TEMP/h" "$RUNNER_TEMP/g/bin/geistr" pull smollm2-360m --models "$RUNNER_TEMP/m"
+          # in the workspace: the docker run below mounts host paths, and only the workspace has the same path there
+          GEISTEN_HOME="$RUNNER_TEMP/h" "$RUNNER_TEMP/g/bin/geistr" pull smollm2-360m --models "$PWD/smoke-models"
       - name: install.sh on Debian 12, Ubuntu 22.04 and 24.04
         run: |
           for image in debian:12 ubuntu:22.04 ubuntu:24.04; do
             echo "== $image"
-            docker run --rm -e TAG -v "$RUNNER_TEMP/m:/m:ro" -v "$PWD/install.sh:/install.sh:ro" "$image" sh -c '
+            docker run --rm -e TAG -v "$PWD/smoke-models:/m:ro" -v "$PWD/install.sh:/install.sh:ro" "$image" sh -c '
               apt-get -qq update >/dev/null && apt-get -qq install -y curl ca-certificates >/dev/null &&
               GEISTR_VERSION="$TAG" PREFIX=/usr/local sh /install.sh && geistr --version | grep -q "geistr ${TAG#v} " &&
               GEISTEN_HOME=/tmp/h geistr run smollm2-360m "What is the capital of France? One word." --models /m | grep -qi paris'
@@ -304,7 +305,7 @@ jobs:
           PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         run: |
           if [ -z "${PYPI_TOKEN:-}" ]; then echo "no PyPI upload in this release"; exit 0; fi
-          docker run --rm -e TAG -v "$RUNNER_TEMP/m:/m:ro" -v "$PWD/examples:/ex:ro" python:3.9-bullseye bash -c '
+          docker run --rm -e TAG -v "$PWD/smoke-models:/m:ro" -v "$PWD/examples:/ex:ro" python:3.9-bullseye bash -c '
             for i in 1 2 3 4 5 6; do pip install -q "geistr==${TAG#v}" && break; sleep 30; done  # the index needs a moment
             python -c "import geistr; assert geistr.__version__ == \"${TAG#v}\""
             cd /tmp && python /ex/chat.py /m/smollm2-360m-instruct-q8_0.gguf < /dev/null'
