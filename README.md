@@ -308,7 +308,8 @@ threads, `--models DIR` another model folder.
 1 error, 2 usage, 130 cancelled.
 
 Every complete answer records its speed in `speed.tsv` in the data folder;
-`geistr catalog` shows the median of the last ten.
+`geistr catalog` shows the median of the last ten `geistr bench` runs (of
+the last ten answers before the first).
 </details>
 
 ## Update

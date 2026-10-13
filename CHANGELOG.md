@@ -50,6 +50,12 @@
   meanwhile, a file size limit) names the error. Before it was taken for the
   network ("Failure when receiving data from the peer", "Failed writing
   received data") with the hint to resume, which failed the same way (#206).
+- `geistr catalog` shows the median of the last ten `geistr bench` runs per
+  model and processor, so that it measures what `geistr bench` printed just
+  before; a model never benched shows the median of its last ten answers, as
+  before for all. Chat and run answers have other lengths than the fixed
+  prompt and pulled the catalog's number away from the bench result (125
+  tok/s after the bench, 108 in the catalog). The legend says it (#217).
 
 ### Changed
 

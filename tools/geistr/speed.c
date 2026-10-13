@@ -2,9 +2,10 @@
  * per complete answer: model, cpu|gpu, tokens/s, seconds to the first answer
  * text, time, geistlib commit, source (bench: the fixed prompt, comparable
  * across engines; answer: chat or run). The catalog shows the median of the
- * last ten per model and processor measured with this engine: another one may
- * be faster or slower. Only ever appended to, never shortened: the history
- * compares engines. */
+ * last ten bench runs per model and processor measured with this engine (the
+ * last ten answers while there is no bench run): another engine may be faster
+ * or slower, and answers of other lengths differ from the fixed prompt. Only
+ * ever appended to, never shortened: the history compares engines. */
 #include "cli.h"
 #include "json.h"
 #include <stdio.h>
@@ -24,15 +25,17 @@ static double median(double *v, size_t n) {
 }
 
 /* The speeds measured here (speed.tsv) into local[], indexed like the catalog:
- * the median of the last ten per model and processor. A model recorded by
- * path counts for the catalog entry with that file name. */
+ * the median of the last ten bench runs per model and processor, of the last
+ * ten answers if there is no bench run, so that geistr bench and the catalog
+ * measure the same prompt. A model recorded by path counts for the catalog
+ * entry with that file name. */
 void speeds_load(const geistr_catalog *c, geistr_local *local) {
     enum { LAST = 10 };
     size_t n = geistr_catalog_count(c);
     struct {
         double   rate[LAST], first[LAST];
         unsigned count;
-    } (*seen)[2] = calloc(n, sizeof *seen);
+    } (*seen)[2][2] = calloc(n, sizeof *seen); /* [cpu, gpu][answer, bench] */
     struct stat *files = calloc(n ? n : 1, sizeof *files); /* each model's file (st_ino 0: none) */
     for (size_t i = 0; files && models_dir && i < n; i++) {
         char at[4400];
@@ -48,8 +51,8 @@ void speeds_load(const geistr_catalog *c, geistr_local *local) {
     while (f && getline(&line, &cap, f) > 0) { /* ponytail: reads it all; an index if it ever gets slow,
                                                 * never trimmed: it is the history across engines */
         char *model = strtok(line, "\t"), *proc = strtok(nullptr, "\t"), *rate = strtok(nullptr, "\t"),
-             *first = strtok(nullptr, "\t"), *when = strtok(nullptr, "\t"), *engine = strtok(nullptr, "\t\n");
-        /* the seventh column, the source, does not matter here: every answer counts */
+             *first = strtok(nullptr, "\t"), *when = strtok(nullptr, "\t"), *engine = strtok(nullptr, "\t\n"),
+             *source = strtok(nullptr, "\t\n"); /* none in old lines: an answer */
         if (!model || !proc || !rate || !first || !when || !engine || strcmp(engine, GEISTR_ENGINE))
             continue; /* another engine's speed */
         /* By id; one run from a .gguf path only when it is that model's file
@@ -61,9 +64,10 @@ void speeds_load(const geistr_catalog *c, geistr_local *local) {
             if (by_file ? !files[i].st_ino || file.st_ino != files[i].st_ino || file.st_dev != files[i].st_dev
                         : strcmp(m->id, model) != 0)
                 continue;
-            unsigned k = !strcmp(proc, "gpu"), slot = seen[i][k].count++ % LAST;
-            seen[i][k].rate[slot]  = strtod(rate, nullptr);
-            seen[i][k].first[slot] = strtod(first, nullptr);
+            unsigned k = !strcmp(proc, "gpu"), b = source && !strcmp(source, "bench"),
+                     slot = seen[i][k][b].count++ % LAST;
+            seen[i][k][b].rate[slot]  = strtod(rate, nullptr);
+            seen[i][k][b].first[slot] = strtod(first, nullptr);
         }
     }
     free(line);
@@ -71,10 +75,11 @@ void speeds_load(const geistr_catalog *c, geistr_local *local) {
         fclose(f);
     for (size_t i = 0; seen && i < n; i++)
         for (unsigned k = 0; k < 2; k++) {
-            size_t        m = seen[i][k].count < LAST ? seen[i][k].count : LAST;
+            unsigned      b = seen[i][k][1].count > 0; /* bench runs if any, else answers */
+            size_t        m = seen[i][k][b].count < LAST ? seen[i][k][b].count : LAST;
             geistr_speed *s = k ? &local[i].gpu : &local[i].cpu;
-            s->rate         = median(seen[i][k].rate, m);
-            s->first        = median(seen[i][k].first, m);
+            s->rate         = median(seen[i][k][b].rate, m);
+            s->first        = median(seen[i][k][b].first, m);
         }
     free(seen);
     free(files);

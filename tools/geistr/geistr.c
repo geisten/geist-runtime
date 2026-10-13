@@ -325,7 +325,8 @@ static int catalog(bool installed_only, bool available_only, bool json) {
     if (json)
         puts("]}");
     else if (tty)
-        puts("\033[2m⚙ CPU · ⚡ GPU: tokens/s measured here (geistr bench), dim: the catalog's reference\033[0m");
+        puts("\033[2m⚙ CPU · ⚡ GPU: tokens/s measured here, the median of the last ten geistr bench runs (of the "
+             "last ten answers before the first), dim: the catalog's reference\033[0m");
     geistr_ranking_free(r);
     geistr_decision_config_free(permissions);
     geistr_catalog_free(c);

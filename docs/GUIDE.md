@@ -106,8 +106,8 @@ computer first:
 Each row: the state, the id you type, the name and quantization, the
 download size, and the speed in tokens per second on ⚙ CPU and ⚡ GPU. Bars
 in normal colour are measured on this computer (the median of the last ten
-answers); dim ones are the catalog's reference numbers; `·` means no number
-yet. Whether a model is installed does not change its place in the list.
+`geistr bench` runs, or of the last ten answers while there is none); dim
+ones are the catalog's reference numbers; `·` means no number yet. Whether a model is installed does not change its place in the list.
 
 | mark | means |
 |---|---|
@@ -665,8 +665,11 @@ the default. `/info` shows the number in a chat.
 ## Speed and `geistr bench`
 
 Every complete answer records its speed in `speed.tsv` in the data folder.
-`geistr catalog` shows the median of the last ten answers per model and
-processor, measured with this engine.
+`geistr catalog` shows the median of the last ten `geistr bench` runs per
+model and processor, measured with this engine; for a model never benched,
+the median of the last ten answers. Answers have other prompt and answer
+lengths than the bench's fixed prompt, so their tokens/s differ; the
+catalog's number is a median, so it moves less than one bench run.
 
 ```sh
 geistr bench                     # every installed model, on ⚙ and ⚡ (where there is a GPU)
