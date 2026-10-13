@@ -28,6 +28,14 @@ int main() {
     };
     geistr_status s = geistr_chat_run(chat, 1, &msg, emit, &answer);
     geistr_chat_close(chat);
+    // #163: the context API as C++; the stub has no engine and says so.
+    const geistr_decision_context_opts xopts = GEISTR_DECISION_CONTEXT_OPTS_INIT;
+    geistr_decision_context *context = nullptr;
+    geistr_decision_batch_result batch{};
+    batch.size = sizeof batch;
+    if (geistr_decision_context_open(model, 0, 0, "", &xopts, &context, nullptr) != GEISTR_FORMAT || context ||
+        geistr_decision_context_score_batch(context, nullptr, &batch) != GEISTR_INVALID || batch.n_answers)
+        return 1;
     geistr_model_close(model);
     if (s != GEISTR_OK || answer != "Echo: C++")
         return 1;

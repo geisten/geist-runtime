@@ -13,7 +13,7 @@
 #include "geistr.h"
 #include "geistr_catalog.h"
 #include "geistr_decision.h"
-#include "decision_profile.h"
+#include "decision_batch.h"
 #include "file_identity.h"
 #include "common.h"
 #include "geistr_engine.h"
@@ -1771,4 +1771,235 @@ geistr_status geistr_decision_plan_get(const geistr_decision *d, geistr_decision
                                       .candidate_ids = d->candidates,
                                       .template_sha256 = decision_template_hash(d->model->decision.profile)};
     return GEISTR_OK;
+}
+
+/* Reusable decision contexts (#163): decision_batch.c holds the context copy,
+ * workspace and batch loop; this binds it to one private scoring handle, one
+ * tokenizer and one prefix snapshot. */
+struct geistr_decision_context {
+    geistr_model *model;
+    struct geist_decision *scorer;
+    struct geist_session *tokenizer;
+    struct geist_decision_prefix *prefix;
+    atomic_bool cancel;
+    size_t owned_allocations, owned_bytes;
+    geistr_decision_context_info info;
+    struct decision_batch batch;
+};
+
+bool geistr_decision_context_available(void) { return geist_decision_prefix_available(); }
+
+static bool context_cancelled(void *p) {
+    geistr_decision_context *c = p;
+    return atomic_exchange(&c->cancel, false);
+}
+
+static geistr_status context_tokenize(size_t *written, size_t cap, const char *text, int32_t *ids, void *p) {
+    geistr_decision_context *c = p;
+    if (atomic_load(&c->cancel))
+        return GEISTR_CANCELLED;
+    engine_lock(c->model);
+    const enum geist_status es = geist_session_tokenize(c->tokenizer, text, cap, ids, written);
+    engine_unlock(c->model);
+    return es == GEIST_E_TOO_MANY_TOKENS ? GEISTR_CONTEXT : from_engine(es);
+}
+
+static geistr_status context_score(void *p, size_t n_suffix, size_t n_candidates, const int32_t *suffix,
+                                   const int32_t *candidates, float *logits, double *probabilities, size_t *best) {
+    geistr_decision_context *c = p;
+    struct geist_decision_result r = {};
+    engine_lock(c->model);
+    enum geist_status es =
+        geist_decision_score_from_prefix(c->scorer, c->prefix, n_suffix, n_candidates, suffix, candidates, &r);
+    if (es != GEIST_OK)
+        snprintf(c->batch.detail, sizeof c->batch.detail, "%s", geist_decision_errmsg(c->scorer));
+    else if (r.mode != GEIST_DECISION_DENSE || r.n_candidates != n_candidates || !r.logits || !r.probabilities) {
+        snprintf(c->batch.detail, sizeof c->batch.detail, "engine returned an incomplete result");
+        es = GEIST_E_INTERNAL;
+    } else {
+        /* Copied while the engine's arrays are still borrowed. */
+        for (size_t i = 0; i < n_candidates; ++i) {
+            logits[i] = r.logits[i];
+            probabilities[i] = r.probabilities[i];
+        }
+        *best = r.best_index;
+    }
+    engine_unlock(c->model);
+    return from_engine(es);
+}
+
+static struct decision_batch_engine context_engine(geistr_decision_context *c) {
+    return (struct decision_batch_engine){
+        .context = c, .tokenize = context_tokenize, .cancelled = context_cancelled, .score = context_score};
+}
+
+void geistr_decision_context_close(geistr_decision_context *c) {
+    if (!c)
+        return;
+    geistr_model *m = c->model;
+    engine_setup_lock(m);
+    geist_decision_prefix_destroy(c->prefix);
+    if (c->scorer)
+        geist_decision_destroy(c->scorer);
+    if (c->tokenizer)
+        geist_session_destroy(c->tokenizer);
+    engine_setup_unlock(m);
+    decision_batch_free(&c->batch);
+    atomic_fetch_sub(&m->decision_allocations, c->owned_allocations);
+    atomic_fetch_sub(&m->decision_bytes, c->owned_bytes);
+    free(c);
+    model_release(m);
+}
+
+geistr_status geistr_decision_context_open(geistr_model *m, size_t context_len, size_t error_cap,
+                                           const char *context, const geistr_decision_context_opts *opts,
+                                           geistr_decision_context **out, char *error) {
+    if (error && error_cap)
+        error[0] = 0;
+    if (out)
+        *out = nullptr;
+    if (!m || !out)
+        return GEISTR_INVALID;
+    geistr_decision_context_opts o = GEISTR_DECISION_CONTEXT_OPTS_INIT;
+    if (opts && (opts->size != sizeof o || !opts_copy(&o, opts, sizeof o))) {
+        put_error(error, error_cap, "decision context options: unknown size");
+        return GEISTR_INVALID;
+    }
+    if (o.mode != GEISTR_DECISION_DEFAULT && o.mode != GEISTR_DECISION_DENSE &&
+        o.mode != GEISTR_DECISION_SELECTED_ROWS) {
+        put_error(error, error_cap, "unknown decision numeric mode");
+        return GEISTR_INVALID;
+    }
+    if ((o.mode == GEISTR_DECISION_DEFAULT ? m->decision.mode : o.mode) != GEISTR_DECISION_DENSE) {
+        put_error(error, error_cap, "decision contexts are DENSE only; the requested/policy mode conflicts");
+        return GEISTR_FORMAT;
+    }
+    if (!m->decision.enabled || !geist_decision_prefix_available() ||
+        !geist_decision_mode_supported(m->m, GEIST_DECISION_DENSE)) {
+        put_error(error, error_cap, "decision permission disabled or linked engine without DECISION_CONTEXT");
+        return GEISTR_FORMAT;
+    }
+    const size_t max_prompt = o.max_prompt_tokens ? o.max_prompt_tokens : (m->context < 512 ? m->context : 512);
+    if (max_prompt > m->context) {
+        put_error(error, error_cap, "max_prompt_tokens exceeds the loaded model context");
+        return GEISTR_CONTEXT;
+    }
+    const size_t budget = o.max_snapshot_bytes ? o.max_snapshot_bytes : GEISTR_DECISION_SNAPSHOT_BYTES;
+    geistr_decision_context *c = calloc(1, sizeof *c);
+    if (!c)
+        return GEISTR_NO_MEMORY;
+    const double start = now_ms();
+    c->model = m;
+    atomic_init(&c->cancel, false);
+    c->owned_allocations = 1;
+    c->owned_bytes = sizeof *c;
+    atomic_fetch_add(&m->decision_allocations, 1);
+    atomic_fetch_add(&m->decision_bytes, sizeof *c);
+    atomic_fetch_add(&m->refs, 1);
+    geistr_status s = decision_batch_init(&c->batch, m->decision.profile, max_prompt, context_len, context);
+    if (s != GEISTR_OK) {
+        put_error(error, error_cap, "decision context: %s",
+                  s == GEISTR_INVALID     ? "invalid context text"
+                  : s == GEISTR_NO_MEMORY ? "workspace allocation failed"
+                                          : "workspace too large");
+        geistr_decision_context_close(c);
+        return s;
+    }
+    c->owned_allocations += 1;
+    c->owned_bytes += c->batch.workspace_bytes;
+    atomic_fetch_add(&m->decision_allocations, 1);
+    atomic_fetch_add(&m->decision_bytes, c->batch.workspace_bytes);
+    const struct geist_decision_opts so = {.mode = GEIST_DECISION_DENSE,
+                                           .max_prompt_tokens = max_prompt,
+                                           .max_candidates = GEISTR_DECISION_MAX_OPTIONS,
+                                           .kv_mode = GEIST_KV_FP32};
+    const struct geist_session_opts to = {.max_seq_len = 1, .top_p = 1.0f};
+    engine_setup_lock(m);
+    enum geist_status es = geist_decision_create(m->m, m->be, &so, &c->scorer);
+    if (es == GEIST_OK)
+        es = geist_session_create(m->m, m->be, &to, &c->tokenizer);
+    if (es != GEIST_OK)
+        put_error(error, error_cap, "decision context setup: %s", geist_last_create_error());
+    engine_setup_unlock(m);
+    size_t chunk = 0;
+    if (es == GEIST_OK) {
+        engine_lock(m);
+        es = geist_decision_prefill_chunk(&chunk, c->scorer);
+        if (es != GEIST_OK)
+            put_error(error, error_cap, "decision context: no prefix snapshot here: %s",
+                      geist_decision_errmsg(c->scorer));
+        engine_unlock(m);
+    }
+    const struct decision_batch_engine e = context_engine(c);
+    s = from_engine(es);
+    if (s == GEISTR_OK) {
+        s = decision_batch_cut(&c->batch, chunk, &e);
+        if (s != GEISTR_OK)
+            put_error(error, error_cap, "decision context: %s",
+                      s == GEISTR_CONTEXT ? "context exceeds max_prompt_tokens" : "context tokenization failed");
+    }
+    if (s == GEISTR_OK) {
+        engine_lock(m);
+        es = geist_decision_prefix_prepare(c->scorer, budget, c->batch.n_cached, c->batch.cached, &c->prefix);
+        if (es != GEIST_OK)
+            put_error(error, error_cap, "decision context prefix: %s", geist_decision_errmsg(c->scorer));
+        engine_unlock(m);
+        s = es == GEIST_E_TOO_MANY_TOKENS ? GEISTR_CONTEXT : from_engine(es);
+    }
+    struct geist_decision_prefix_info pi = {};
+    if (s == GEISTR_OK)
+        s = from_engine(geist_decision_prefix_get_info(c->prefix, &pi));
+    if (s != GEISTR_OK) {
+        geistr_decision_context_close(c);
+        return s;
+    }
+    c->info = (geistr_decision_context_info){.size = sizeof c->info,
+                                             .profile = m->decision.profile,
+                                             .mode = GEISTR_DECISION_DENSE,
+                                             .cached_tokens = pi.cached_tokens,
+                                             .snapshot_bytes = pi.snapshot_bytes,
+                                             .max_snapshot_bytes = budget,
+                                             .prefill_chunk = pi.prefill_chunk,
+                                             .max_prompt_tokens = pi.max_prompt_tokens,
+                                             .setup_model_calls = pi.cached_tokens ? 1 : 0,
+                                             .setup_ms = now_ms() - start,
+                                             .backend = geist_backend_name(m->be),
+                                             .engine_revision = GEISTR_ENGINE_REVISION,
+                                             .engine_version = geist_version_string(),
+                                             .kv_cache = pi.kv_mode == GEIST_KV_FP32 ? "fp32" : "unknown"};
+    memcpy(c->info.model_sha256, m->decision.sha256, sizeof c->info.model_sha256);
+    snprintf(c->info.template_sha256, sizeof c->info.template_sha256, "%s",
+             decision_template_hash(m->decision.profile));
+    memcpy(c->info.context_sha256, c->batch.context_sha256, sizeof c->info.context_sha256);
+    *out = c;
+    return GEISTR_OK;
+}
+
+geistr_status geistr_decision_context_score_batch(geistr_decision_context *c, const geistr_decision_batch *batch,
+                                                  geistr_decision_batch_result *result) {
+    if (!c) {
+        if (result && result->size == sizeof *result)
+            *result = (geistr_decision_batch_result){.size = sizeof *result, .failed_index = SIZE_MAX};
+        return GEISTR_INVALID;
+    }
+    const struct decision_batch_engine e = context_engine(c);
+    return decision_batch_score(&c->batch, &e, batch, result);
+}
+
+geistr_status geistr_decision_context_cancel(geistr_decision_context *c) {
+    if (!c)
+        return GEISTR_INVALID;
+    atomic_store(&c->cancel, true);
+    return GEISTR_OK;
+}
+
+geistr_status geistr_decision_context_info_get(const geistr_decision_context *c, geistr_decision_context_info *out) {
+    if (!out || out->size != sizeof *out)
+        return GEISTR_INVALID;
+    *out = c ? c->info : (geistr_decision_context_info){.size = sizeof *out};
+    return c ? GEISTR_OK : GEISTR_INVALID;
+}
+
+const char *geistr_decision_context_error(const geistr_decision_context *c) {
+    return c ? c->batch.error : "no decision context";
 }

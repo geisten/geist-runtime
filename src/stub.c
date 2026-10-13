@@ -564,3 +564,37 @@ geistr_status geistr_decision_plan_get(const geistr_decision *d, geistr_decision
     *out = (geistr_decision_plan){.size = sizeof *out};
     return GEISTR_FORMAT;
 }
+/* #163: no engine, so no context or snapshot; every entry point says so. */
+bool geistr_decision_context_available(void) { return false; }
+geistr_status geistr_decision_context_open(geistr_model *m, size_t context_len, size_t error_cap,
+                                           const char *context, const geistr_decision_context_opts *opts,
+                                           geistr_decision_context **out, char *error) {
+    (void)context_len;
+    (void)context;
+    (void)opts;
+    if (out)
+        *out = nullptr;
+    if (error && error_cap)
+        snprintf(error, error_cap, "decision contexts are unavailable in the stub");
+    return m && out ? GEISTR_FORMAT : GEISTR_INVALID;
+}
+geistr_status geistr_decision_context_score_batch(geistr_decision_context *c, const geistr_decision_batch *batch,
+                                                  geistr_decision_batch_result *result) {
+    (void)batch;
+    if (!result || result->size != sizeof *result)
+        return GEISTR_INVALID;
+    *result = (geistr_decision_batch_result){.size = sizeof *result, .failed_index = SIZE_MAX};
+    return c ? GEISTR_FORMAT : GEISTR_INVALID;
+}
+geistr_status geistr_decision_context_cancel(geistr_decision_context *c) { return c ? GEISTR_FORMAT : GEISTR_INVALID; }
+geistr_status geistr_decision_context_info_get(const geistr_decision_context *c, geistr_decision_context_info *out) {
+    if (!out || out->size != sizeof *out)
+        return GEISTR_INVALID;
+    *out = (geistr_decision_context_info){.size = sizeof *out};
+    return c ? GEISTR_FORMAT : GEISTR_INVALID;
+}
+const char *geistr_decision_context_error(const geistr_decision_context *c) {
+    (void)c;
+    return "decision contexts unavailable in stub";
+}
+void geistr_decision_context_close(geistr_decision_context *c) { (void)c; }
