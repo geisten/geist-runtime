@@ -5,11 +5,14 @@ binary, no Python, no Docker, no account. The model runs locally, on the CPU
 or the GPU.
 
 > [!WARNING]
-> **geistr is at an early stage (v0.1).** It works and every change is tested
+> **geistr is at an early stage (v0.3.3).** It works and every change is tested
 > on Linux and macOS, but expect rough edges: commands, settings and file formats may
 > still change between versions, and the model list is small. Please
 > [report what breaks or confuses you](https://github.com/geisten/geist-runtime/issues);
 > early feedback shapes what comes next ([roadmap](ROADMAP.md)).
+
+**Full manual:** [docs/GUIDE.md](docs/GUIDE.md): every command, chat
+command, setting and file, the HTTP API, and what to do when something fails.
 
 ![geistr chat in action: qwen3-0.6b answers on the CPU, /model switches to gemma4-e2b on the GPU for a table, and a new session continues the conversation](docs/demo.gif)
 
@@ -29,12 +32,12 @@ Both work on Linux (x86_64, arm64) and macOS (Apple Silicon). The script
 downloads the latest release, checks it against `SHA256SUMS` and puts
 `geistr` in `/usr/local/bin`.
 
-Without sudo, or a specific release (a release that is not on the server is
-reported as "no release …"; releases before 0.3.2 never were):
+Without sudo, or a specific release (the server keeps the last 5, from 0.3.2
+on; another one is reported as "no release …"):
 
 ```sh
 curl -fsSL https://www.geisten.net/download/geistr/install.sh | PREFIX=~/.local sh
-curl -fsSL https://www.geisten.net/download/geistr/install.sh | GEISTR_VERSION=v0.3.2 sh
+curl -fsSL https://www.geisten.net/download/geistr/install.sh | GEISTR_VERSION=v0.3.3 sh
 ```
 
 <details>
@@ -227,9 +230,11 @@ conversation keeps it for the follow-up questions. Other models refuse images
 **Embeddings**: `geistr serve bitnet-embed-0.6b --http` answers
 `/v1/embeddings` (the OpenAI SDK's `embeddings.create` works) and Ollama's
 `/api/embed`: unit-length vectors of 1024 dimensions, multilingual. For
-retrieval, put a one-line task before a query (`Instruct: Given a question,
-retrieve passages that answer the question\nQuery: …`), nothing before
-documents. An embedding model does not chat, and a chat model does not
+retrieval, embed the question and the documents as they are, with nothing
+before them, as `--files` does: on `scripts/retrieval-bench.py` (#157) that
+put the right file among the four nearest passages most often (97 %), ahead of
+an `Instruct: …\nQuery: ` task before the question (92 %) or `query: ` /
+`passage: ` (89–94 %). An embedding model does not chat, and a chat model does not
 embed (400). A service runs one model, the one in `/v1/models`; a request
 that names another gets 404 (`model_not_found`) instead of this model's answer.
 For a second model, start a second service on another port.
@@ -237,13 +242,8 @@ For a second model, start a second service on another port.
 Without `--http`, `geistr serve` listens on a Unix socket only (owner only,
 0600), and `geistr chat --socket` chats through it. `--chats N` sets how many
 conversations the service keeps (default 2), `--max-request=MiB` the size of one
-request (default 16): a larger one is refused at once (HTTP 413). The socket protocol is one
-JSON object per line, documented in
-[`tools/geistr/service.h`](tools/geistr/service.h):
-
-```sh
-echo '{"op":"chat","messages":[{"role":"user","content":"Hi"}]}' | nc -U ~/…/geistr.sock
-```
+request (default 16). The options and the socket protocol:
+[docs/GUIDE.md](docs/GUIDE.md#serve-use-the-model-from-other-programs).
 </details>
 
 ## Settings
@@ -315,5 +315,6 @@ with geistr.chat("gemma4-e2b", system="Answer briefly.") as chat:
     print(chat.ask("And of Italy?"))           # only the new message is processed
 ```
 
+Using geistr: [docs/GUIDE.md](docs/GUIDE.md).
 Building, the library, tests and CI: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 API reference and design: [docs/API.md](docs/API.md).

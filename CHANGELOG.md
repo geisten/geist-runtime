@@ -2,26 +2,6 @@
 
 ## Unreleased
 
-### Fixes
-
-- `geistr serve --http`: a request that names another model (`"model":
-  "gemma4-e2b"` to a qwen3-0.6b service) gets 404 `model_not_found` instead of
-  an answer from the served model. Its id, `id:latest`, its file name or no
-  model are accepted as before (#193).
-
-### Release
-
-- The Linux wheels are built in the manylinux_2_28 image: `pip install geistr`
-  works on glibc 2.28 and newer (Debian 10+, Ubuntu 20.04+), not only on 2.38/2.39
-  as with 0.3.3. After each upload a `smoke` job installs the release on Debian
-  12, Ubuntu 22.04 and 24.04 (install.sh) and from PyPI on Debian 11 (#172).
-
-### Fixes
-
-- `geistr index` says which files it leaves out and why: a PDF without text
-  (a scan), a PDF when `pdftotext` is missing, an unreadable file. Before they
-  were skipped without a word (#173).
-
 ### Security
 
 - `geistr serve --http` refuses requests from a web page of another site
@@ -31,14 +11,49 @@
   `Host` check no longer takes a name like `127.evil.example` for a loopback
   address (#171).
 
-## Unreleased
-
 ### Fixes
 
+- `geistr serve --http`: a request that names another model (`"model":
+  "gemma4-e2b"` to a qwen3-0.6b service) gets 404 `model_not_found` instead of
+  an answer from the served model. Its id, `id:latest`, its file name or no
+  model are accepted as before (#193).
+- `--files` finds the right passages more often: the question is embedded as
+  it is, without the `Instruct: …\nQuery: ` line before it, which made the
+  ranking almost independent of the question. On the new retrieval benchmark
+  (`scripts/retrieval-bench.py`, 36 English and German passages in 12 files)
+  the right file is now first for 86 % of the questions (was 64 %) and among
+  the four passages put before the question for 97 % (was 92 %). Existing
+  indexes stay valid: passages are embedded as before (#157).
+- `scripts/retrieval-bench.py --sources` measures which files `sources:`
+  would name: the questions are labelled with the files that answer them,
+  with 3 questions that need two files and 16 (English and German) that no
+  file answers; it scores rules for picking files from the top 4 by precision,
+  recall and how often an off-topic question gets no source, and `--rerank`
+  adds a cross-encoder for comparison. No cosine rule separates relevant from
+  unrelated files, so `sources:` stays as it is (#150).
+- `geistr index` says which files it leaves out and why: a PDF without text
+  (a scan), a PDF when `pdftotext` is missing, an unreadable file. Before they
+  were skipped without a word (#173).
+- `geistr --help` says what `serve --max-request` limits and its default
+  (16 MiB) (#147).
+- `NO_COLOR` makes `geistr chat` plain: before, the `/` list, the hint, the
+  Ctrl-R search line, "Ctrl-C again to exit" and the resumed `↻` line were
+  still styled, and the intro and the spinner were left out altogether (#134).
 - The macOS archive, the Homebrew binary and the macOS wheel were built with the
   runner's own macOS (27) as the minimum, so they did not start on macOS 15 or
   26 and PyPI refused the wheel tag `macosx_27_0`. They are built for macOS 15
   and later now (`minos 15.0`, checked in the release workflow) (#152).
+
+### Release
+
+- The Linux wheels are built in the manylinux_2_28 image: `pip install geistr`
+  works on glibc 2.28 and newer (Debian 10+, Ubuntu 20.04+), not only on 2.38/2.39
+  as with 0.3.3. After each upload a `smoke` job installs the release on Debian
+  12, Ubuntu 22.04 and 24.04 (install.sh) and from PyPI on Debian 11 (#172).
+- www.geisten.net/download/geistr/ keeps the last 5 releases: after a release
+  the `prune` job deletes older version folders, never `latest`, `install.sh` or
+  the new one. `make test` fails while README.md or install.sh name another
+  version than the current one (#148).
 
 ## 0.3.3
 
