@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Features
+
+- `geistr serve --http` without a model offers every installed model:
+  `/v1/models` and `/api/tags` list them (Open WebUI shows them all), and a
+  request's `model` chooses. Only one model is in memory: a request for
+  another one unloads the loaded model completely and loads the requested
+  one (qwen3-0.6b ⇄ gemma4-e2b: 0.5–0.7 s on an M1 Max, RSS steady over
+  20 switches), for small computers. Conversations are processed anew after
+  a switch. A model that is not installed gets 404; nothing is
+  downloaded. `geistr serve <model>` is unchanged (#195).
+
 ### Fixes
 
 - `geistr serve --http`: a request that names another model (`"model":

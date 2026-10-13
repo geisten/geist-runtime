@@ -1024,6 +1024,84 @@ def section_http():
     assert service.wait(30) == 0
     print('geistr serve --http: OpenAI (one answer, stream, usage, stop, length) and Ollama APIs, shared cache, Host check, 403/404/405/411/413, context, disconnect, tools and images refused passed')
 
+# ---- serve --http without a model: every installed one, one loaded (#195) ----
+def section_models():
+    import http.client, socket as unix
+    # two installed models (the reference under two names), one not installed
+    folder, listed = os.path.join(tmp, 'models-195'), os.path.join(tmp, 'catalog-195.json')
+    os.makedirs(folder, exist_ok=True)
+    for name in (ref_file, 'twin.gguf'):
+        if not os.path.exists(os.path.join(folder, name)):
+            link_or_copy(model_path, os.path.join(folder, name))
+    with open(listed, 'w') as f:
+        json.dump({**catalog, 'models': [catalog['models'][0], entry('twin', 'twin.gguf', sha(model_path), os.path.getsize(model_path)),
+                                         catalog['models'][1]]}, f)
+    assert geistr_run('serve').returncode == 2  # without a model only with --http
+    probe = unix.socket(); probe.bind(('127.0.0.1', 0)); port = probe.getsockname()[1]; probe.close()
+    sock = f'/tmp/geistr-models-{os.getpid()}.sock'
+    service = subprocess.Popen([geistr, 'serve', f'--socket={sock}', f'--http=127.0.0.1:{port}', '--cpu', '--models', folder,
+                                '--catalog', listed], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, env=env)
+    def call(method, path, body=None):
+        c = http.client.HTTPConnection('127.0.0.1', port, timeout=120)
+        c.request(method, path, body=json.dumps(body) if body is not None else None)
+        r = c.getresponse(); data = r.read().decode(); c.close()
+        return r.status, data
+    def rss():  # KiB
+        return int(subprocess.run(['ps', '-o', 'rss=', '-p', str(service.pid)], capture_output=True, text=True).stdout)
+    deadline = time.time() + 60
+    while True:
+        try:
+            if call('GET', '/')[0] == 200: break
+        except OSError:
+            pass
+        assert service.poll() is None and time.time() < deadline, service.stderr.read()
+        time.sleep(0.2)
+    try:
+        idle = rss()  # none loaded yet
+        s = unix.socket(unix.AF_UNIX); s.connect(sock); s.sendall(b'{"op":"info"}\n')
+        assert json.loads(s.makefile(encoding='utf-8').readline())['model'] == ''; s.close()
+        assert [m['id'] for m in json.loads(call('GET', '/v1/models')[1])['data']] == ['ref', 'twin']
+        assert [m['name'] for m in json.loads(call('GET', '/api/tags')[1])['models']] == ['ref', 'twin']
+        hi = {'messages': [{'role': 'user', 'content': 'Name a color.'}], 'max_tokens': 4, 'temperature': 0}
+        status, body = call('POST', '/v1/chat/completions', hi)  # no model, none loaded
+        assert status == 400 and '/v1/models' in body, (status, body)
+        for name in ('tiny', 'nope'):  # in the catalog, not installed; unknown: 404, nothing downloaded
+            status, body = call('POST', '/v1/chat/completions', {**hi, 'model': name})
+            assert status == 404 and 'model_not_found' in body and f"'{name}' is not installed here" in body, (status, body)
+            status, body = call('POST', '/api/chat', {**hi, 'model': name, 'stream': False})
+            assert status == 404 and f"model '{name}' not found" in body, (status, body)
+        assert not os.path.exists(os.path.join(folder, 'tiny.gguf'))
+        # the first request loads its model; another switches; both answer
+        status, body = call('POST', '/v1/chat/completions', {**hi, 'model': 'ref'})
+        first = json.loads(body)
+        assert status == 200 and first['model'] == 'ref' and first['choices'][0]['message']['content'], body
+        status, body = call('POST', '/api/chat', {'model': 'twin:latest', 'messages': hi['messages'], 'stream': False,
+                                                  'options': {'temperature': 0, 'num_predict': 4}})
+        assert status == 200 and json.loads(body)['model'] == 'twin' and json.loads(body)['message']['content'], body
+        assert call('POST', '/v1/chat/completions', hi)[0] == 200  # no model: the loaded one
+        # back to ref with its conversation resent: answered (processed anew), the same answer at temperature 0
+        turn = hi['messages'] + [{'role': 'assistant', 'content': first['choices'][0]['message']['content']},
+                                 {'role': 'user', 'content': 'Another one?'}]
+        status, body = call('POST', '/v1/chat/completions', {**hi, 'model': 'ref', 'messages': turn})
+        assert status == 200 and json.loads(body)['choices'][0]['message']['content'], body
+        status, body = call('POST', '/v1/chat/completions', {**hi, 'model': 'ref'})
+        assert json.loads(body)['choices'][0]['message']['content'] == first['choices'][0]['message']['content'], body
+        # memory: one model at a time, no growth over 20 switches
+        loaded = rss()
+        for k in range(20):
+            assert call('POST', '/v1/chat/completions', {**hi, 'model': ('twin', 'ref')[k % 2], 'max_tokens': 1})[0] == 200
+        after = rss()
+        size = os.path.getsize(model_path) // 1024
+        assert loaded - idle > size // 2, (idle, loaded, size)  # the model is in memory, once
+        assert after - loaded < size // 4, (loaded, after, size)  # not a second one, nor growth
+    finally:
+        service.send_signal(signal.SIGTERM)
+        assert service.wait(30) == 0
+    log = service.stderr.read()
+    assert 'every installed model' in log and 'twin loaded in place of ref in' in log, log
+    print(f'geistr serve --http without a model: list, 400/404, load on demand, switches both ways, resent conversation, '
+          f'RSS {idle // 1024} MiB idle, {loaded // 1024} loaded, {after // 1024} after 20 switches passed')
+
 # ---- embeddings (#91): only with GEISTR_TEST_EMBED_MODEL, BitNet-embedding 0.6B --
 def section_embed():
     import base64, http.client, socket as unix, struct

@@ -177,6 +177,7 @@ Open WebUI, editor plugins or the OpenAI SDK:
 
 ```sh
 geistr serve gemma4-e2b --http          # http://127.0.0.1:11434
+geistr serve --http                     # every installed model, one loaded at a time
 ```
 
 ```sh
@@ -196,6 +197,14 @@ In Open WebUI, add `http://127.0.0.1:11434` as an Ollama connection (or
 `…/v1` as OpenAI). Clients that resend the whole conversation pay only for
 what is new.
 
+Without a model, `geistr serve --http` offers every installed model (Open
+WebUI lists them) and the request's `model` chooses. It is built for small
+computers: only one model is in memory. A request for another model waits
+while the loaded one is unloaded completely and the requested one is loaded
+(qwen3-0.6b ⇄ gemma4-e2b: 0.5–0.7 s on an M1 Max's GPU; not yet measured on
+a Raspberry Pi 5); its conversations are then processed anew, which takes
+longer, but the answers are the same.
+
 <details>
 <summary>Endpoints, the socket, and security</summary>
 
@@ -203,10 +212,10 @@ what is new.
 |---|---|
 | `POST /v1/chat/completions` | OpenAI: `messages`, `temperature`, `max_tokens` / `max_completion_tokens`, `stop`, `stream` (SSE, `stream_options.include_usage`), `tools` / `tool_choice` |
 | `POST /v1/embeddings` | OpenAI: `input` (a text or a list), `encoding_format` (`float`, `base64`); with an embedding model |
-| `GET /v1/models` | the one model |
+| `GET /v1/models` | the model, or without one every installed model |
 | `POST /api/chat` | Ollama: `messages`, `stream` (NDJSON, default), `options.temperature`, `num_predict`, `stop`, `tools` |
 | `POST /api/embed` | Ollama: `input` (a text or a list); with an embedding model |
-| `GET /api/tags`, `/api/version`, `/` | the model, the version, a health check |
+| `GET /api/tags`, `/api/version`, `/` | the model(s), the version, a health check |
 
 There is no authentication. By default geistr listens on loopback only and
 answers only requests addressed to this computer (`Host` check, against DNS
@@ -239,9 +248,11 @@ before them, as `--files` does: on `scripts/retrieval-bench.py` (#157) that
 put the right file among the four nearest passages most often (97 %), ahead of
 an `Instruct: …\nQuery: ` task before the question (92 %) or `query: ` /
 `passage: ` (89–94 %). An embedding model does not chat, and a chat model does not
-embed (400). A service runs one model, the one in `/v1/models`; a request
-that names another gets 404 (`model_not_found`) instead of this model's answer.
-For a second model, start a second service on another port.
+embed (400). `geistr serve <model>` runs that one model, the one in
+`/v1/models`; a request that names another gets 404 (`model_not_found`)
+instead of this model's answer. `geistr serve --http` without a model loads
+the one a request names; one that is not installed gets 404 (a service
+downloads nothing: `geistr pull` it).
 
 Without `--http`, `geistr serve` listens on a Unix socket only (owner only,
 0600), and `geistr chat --socket` chats through it. `--chats N` sets how many
@@ -280,6 +291,7 @@ threads, `--models DIR` another model folder.
 | `geistr run <model> [prompt…]` | one answer to stdout; the prompt from stdin if none |
 | `geistr chat [<model>] [--new]` | interactive; without a model the last one |
 | `geistr serve <model> [--http[=ADDR:PORT]] [--socket=PATH] [--chats N] [--max-request=MiB]` | the model as a service |
+| `geistr serve --http[=ADDR:PORT] […]` | every installed model as a service, one loaded at a time |
 | `geistr chat --socket[=PATH]` | chat with that service |
 | `geistr config [key [value]]` | settings |
 | `geistr bench [model…]` | tokens/s on CPU and GPU (default: every installed model) |
