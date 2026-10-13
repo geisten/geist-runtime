@@ -39,8 +39,9 @@ static bool write_all(int fd, const char *s, size_t n) {
 }
 
 /* One line (without '\n') into a malloc'd string; nullptr at EOF or longer
- * than max. What follows the '\n' is dropped: one line per connection. */
-static char *read_line(int fd, size_t max) {
+ * than max (then *over, if given). What follows the '\n' is dropped: one line
+ * per connection. */
+static char *read_line(int fd, size_t max, bool *over) {
     char    buf[4096], *line = nullptr, *nl = nullptr;
     size_t  len = 0, got = 0;
     FILE   *m = open_memstream(&line, &len);
@@ -54,6 +55,8 @@ static char *read_line(int fd, size_t max) {
     if (m)
         fclose(m);
     if (got > max || (!nl && !got)) { /* too long, or nothing before the end */
+        if (over)
+            *over = got > max;
         free(line);
         return nullptr;
     }
@@ -166,6 +169,16 @@ const char *svc_finish(geistr_finish finish) {
     return finish < sizeof names / sizeof *names ? names[finish] : "error";
 }
 
+/* The conversations' chats (their caches belong to the model), then the
+ * model: its memory goes back before another is loaded (#195). */
+void svc_unload(struct svc_options *o, struct held *pool) {
+    for (size_t i = 0; pool && i < o->chats; i++)
+        if (pool[i].chat)
+            held_close(&pool[i]);
+    if (o->model)
+        (void) o->load(o, nullptr);
+}
+
 void svc_free_request(struct svc_request *r) {
     for (size_t i = 0; r->messages && i < r->n; i++)
         free((char *) r->messages[i].role), free((char *) r->messages[i].content);
@@ -212,6 +225,10 @@ void svc_chat(const struct svc_options *o, struct held *pool, const struct svc_r
     size_t                n = r->n;
     if (!n || !(r->temperature >= 0 && r->temperature <= 2)) {
         out->error(out->ctx, GEISTR_INVALID, "at least one message; temperature 0 to 2");
+        return;
+    }
+    if (!o->model) { /* a service of every model, none loaded yet (#195) */
+        out->error(out->ctx, GEISTR_INVALID, "no model is loaded: an HTTP request that names one loads it");
         return;
     }
     if (o->embedding) {
@@ -378,14 +395,15 @@ static void chat_request(const struct svc_options *o, struct held *pool, FILE *o
 
 static void info_request(const struct svc_options *o, FILE *out) {
     geistr_model_info i = {.size = sizeof i};
-    (void) geistr_model_info_get(o->model, &i);
+    if (o->model)
+        (void) geistr_model_info_get(o->model, &i);
     fputs("{\"model\":", out), json_write(out, o->name);
     fputs(",\"backend\":", out), json_write(out, i.backend ? i.backend : "cpu");
     fputs(",\"chat_format\":", out), json_write(out, i.chat_format ? i.chat_format : "");
     fprintf(out, ",\"context\":%u,\"chats\":%zu}\n", i.context, o->chats);
 }
 
-int service_run(const struct svc_options *o) {
+int service_run(struct svc_options *o) {
     struct sockaddr_un a;
     if (!address(o->socket, &a)) {
         fprintf(stderr, "geistr: socket path too long: %s\n", o->socket);
@@ -416,8 +434,9 @@ int service_run(const struct svc_options *o) {
     }
     signal(SIGPIPE, SIG_IGN); /* a vanished client is a failed write, not the end */
     struct held *pool = calloc(o->chats, sizeof *pool);
-    fprintf(stderr, "geistr: serving %s on %s%s%s (%zu conversations)\n", o->name, o->socket,
-            o->http ? " and http://" : "", o->http ? o->http : "", o->chats);
+    fprintf(stderr, "geistr: serving %s on %s%s%s (%zu conversations)\n",
+            o->installed ? "every installed model, one at a time," : o->name, o->socket, o->http ? " and http://" : "",
+            o->http ? o->http : "", o->chats);
     while (pool && !*o->stop) {
         struct pollfd in[2] = {{.fd = fd, .events = POLLIN}, {.fd = web, .events = POLLIN}};
         if (poll(in, web >= 0 ? 2 : 1, 200) <= 0)
@@ -437,12 +456,18 @@ int service_run(const struct svc_options *o) {
             http_serve(o, pool, client, loopback);
             continue;
         }
-        char       *request = read_line(client, o->max_request);
+        bool        over    = false;
+        char       *request = read_line(client, o->max_request, &over);
         FILE       *out     = fdopen(client, "w"); /* closes client */
         struct json j       = {};
         if (!out)
             close(client);
-        else if (!request || !json_parse(&j, request, strlen(request)))
+        else if (over) { /* as HTTP's 413 says it (#207) */
+            char why[96];
+            snprintf(why, sizeof why, "the request is over the limit of %zu MiB (geistr serve --max-request=MiB)",
+                     o->max_request >> 20);
+            reply_error(out, "too_large", why);
+        } else if (!request || !json_parse(&j, request, strlen(request)))
             reply_error(out, "invalid", "one JSON object per line");
         else {
             char *op = json_string(&j, json_field(&j, 0, "op"));
@@ -477,7 +502,7 @@ geistr_status service_info(const char *path, char *out, size_t cap) {
     int fd = dial(path);
     if (fd < 0)
         return GEISTR_IO;
-    char *line = write_all(fd, "{\"op\":\"info\"}\n", 14) ? read_line(fd, 1 << 16) : nullptr;
+    char *line = write_all(fd, "{\"op\":\"info\"}\n", 14) ? read_line(fd, 1 << 16, nullptr) : nullptr;
     close(fd);
     if (!line)
         return GEISTR_IO;
@@ -551,9 +576,9 @@ geistr_status service_chat(const char *path, size_t n, const geistr_message *m, 
                     char *finish = json_string(&j, json_field(&j, 0, "finish"));
                     snprintf(stats->finish, sizeof stats->finish, "%s", finish ? finish : "");
                     free(finish);
-                    stats->input_tokens   = (unsigned) json_number(&j, json_field(&j, 0, "input_tokens"), 0);
-                    stats->context_tokens = (unsigned) json_number(&j, json_field(&j, 0, "context_tokens"), 0);
-                    stats->output_tokens  = (unsigned) json_number(&j, json_field(&j, 0, "output_tokens"), 0);
+                    stats->input_tokens   = json_unsigned(&j, json_field(&j, 0, "input_tokens"), 0);
+                    stats->context_tokens = json_unsigned(&j, json_field(&j, 0, "context_tokens"), 0);
+                    stats->output_tokens  = json_unsigned(&j, json_field(&j, 0, "output_tokens"), 0);
                     stats->prefill_ms     = json_number(&j, json_field(&j, 0, "prefill_ms"), -1);
                     stats->generation_ms  = json_number(&j, json_field(&j, 0, "generation_ms"), -1);
                     stats->total_ms       = json_number(&j, json_field(&j, 0, "total_ms"), -1);

@@ -346,7 +346,8 @@ says when only part is read again (`resumes the last 12`), and when the last
 answer was stopped or cut off.
 
 - Each conversation is a file in `chats/` in the data folder, one JSON
-  message per line, written after every answer, readable only by you.
+  message per line, written after every answer and when `/system` changes it,
+  readable only by you.
 - When you continue one, the next answer writes it to a new file and removes
   the old one: there is one current conversation.
 - `/clear` and `geistr chat --new` start a new conversation; the old file
@@ -461,11 +462,28 @@ socket, and with `--http` over the OpenAI and Ollama APIs.
 ```sh
 geistr serve gemma4-e2b --http          # socket and http://127.0.0.1:11434
 geistr serve gemma4-e2b                 # the socket only
+geistr serve --http                     # every installed model, one loaded at a time
 ```
 
 It prints `geistr: serving gemma4-e2b on …/geistr.sock and
 http://127.0.0.1:11434 (2 conversations)` and runs until Ctrl-C or SIGTERM;
 then it removes the socket and prints `geistr: service stopped`.
+
+**Every installed model.** Without a model, `geistr serve --http` starts
+with none loaded and lists every installed model (chat and embedding models)
+in `/v1/models` and `/api/tags`, so Open WebUI and other clients offer them
+all. A request's `model` (its id, or `id:latest`) chooses: the first request
+loads its model; a request for another one waits while the loaded model is
+unloaded completely (its memory goes back) and the requested one is loaded,
+then it is answered. It prints `geistr: qwen3-0.6b loaded in place of
+gemma4-e2b in 0.5 s`. Only one model is in memory, so it runs where two would
+not fit (8 GB, a Raspberry Pi 5). The conversations' caches belong to the
+model and go with it: a conversation that comes back after a switch is
+processed anew, which takes longer, but the answers are the same. A request
+without a model goes to the loaded one (400 while none is). A model that is
+not installed, or not in the catalog, gets 404; a service downloads nothing.
+Models installed while it runs are offered at once. The socket protocol
+(below) uses whatever model is loaded.
 
 | option | does |
 |---|---|
@@ -493,17 +511,19 @@ print(reply.choices[0].message.content)
 
 In Open WebUI, add `http://127.0.0.1:11434` as an Ollama connection, or
 `http://127.0.0.1:11434/v1` as an OpenAI one. Editor plugins and other tools
-that speak either API work the same way. The `model` field of a request is
-ignored: the service has one model.
+that speak either API work the same way. `geistr serve <model>` answers
+only for its model: its id, `id:latest`, the path or file name it was
+started with, or no `model` at all; another name gets 404
+(`model_not_found`). Without a model the request's `model` chooses (above).
 
 | endpoint | |
 |---|---|
 | `POST /v1/chat/completions` | OpenAI: `messages`, `temperature`, `max_tokens` / `max_completion_tokens`, `stop`, `stream` (SSE, `stream_options.include_usage`), `tools` / `tool_choice` |
 | `POST /v1/embeddings` | OpenAI: `input` (a text or a list), `encoding_format` (`float`, `base64`); with an embedding model |
-| `GET /v1/models` | the one model |
+| `GET /v1/models` | the model, or without one every installed model |
 | `POST /api/chat` | Ollama: `messages`, `stream` (NDJSON, the default), `options.temperature`, `options.num_predict`, `options.stop`, `tools`, `images` |
 | `POST /api/embed` | Ollama: `input` (a text or a list); with an embedding model |
-| `GET /api/tags` | the model |
+| `GET /api/tags` | the same as Ollama's list |
 | `GET /api/version` | the geistr version |
 | `GET /` | `geistr is running (OpenAI and Ollama APIs)` |
 
@@ -542,7 +562,8 @@ documents. An embedding model does not chat and a chat model does not embed
 **Errors** come as JSON in each API's format: 400 for a bad request, a
 conversation larger than the context (OpenAI code
 `context_length_exceeded`), a model that cannot do tools or images; 403 for
-the checks below; 404 for an unknown path; 405 for a wrong method; 413 for a
+the checks below; 404 for an unknown path or a model that is not served or
+not installed (OpenAI code `model_not_found`); 405 for a wrong method; 413 for a
 request over `--max-request` (it names the flag and the limit); 500 when the
 engine fails.
 

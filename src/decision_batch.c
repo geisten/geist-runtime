@@ -78,7 +78,9 @@ geistr_status decision_batch_cut(struct decision_batch *b, size_t chunk, const s
     if (index == SIZE_MAX)
         snprintf(b->error, sizeof b->error, "decision batch: %s", what);
     else
-        snprintf(b->error, sizeof b->error, "decision batch: question %zu%s%s%s: %s", index,
+        /* bounded parts: at most 25 + 20 + 2 + 64 + 1 + 2 + 120 = 234 bytes, so GCC's
+         * -Wformat-truncation sees it fits the 256-byte error (a long ID is cut, not the format) */
+        snprintf(b->error, sizeof b->error, "decision batch: question %zu%s%.64s%s: %.120s", index,
                  r->failed_id[0] ? " (" : "", r->failed_id, r->failed_id[0] ? ")" : "", what);
     return status;
 }

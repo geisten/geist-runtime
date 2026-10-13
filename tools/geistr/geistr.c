@@ -12,6 +12,7 @@
  *   geistr bench --compare [A [B]]   two engines' bench speeds side by side, the change in %
  *   geistr serve <model> [--socket=PATH] [--chats N] [--http[=ADDR:PORT]] [--max-request=MiB]
  *                                    the model as a service on a Unix socket (service.h)
+ *   geistr serve --http[=ADDR:PORT] …  every installed model, the one a request names loaded
  *   geistr chat --socket[=PATH]      chat with that service
  *   geistr decide <model> --config FILE --question TEXT --option ID DESC…
  *                                    fixed-option scoring (EXPERIMENTAL, default-off; docs/DECISIONS.md)
@@ -42,6 +43,7 @@
 #include "cli.h"
 #include "files.h"
 #include "decide.h"
+#include "lineedit.h"
 
 #include <time.h>
 #include <locale.h>
@@ -103,6 +105,8 @@ static int usage(void) {
           "       geistr serve <model> [--socket=PATH] [--chats N] [--http[=ADDR:PORT]] [--max-request=MiB]\n"
           "                                       (--http: OpenAI and Ollama APIs, default 127.0.0.1:11434;\n"
           "                                        --max-request: one request's size, default 16 MiB, larger: 413)\n"
+          "       geistr serve --http[=ADDR:PORT] [...]  every installed model; a request's model is loaded\n"
+          "                                       in place of the one before (one in memory)\n"
           "       geistr chat --socket[=PATH]\n"
           "       geistr decide <model> --config FILE --question TEXT --option ID DESC [--option ID DESC…]\n"
           "decision: --question-file FILE|-  --context TEXT  --processor auto|cpu|gpu\n"
@@ -326,6 +330,24 @@ static int catalog(bool installed_only, bool available_only, bool json) {
     return OK;
 }
 
+/* In a terminal, a model that is not installed (or outdated, damaged) is
+ * offered for download, in the list style of the first run; true when it is
+ * there now. Without a terminal nothing is downloaded unasked (#191). */
+static bool offer_download(const geistr_catalog_entry *m, geistr_install state) {
+    if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO))
+        return false;
+    char size[16], row[160];
+    snprintf(row, sizeof row, "Download %s (%s)", m->id, size_text(m->bytes, size));
+    printf("%s %s. (Enter · Ctrl-C twice cancels)\n", m->id,
+           state == GEISTR_INSTALL_MISSING   ? "is not installed"
+           : state == GEISTR_INSTALL_CORRUPT ? "is damaged (its checksum differs from the catalog's)"
+                                             : "is not this catalog's file");
+    const char *const rows[] = {row};
+    if (le_pick_read(stdout, rows, 1, 0) < 0)
+        return false;
+    return geistr_pull(m, models_dir) == OK && geistr_pull_vision(m, models_dir) == OK;
+}
+
 /* A catalog id → its verified file; a path stays a path. */
 int resolve(const char *model, char *path, size_t cap, geistr_reasoning *reasoning, int *embedding) {
     geistr_catalog *c   = load_catalog();
@@ -349,6 +371,8 @@ int resolve(const char *model, char *path, size_t cap, geistr_reasoning *reasoni
                 geistr_catalog_free(c);
                 return ERROR;
             }
+            if (state != GEISTR_INSTALL_OK && offer_download(m, state))
+                state = install_state(m, true);
             if (state != GEISTR_INSTALL_OK) {
                 fprintf(stderr,
                         state == GEISTR_INSTALL_MISSING ? "geistr: %s is not installed; geistr pull %s\n"
@@ -460,21 +484,72 @@ static void on_stop(int signal) {
     stopping = 1;
 }
 
+/* geistr serve without a model (#195): the installed models a request may
+ * name (chat and embedding models; a reranker does not serve). Unverified
+ * ones count: loading one verifies it. */
+static size_t serve_installed(char (*ids)[64], size_t cap) {
+    geistr_catalog *c = load_catalog();
+    size_t          n = 0;
+    for (size_t i = 0; c && i < geistr_catalog_count(c) && n < cap; i++) {
+        const geistr_catalog_entry *m     = geistr_catalog_get(c, i);
+        geistr_install              state = GEISTR_INSTALL_MISSING;
+        if (m->embedding != 2 && geistr_catalog_check(m, models_dir, false, &state) == GEISTR_OK &&
+            (state == GEISTR_INSTALL_OK || state == GEISTR_INSTALL_UNVERIFIED))
+            snprintf(ids[n++], sizeof *ids, "%s", m->id);
+    }
+    geistr_catalog_free(c);
+    return n;
+}
+
+static struct session served;     /* the model loaded now */
+static const char    *serve_processor;
+
+/* The loaded model closed (its chats are), then id opened unless nullptr.
+ * The log names the switch and its time, unload and load. */
+static bool serve_load(struct svc_options *o, const char *id) {
+    static char            before[256]; /* the model unloaded for the next, since t0 */
+    static struct timespec t0;
+    if (served.model || !before[0])
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+    if (served.model)
+        snprintf(before, sizeof before, "%s", served.name);
+    session_close(&served);
+    o->model = nullptr, o->name = "", o->embedding = false;
+    if (!id)
+        return true;
+    bool opened = session_open(&served, id, serve_processor, 0, true) == OK;
+    if (opened) {
+        geistr_chat_close(served.chat); /* the service opens its own */
+        served.chat = nullptr;
+        o->model = served.model, o->reasoning = served.reasoning, o->name = served.name, o->embedding = served.embedding;
+        struct timespec t1;
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        fprintf(stderr, "geistr: %s loaded%s%s in %.1f s\n", id, before[0] ? " in place of " : "", before,
+                (double) (t1.tv_sec - t0.tv_sec) + (double) (t1.tv_nsec - t0.tv_nsec) / 1e9);
+    }
+    before[0] = 0;
+    return opened;
+}
+
+/* name: one model; nullptr: every installed one, one loaded at a time (#195). */
 static int serve(const char *name, const char *processor, const char *socket, const char *http, size_t chats,
                  size_t max_request) {
-    struct session x;
-    serving = true; /* an embedding model too (#91) */
-    int rc  = session_open(&x, name, processor, 0, true);
+    serving         = true; /* an embedding model too (#91) */
+    serve_processor = processor;
+    int rc          = name ? session_open(&served, name, processor, 0, true) : OK;
     if (rc != OK)
         return rc;
-    geistr_chat_close(x.chat); /* the service opens its own */
+    geistr_chat_close(served.chat); /* the service opens its own */
+    served.chat = nullptr;
     struct sigaction sa = {.sa_handler = on_stop};
     sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
-    struct svc_options o = {.model = x.model, .reasoning = x.reasoning, .name = x.name, .socket = socket,
-                            .http = http, .chats = chats, .max_request = max_request, .stop = &stopping, .embedding = x.embedding};
+    struct svc_options o = {.model = served.model, .reasoning = served.reasoning, .name = served.name, .socket = socket,
+                            .http = http, .chats = chats, .max_request = max_request, .stop = &stopping,
+                            .embedding = served.embedding, .installed = name ? nullptr : serve_installed,
+                            .load = name ? nullptr : serve_load};
     rc = service_run(&o) ? ERROR : OK;
-    geistr_model_close(x.model);
+    session_close(&served);
     return rc;
 }
 
@@ -529,60 +604,113 @@ static int pull(const char *id) {
 /* geistr chat with nothing installed (#89): the recommended model for this
  * computer, and in a terminal the offer to download it and start. Piped,
  * nothing is downloaded. 0 when nothing could be recommended. */
+/* What the ranking says about a model, for the choice (#189). */
+static const char *fit_text(const geistr_fit *f) {
+    static const char *const why[][2] = {{"good", "good and fast here"},
+                                         {"slow", "works here, slowly"},
+                                         {"tight_memory", "fits, little memory to spare"},
+                                         {"speed_unknown", "speed not known yet"},
+                                         {"quality_unknown", "quality not known yet"},
+                                         {"unreliable", "often wrong in our tests"},
+                                         {"probably_too_slow", "probably too slow here"},
+                                         {"too_slow", "too slow here"}};
+    static char text[96];
+    const bool  unknown = !strcmp(f->reason, "speed_unknown") || !strcmp(f->reason, "quality_unknown");
+    const char *said    = f->reason;
+    for (size_t i = 0; i < sizeof why / sizeof *why; i++)
+        if (!strcmp(f->reason, why[i][0]))
+            said = why[i][1];
+    if (!unknown) /* the others say how it fits already */
+        return said;
+    snprintf(text, sizeof text, "%s; %s", f->resource == GEISTR_RESOURCE_FITS ? "fits" : "tight on memory", said);
+    return text;
+}
+
+/* geistr chat with no model given and none saved (#89, #189). Nothing
+ * installed: the models that can run here, the suggestion first, to choose
+ * one to download (in a terminal), or the suggestion's pull command. Models
+ * installed: the only one is used; of several, one is chosen (in a
+ * terminal), or they are named. */
 static int first_run(const char *processor, bool fresh) {
-    geistr_catalog *c = load_catalog();
-    size_t          n = c ? geistr_catalog_count(c) : 0;
+    geistr_catalog *c     = load_catalog();
+    size_t          n     = c ? geistr_catalog_count(c) : 0;
     geistr_local   *local = calloc(n ? n : 1, sizeof *local);
-    bool            any   = false;
+    size_t          have  = 0;
     for (size_t i = 0; local && i < n; i++) {
-        local[i] = (geistr_local) {.size = sizeof *local,
-                                   .installed = install_state(geistr_catalog_get(c, i), false) == GEISTR_INSTALL_OK};
-        any |= local[i].installed;
+        const geistr_catalog_entry *m = geistr_catalog_get(c, i);
+        local[i] = (geistr_local) {.size = sizeof *local, .installed = install_state(m, false) == GEISTR_INSTALL_OK};
+        have += local[i].installed && !m->embedding;
     }
     geistr_device     d    = {};
     geistr_ranking   *r    = nullptr;
-    const geistr_fit *best = !any && local && geistr_device_probe(models_dir, &d) == GEISTR_OK &&
-                                             geistr_rank(c, &d, local, nullptr, &r) == GEISTR_OK
-                                     ? geistr_ranking_best(r)
-                                     : nullptr;
-    int rc = 0;
-    if (best) {
-        static char id[128];
-        char        size[16];
-        snprintf(id, sizeof id, "%s", best->entry->id);
-        bool quant = best->entry->quantization && !strstr(best->entry->name, best->entry->quantization);
-        static const char *const why[][2] = {{"good", "good and fast enough here"}, {"slow", "works here, slowly"},
-                                             {"tight_memory", "fits, with little memory to spare"},
-                                             {"speed_unknown", "fits; speed not known yet"},
-                                             {"quality_unknown", "fits; quality not known yet"}};
-        const char *reason = best->reason;
-        for (size_t i = 0; i < sizeof why / sizeof *why; i++)
-            if (!strcmp(best->reason, why[i][0]))
-                reason = why[i][1];
-        printf("No model yet. For this computer: %s (%s%s%s): %s\n", id, best->entry->name, quant ? " · " : "",
-               quant ? best->entry->quantization : "", reason);
-        if (isatty(STDIN_FILENO) && isatty(STDOUT_FILENO)) {
-            printf("Download it now, %s? [Y/n] ", size_text(best->entry->bytes, size));
-            fflush(stdout);
-            char answer[16] = "";
-            bool yes        = fgets(answer, sizeof answer, stdin) && strchr("yY\n", answer[0]);
-            rc              = !yes ? USAGE : geistr_pull(best->entry, models_dir);
-            if (rc == OK)
-                rc = geistr_pull_vision(best->entry, models_dir);
-            if (!yes)
-                printf("Later: geistr pull %s, then geistr chat %s\n", id, id);
-            if (rc == OK) {
-                geistr_ranking_free(r), free(local), geistr_catalog_free(c);
-                return chat(id, processor, nullptr, fresh);
+    const geistr_fit *best = local && geistr_device_probe(models_dir, &d) == GEISTR_OK &&
+                                     geistr_rank(c, &d, local, nullptr, &r) == GEISTR_OK
+                                 ? geistr_ranking_best(r)
+                                 : nullptr;
+    const bool terminal = isatty(STDIN_FILENO) && isatty(STDOUT_FILENO);
+    /* The candidates: installed chat models (have > 0), else those that can run here; the best first. */
+    size_t             k    = r ? geistr_ranking_count(r) : 0, count = 0;
+    const geistr_fit **pick = calloc(k + 1, sizeof *pick);
+    char             **rows = calloc(k + 2, sizeof *rows);
+    for (size_t pass = 0; pick && rows && pass < 2; pass++)
+        for (size_t i = 0; i < k; i++) {
+            const geistr_fit *f = geistr_ranking_get(r, i);
+            bool ok = !f->entry->embedding && (have ? f->installed : f->resource != GEISTR_RESOURCE_UNAVAILABLE);
+            if (ok && (pass == 0) == (f == best)) {
+                char size[16];
+                if ((rows[count] = malloc(256)))
+                    snprintf(rows[count], 256, "%-18s %8s  %s%s", f->entry->id, size_text(f->entry->bytes, size),
+                             fit_text(f), f == best && !have ? ", suggested for this computer" : "");
+                pick[count++] = f;
+            }
+        }
+    int  rc    = USAGE;
+    long taken = -1;
+    if (have == 1 && count == 1) /* the only model: use it */
+        taken = 0;
+    else if (have && count) {
+        if (terminal) {
+            printf("Which model? (↑↓, Enter · Ctrl-C twice cancels)\n");
+            taken = le_pick_read(stdout, (const char *const *) rows, count, 0);
+            rc    = taken < 0 ? CANCELLED : rc;
+        } else {
+            fputs("geistr: which model? installed:", stderr);
+            for (size_t i = 0; i < count; i++)
+                fprintf(stderr, "%s %s", i ? "," : "", pick[i]->entry->id);
+            fputs(" (geistr chat <model>)\n", stderr);
+        }
+    } else if (best && count) {
+        char size[16];
+        if (terminal) {
+            printf("No model yet. Choose one to download (↑↓, Enter · Ctrl-C twice cancels):\n");
+            taken = le_pick_read(stdout, (const char *const *) rows, count, 0);
+            if (taken < 0) { /* cancelled: how to do it later */
+                printf("Later: geistr pull %s, then geistr chat %s\n", best->entry->id, best->entry->id);
+                rc = CANCELLED;
+            } else {
+                rc = geistr_pull(pick[taken]->entry, models_dir);
+                if (rc == OK)
+                    rc = geistr_pull_vision(pick[taken]->entry, models_dir);
+                taken = rc == OK ? taken : -1;
             }
         } else {
-            printf("To download it: geistr pull %s (%s), then geistr chat %s\n", id, size_text(best->entry->bytes, size), id);
-            rc = USAGE;
+            printf("No model yet. For this computer: %s (%s): %s\n", best->entry->id, best->entry->name, fit_text(best));
+            printf("To download it: geistr pull %s (%s), then geistr chat %s\n", best->entry->id,
+                   size_text(best->entry->bytes, size), best->entry->id);
         }
+    } else
+        fputs("geistr: which model? geistr chat <model> (see geistr catalog)\n", stderr);
+    if (taken >= 0) {
+        static char id[128];
+        snprintf(id, sizeof id, "%s", pick[taken]->entry->id);
+        for (size_t i = 0; rows && i <= count; i++)
+            free(rows[i]);
+        free(rows), free(pick), geistr_ranking_free(r), free(local), geistr_catalog_free(c);
+        return chat(id, processor, nullptr, fresh);
     }
-    geistr_ranking_free(r);
-    free(local);
-    geistr_catalog_free(c);
+    for (size_t i = 0; rows && i <= count; i++)
+        free(rows[i]);
+    free(rows), free(pick), geistr_ranking_free(r), free(local), geistr_catalog_free(c);
     return rc;
 }
 
@@ -744,6 +872,8 @@ int main(int argc, char **argv) {
     }
     if (!strcmp(command, "serve") && n == 2)
         return serve(args[1], processor, socket, http, (size_t) chats, (size_t) max_request << 20);
+    if (!strcmp(command, "serve") && n == 1 && http) /* every installed model (#195) */
+        return serve(nullptr, processor, socket, http, (size_t) chats, (size_t) max_request << 20);
     if (!strcmp(command, "chat") && socket)
         return n == 1 ? chat("", processor, socket, fresh) : usage();
     if (!strcmp(command, "chat") && n == 1) { /* the last model, else the geisten app's */
@@ -756,13 +886,8 @@ int main(int argc, char **argv) {
         if (f)
             fclose(f);
         const char *model = cfg.model[0] ? cfg.model : selected;
-        if (!model[0]) {
-            int offered = first_run(processor, fresh);
-            if (offered)
-                return offered;
-            fputs("geistr: which model? geistr chat <model> (see geistr catalog)\n", stderr);
-            return USAGE;
-        }
+        if (!model[0])
+            return first_run(processor, fresh);
         return chat(model, processor, nullptr, fresh);
     }
     if (!strcmp(command, "chat") && n == 2)

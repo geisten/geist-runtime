@@ -6,12 +6,14 @@
 #include "json.h"
 #include <curl/curl.h>
 #include <errno.h>
+#include <stdckdint.h>
 #include <stdint.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <unistd.h>
 
 static volatile sig_atomic_t stop;
@@ -23,14 +25,19 @@ static void on_pull_interrupt(int signal) {
 struct sink {
     FILE    *file;
     uint64_t offset, bytes, limit;
-    bool     over; /* the file is larger than the catalog says */
+    bool     over;  /* the file is larger than the catalog says */
+    int      error; /* errno of a failed write: a full disk, not the network (#206) */
 };
 
 static size_t on_data(char *data, size_t size, size_t count, void *context) {
     struct sink *s = context;
     size_t       n = size * count;
-    if ((s->over = n > s->limit - s->bytes) || fwrite(data, 1, n, s->file) != n)
+    if ((s->over = n > s->limit - s->bytes))
         return 0;
+    if (fwrite(data, 1, n, s->file) != n) {
+        s->error = errno ? errno : EIO;
+        return 0;
+    }
     s->bytes += n;
     return n;
 }
@@ -72,6 +79,29 @@ static void easy_setup(CURL *curl, const char *url) {
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
 }
 
+/* Bytes free in dir for an unprivileged user; UINT64_MAX when unknown. */
+static uint64_t free_bytes(const char *dir) {
+    struct statvfs disk;
+    uint64_t       n;
+#ifdef GEISTR_TESTING
+    if (getenv("GEISTR_TEST_FREE_BYTES")) /* a full disk without filling one */
+        return strtoull(getenv("GEISTR_TEST_FREE_BYTES"), nullptr, 10);
+#endif
+    return statvfs(dir, &disk) == 0 && !ckd_mul(&n, (uint64_t) disk.f_bavail, (uint64_t) disk.f_frsize) ? n : UINT64_MAX;
+}
+
+/* A write into the models folder failed: a full disk is named as such, and
+ * resuming would only fail the same way, so no hint to resume (#206). */
+static void write_failed(const geistr_catalog_entry *m, const char *dir, const char *part, int error, uint64_t need) {
+    if (error == ENOSPC || error == EDQUOT) {
+        uint64_t left = free_bytes(dir);
+        fprintf(stderr, "geistr: no space left in %s (%s needs %ju MB%s, %ju MB free); free some space or use --models\n",
+                dir, m->id, (uintmax_t) ((need + 999999) / 1000000), need < m->bytes ? " more" : "",
+                (uintmax_t) (left == UINT64_MAX ? 0 : left / 1000000));
+    } else
+        fprintf(stderr, "geistr: cannot write %s: %s\n", part, strerror(error));
+}
+
 /* A catalog URL, or in the test build under GEISTR_TEST_URL_BASE. */
 static void source_url(const char *catalog_url, char *url, size_t cap) {
     snprintf(url, cap, "%s", catalog_url);
@@ -100,6 +130,13 @@ int geistr_pull(const geistr_catalog_entry *m, const char *dir) {
         return 1;
     }
     struct sink s = {.file = file, .offset = (uint64_t) st.st_size, .bytes = (uint64_t) st.st_size, .limit = m->bytes};
+    if (free_bytes(dir) < m->bytes - s.bytes) { /* known before the download (#206) */
+        write_failed(m, dir, part, ENOSPC, m->bytes - s.bytes);
+        fclose(file);
+        if (!s.bytes) /* the empty part made here */
+            unlink(part);
+        return 1;
+    }
     struct sigaction sa = {.sa_handler = on_pull_interrupt};
     sigaction(SIGINT, &sa, nullptr);
     bool ok = s.bytes == m->bytes;
@@ -134,7 +171,9 @@ int geistr_pull(const geistr_catalog_entry *m, const char *dir) {
         /* Complete but of another size (the catalog is behind the file):
          * resuming cannot help, so the part goes. */
         const bool sized = !stop && ((rc == CURLE_OK && s.bytes != m->bytes) || s.over);
-        if (sized) {
+        if (s.error && !stop)
+            write_failed(m, dir, part, s.error, m->bytes - s.bytes);
+        else if (sized) {
             fprintf(stderr, "geistr: %s is %s %ju bytes the catalog gives; removed, the catalog may be out of date (geistr pull)\n",
                     m->id, s.over ? "larger than the" : "smaller than the", (uintmax_t) m->bytes);
             unlink(part);
@@ -144,10 +183,13 @@ int geistr_pull(const geistr_catalog_entry *m, const char *dir) {
         curl_easy_cleanup(curl);
         curl_global_cleanup();
     }
-    if (fflush(file) != 0 || fsync(fileno(file)) != 0)
-        ok = false;
-    if (fclose(file) != 0)
-        ok = false;
+    bool written = fflush(file) == 0 && fsync(fileno(file)) == 0; /* the last bytes, written now */
+    int  error   = errno;
+    if (fclose(file) != 0 && written)
+        written = false, error = errno;
+    if (!written && ok)
+        write_failed(m, dir, part, error, m->bytes - s.offset);
+    ok = ok && written;
     if (!ok)
         return stop ? 130 : 1;
     /* Verified under its final name: one hash, which also leaves the receipt.
@@ -305,12 +347,13 @@ int geistr_pull_vision(const geistr_catalog_entry *m, const char *dir) {
             continue;
         int    v       = i + 1, offsets = json_field(&j, v, "data_offsets");
         int    a       = json_next(&j, offsets, -1), b = json_next(&j, offsets, a);
-        struct tensor x = {.name = key, .n_name = kn,
-                           .from = (uint64_t) json_number(&j, a, -1), .to = (uint64_t) json_number(&j, b, -1)};
+        struct tensor x = {.name = key, .n_name = kn};
         x.dtype = json_raw(&j, json_field(&j, v, "dtype"), &x.n_dtype);
         x.shape = json_raw(&j, json_field(&j, v, "shape"), &x.n_shape);
-        if (!x.dtype || !x.shape || a < 0 || b < 0 || x.to < x.from)
+        if (!x.dtype || !x.shape || !json_offset(&j, a, &x.from) || !json_offset(&j, b, &x.to) || x.to < x.from) {
+            fprintf(stderr, "geistr: vision tower: bad tensor %.*s in %s\n", (int) kn, key, m->vision_url);
             goto done;
+        }
         t[count++] = x, total += x.to - x.from;
     }
     if (!count) {

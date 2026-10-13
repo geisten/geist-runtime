@@ -20,6 +20,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
             free(json_string(&j, t));
             (void) json_number(&j, t, 0);
             (void) json_unsigned(&j, t, 0);
+            uint64_t offset;
+            (void) json_offset(&j, t, &offset);
             (void) json_bool(&j, t, false);
             (void) json_parent(&j, t);
             size_t      len = 0;

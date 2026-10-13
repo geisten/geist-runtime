@@ -178,6 +178,58 @@ static bool origin_allowed(const char *origin) {
            host_is_loopback(host + 3);
 }
 
+/* Is the model a request names the one this service runs (#193)? No name
+ * or an empty one: yes. Else its id, with Ollama's ":latest", or the path or
+ * file name it was started with. A request for another model is refused,
+ * not answered by this one. */
+static bool serves(const char *wanted, const char *name) {
+    if (!wanted || !wanted[0])
+        return true;
+    const size_t n    = strlen(wanted);
+    const bool   tag  = n > 7 && !strcmp(wanted + n - 7, ":latest");
+    const size_t core = tag ? n - 7 : n;
+    const char  *base = strrchr(name, '/') ? strrchr(name, '/') + 1 : name;
+    return (strlen(name) == core && !strncmp(wanted, name, core)) || (strlen(base) == core && !strncmp(wanted, base, core));
+}
+
+#define MODELS_MAX 256
+
+/* The model for a request: 0, or the HTTP status of the refusal (why: its
+ * text). A service of one model answers only for it (#193). A service of
+ * every installed model (#195) loads the one the request names in place of
+ * the one before, unless it is that one; no name: the loaded one. A model
+ * that is not installed is refused; a service downloads nothing. */
+static int choose(struct svc_options *o, struct held *pool, const char *wanted, bool openai, char *why, size_t cap) {
+    if (!o->installed) {
+        if (serves(wanted, o->name))
+            return 0;
+        snprintf(why, cap, openai ? "model '%.200s' is not served here (this service: %.200s)" : "model '%.200s' not found",
+                 wanted, o->name);
+        return 404;
+    }
+    if (!wanted || !wanted[0]) {
+        snprintf(why, cap, "model: which one? (GET /v1/models lists them)");
+        return o->model ? 0 : 400;
+    }
+    if (o->model && serves(wanted, o->name))
+        return 0;
+    char   ids[MODELS_MAX][64];
+    size_t n = o->installed(ids, MODELS_MAX), k = 0;
+    while (k < n && !serves(wanted, ids[k]))
+        k++;
+    if (k == n) {
+        snprintf(why, cap, openai ? "model '%.200s' is not installed here (GET /v1/models lists them)" : "model '%.200s' not found",
+                 wanted);
+        return 404;
+    }
+    svc_unload(o, pool);
+    if (!o->load(o, ids[k])) {
+        snprintf(why, cap, "cannot load %s (the service's log says why)", ids[k]);
+        return 500;
+    }
+    return 0;
+}
+
 /* ---- responses ------------------------------------------------------------- */
 
 static const char *reason(int status) {
@@ -784,8 +836,14 @@ static void openai_models(const struct svc_options *o, FILE *out) {
         respond(out, 500, "application/json", "{}");
         return;
     }
-    fputs("{\"object\":\"list\",\"data\":[{\"id\":", f), json_write(f, o->name);
-    fputs(",\"object\":\"model\",\"created\":0,\"owned_by\":\"geistr\"}]}", f);
+    char   ids[MODELS_MAX][64]; /* every installed one (#195), or the one served */
+    size_t n = o->installed ? o->installed(ids, MODELS_MAX) : 1;
+    fputs("{\"object\":\"list\",\"data\":[", f);
+    for (size_t k = 0; k < n; k++) {
+        fputs(k ? ",{\"id\":" : "{\"id\":", f), json_write(f, o->installed ? ids[k] : o->name);
+        fputs(",\"object\":\"model\",\"created\":0,\"owned_by\":\"geistr\"}", f);
+    }
+    fputs("]}", f);
     respond_json(out, 200, &t);
 }
 
@@ -932,7 +990,8 @@ static void ollama_chat(const struct svc_options *o, struct held *pool, FILE *ou
 
 static void ollama_tags(const struct svc_options *o, FILE *out) {
     geistr_model_info i = {.size = sizeof i};
-    (void) geistr_model_info_get(o->model, &i);
+    if (o->model)
+        (void) geistr_model_info_get(o->model, &i);
     char now[32];
     iso_time(now);
     struct text t;
@@ -941,11 +1000,18 @@ static void ollama_tags(const struct svc_options *o, FILE *out) {
         respond(out, 500, "application/json", "{}");
         return;
     }
-    fputs("{\"models\":[{\"name\":", f), json_write(f, o->name);
-    fputs(",\"model\":", f), json_write(f, o->name);
-    fprintf(f, ",\"modified_at\":\"%s\",\"size\":0,\"digest\":\"\",\"details\":{\"format\":\"gguf\",\"family\":", now);
-    json_write(f, i.arch ? i.arch : "");
-    fputs("}}]}", f);
+    char   ids[MODELS_MAX][64]; /* every installed one (#195), or the one served */
+    size_t n = o->installed ? o->installed(ids, MODELS_MAX) : 1;
+    fputs("{\"models\":[", f);
+    for (size_t k = 0; k < n; k++) {
+        const char *name = o->installed ? ids[k] : o->name;
+        fputs(k ? ",{\"name\":" : "{\"name\":", f), json_write(f, name);
+        fputs(",\"model\":", f), json_write(f, name);
+        fprintf(f, ",\"modified_at\":\"%s\",\"size\":0,\"digest\":\"\",\"details\":{\"format\":\"gguf\",\"family\":", now);
+        json_write(f, i.arch && !strcmp(name, o->name) ? i.arch : ""); /* known for the loaded one */
+        fputs("}}", f);
+    }
+    fputs("]}", f);
     respond_json(out, 200, &t);
 }
 
@@ -1040,7 +1106,7 @@ static void embeddings(const struct svc_options *o, FILE *out, const struct json
 
 /* ---- routing ----------------------------------------------------------------- */
 
-void http_serve(const struct svc_options *o, struct held *pool, int client, bool loopback) {
+void http_serve(struct svc_options *o, struct held *pool, int client, bool loopback) {
     struct request r      = {};
     int            status = read_request(client, &r, o->max_request);
     FILE          *out    = fdopen(client, "w"); /* closes client */
@@ -1073,14 +1139,19 @@ void http_serve(const struct svc_options *o, struct held *pool, int client, bool
         ollama_tags(o, out);
     else if ((chat || embed) && post) {
         struct json j = {};
+        char       *wanted = nullptr, why[512];
+        int         refused = 0;
         if (!json_parse(&j, r.body, (size_t) r.length))
             error_json(out, 400, openai, "the body is not a JSON object", nullptr);
+        else if ((refused = choose(o, pool, wanted = json_string(&j, json_field(&j, 0, "model")), openai, why, sizeof why)))
+            error_json(out, refused, openai, why, refused == 404 && openai ? "model_not_found" : nullptr);
         else if (embed)
             embeddings(o, out, &j, openai);
         else if (openai)
             openai_chat(o, pool, out, &j);
         else
             ollama_chat(o, pool, out, &j);
+        free(wanted);
         json_free(&j);
     } else if (chat || embed)
         error_json(out, 405, openai, "use POST", nullptr);

@@ -840,12 +840,14 @@ def section_serve():
         assert not path.startswith('/v1/') or error['type'] == 'invalid_request_error', error
     t0 = time.time()
     s = unix.socket(unix.AF_UNIX); s.connect(sock3)
-    try:  # the service answers and hangs up before the whole line is sent
-        s.sendall(b'{"op":"chat","messages":[{"role":"user","content":"' + b'x' * 2000000 + b'"}]}\n')
-        refused = s.makefile(encoding='utf-8').readline()
-        assert not refused or json.loads(refused).get('status') == 'invalid', refused
-    except (BrokenPipeError, ConnectionResetError):
-        pass
+    def send_line():  # the service answers and hangs up before the whole line is sent
+        try:
+            s.sendall(b'{"op":"chat","messages":[{"role":"user","content":"' + b'x' * 2000000 + b'"}]}\n')
+        except OSError:
+            pass
+    threading.Thread(target=send_line, daemon=True).start()
+    refused = json.loads(s.makefile(encoding='utf-8').readline())  # the limit named, as over HTTP (#207)
+    assert refused == {'error': 'the request is over the limit of 1 MiB (geistr serve --max-request=MiB)', 'status': 'too_large'}, refused
     s.close()
     assert time.time() - t0 < 5, time.time() - t0
     body = json.dumps({'messages': [{'role': 'user', 'content': 'Hi'}], 'max_tokens': 3}).encode()  # under the limit: answered
@@ -942,6 +944,14 @@ def section_http():
     # refused: another Host (DNS rebinding), unknown path, wrong method, too long, chunked, the context
     assert call('GET', '/v1/models', headers={'Host': 'evil.example'})[0] == 403
     assert call('GET', '/v1/models', headers={'Host': '127.evil.example'})[0] == 403  # a name, not 127.x.y.z
+    # a request for another model is refused, not answered by this one (#193); its own name (+ :latest) or none is fine
+    hi = {'messages': [{'role': 'user', 'content': 'Hi'}], 'max_tokens': 2}
+    status, _, body = call('POST', '/v1/chat/completions', {**hi, 'model': 'gemma4-e2b'})
+    assert status == 404 and 'model_not_found' in body and "'gemma4-e2b' is not served here" in body, (status, body)
+    status, _, body = call('POST', '/api/chat', {**hi, 'model': 'gemma4-e2b', 'stream': False})
+    assert status == 404 and "model 'gemma4-e2b' not found" in body, (status, body)
+    for name in ('ref', 'ref:latest', ''):
+        assert call('POST', '/v1/chat/completions', {**hi, 'model': name})[0] == 200, name
     # a page of another site in a browser: a simple request (text/plain, no preflight) is refused (#171)
     hi = {'messages': [{'role': 'user', 'content': 'Hi'}], 'max_tokens': 2}
     for origin in ('https://evil.example', 'null', 'http://127.evil.example'):
@@ -970,9 +980,15 @@ def section_http():
     t0 = time.time()
     assert call('POST', '/api/chat', {'messages': [{'role': 'user', 'content': 'Hi'}], 'stream': False,
                 'options': {'num_predict': 2}})[0] == 200 and time.time() - t0 < 60
-    # a client that goes away while a long prompt is processed frees the service at once (#146)
+    # a client that goes away while a long prompt is processed frees the service at once (#146): the next
+    # request is answered before a prompt a sixth of that size could be processed, measured here, so a slow
+    # runner slows both (#202); the dropped prompt to its end takes over six times as long
     s = unix.socket(unix.AF_UNIX); s.connect(sock); s.sendall(b'{"op":"info"}\n')
     ctx = json.loads(s.makefile(encoding='utf-8').readline())['context']; s.close()
+    t0 = time.time()  # another word: not the dropped prompt's cache
+    assert call('POST', '/v1/chat/completions', {'messages': [{'role': 'user', 'content': 'note ' * (ctx // 8)}],
+                'max_tokens': 1})[0] == 200
+    sixth = time.time() - t0
     big = json.dumps({'model': 'ref', 'messages': [{'role': 'user', 'content': 'word ' * (ctx * 3 // 4)}]}).encode()
     c = unix.create_connection(('127.0.0.1', port))
     c.sendall(b'POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n'
@@ -980,7 +996,7 @@ def section_http():
     time.sleep(0.5); c.close()
     t0 = time.time()
     assert call('POST', '/v1/chat/completions', {'model': 'ref', 'messages': ask, 'max_tokens': 4})[0] == 200
-    assert time.time() - t0 < 10, time.time() - t0
+    assert time.time() - t0 < sixth, (time.time() - t0, sixth)
     # tools (#92): a model without a tool format refuses them, clearly (400), in both APIs
     weather = [{'type': 'function', 'function': {'name': 'get_weather', 'parameters': {'type': 'object',
                 'properties': {'city': {'type': 'string'}}}}}]
@@ -1016,6 +1032,84 @@ def section_http():
     assert service.wait(30) == 0
     print('geistr serve --http: OpenAI (one answer, stream, usage, stop, length) and Ollama APIs, shared cache, Host check, 403/404/405/411/413, context, disconnect, tools and images refused passed')
 
+# ---- serve --http without a model: every installed one, one loaded (#195) ----
+def section_models():
+    import http.client, socket as unix
+    # two installed models (the reference under two names), one not installed
+    folder, listed = os.path.join(tmp, 'models-195'), os.path.join(tmp, 'catalog-195.json')
+    os.makedirs(folder, exist_ok=True)
+    for name in (ref_file, 'twin.gguf'):
+        if not os.path.exists(os.path.join(folder, name)):
+            link_or_copy(model_path, os.path.join(folder, name))
+    with open(listed, 'w') as f:
+        json.dump({**catalog, 'models': [catalog['models'][0], entry('twin', 'twin.gguf', sha(model_path), os.path.getsize(model_path)),
+                                         catalog['models'][1]]}, f)
+    assert geistr_run('serve').returncode == 2  # without a model only with --http
+    probe = unix.socket(); probe.bind(('127.0.0.1', 0)); port = probe.getsockname()[1]; probe.close()
+    sock = f'/tmp/geistr-models-{os.getpid()}.sock'
+    service = subprocess.Popen([geistr, 'serve', f'--socket={sock}', f'--http=127.0.0.1:{port}', '--cpu', '--models', folder,
+                                '--catalog', listed], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, env=env)
+    def call(method, path, body=None):
+        c = http.client.HTTPConnection('127.0.0.1', port, timeout=120)
+        c.request(method, path, body=json.dumps(body) if body is not None else None)
+        r = c.getresponse(); data = r.read().decode(); c.close()
+        return r.status, data
+    def rss():  # KiB
+        return int(subprocess.run(['ps', '-o', 'rss=', '-p', str(service.pid)], capture_output=True, text=True).stdout)
+    deadline = time.time() + 60
+    while True:
+        try:
+            if call('GET', '/')[0] == 200: break
+        except OSError:
+            pass
+        assert service.poll() is None and time.time() < deadline, service.stderr.read()
+        time.sleep(0.2)
+    try:
+        idle = rss()  # none loaded yet
+        s = unix.socket(unix.AF_UNIX); s.connect(sock); s.sendall(b'{"op":"info"}\n')
+        assert json.loads(s.makefile(encoding='utf-8').readline())['model'] == ''; s.close()
+        assert [m['id'] for m in json.loads(call('GET', '/v1/models')[1])['data']] == ['ref', 'twin']
+        assert [m['name'] for m in json.loads(call('GET', '/api/tags')[1])['models']] == ['ref', 'twin']
+        hi = {'messages': [{'role': 'user', 'content': 'Name a color.'}], 'max_tokens': 4, 'temperature': 0}
+        status, body = call('POST', '/v1/chat/completions', hi)  # no model, none loaded
+        assert status == 400 and '/v1/models' in body, (status, body)
+        for name in ('tiny', 'nope'):  # in the catalog, not installed; unknown: 404, nothing downloaded
+            status, body = call('POST', '/v1/chat/completions', {**hi, 'model': name})
+            assert status == 404 and 'model_not_found' in body and f"'{name}' is not installed here" in body, (status, body)
+            status, body = call('POST', '/api/chat', {**hi, 'model': name, 'stream': False})
+            assert status == 404 and f"model '{name}' not found" in body, (status, body)
+        assert not os.path.exists(os.path.join(folder, 'tiny.gguf'))
+        # the first request loads its model; another switches; both answer
+        status, body = call('POST', '/v1/chat/completions', {**hi, 'model': 'ref'})
+        first = json.loads(body)
+        assert status == 200 and first['model'] == 'ref' and first['choices'][0]['message']['content'], body
+        status, body = call('POST', '/api/chat', {'model': 'twin:latest', 'messages': hi['messages'], 'stream': False,
+                                                  'options': {'temperature': 0, 'num_predict': 4}})
+        assert status == 200 and json.loads(body)['model'] == 'twin' and json.loads(body)['message']['content'], body
+        assert call('POST', '/v1/chat/completions', hi)[0] == 200  # no model: the loaded one
+        # back to ref with its conversation resent: answered (processed anew), the same answer at temperature 0
+        turn = hi['messages'] + [{'role': 'assistant', 'content': first['choices'][0]['message']['content']},
+                                 {'role': 'user', 'content': 'Another one?'}]
+        status, body = call('POST', '/v1/chat/completions', {**hi, 'model': 'ref', 'messages': turn})
+        assert status == 200 and json.loads(body)['choices'][0]['message']['content'], body
+        status, body = call('POST', '/v1/chat/completions', {**hi, 'model': 'ref'})
+        assert json.loads(body)['choices'][0]['message']['content'] == first['choices'][0]['message']['content'], body
+        # memory: one model at a time, no growth over 20 switches
+        loaded = rss()
+        for k in range(20):
+            assert call('POST', '/v1/chat/completions', {**hi, 'model': ('twin', 'ref')[k % 2], 'max_tokens': 1})[0] == 200
+        after = rss()
+        size = os.path.getsize(model_path) // 1024
+        assert loaded - idle > size // 2, (idle, loaded, size)  # the model is in memory, once
+        assert after - loaded < size // 4, (loaded, after, size)  # not a second one, nor growth
+    finally:
+        service.send_signal(signal.SIGTERM)
+        assert service.wait(30) == 0
+    log = service.stderr.read()
+    assert 'every installed model' in log and 'twin loaded in place of ref in' in log, log
+    print(f'geistr serve --http without a model: list, 400/404, load on demand, switches both ways, resent conversation, '
+          f'RSS {idle // 1024} MiB idle, {loaded // 1024} loaded, {after // 1024} after 20 switches passed')
+
 # ---- embeddings (#91): only with GEISTR_TEST_EMBED_MODEL, BitNet-embedding 0.6B --
 def section_embed():
     import base64, http.client, socket as unix, struct
@@ -1044,7 +1138,7 @@ def section_embed():
         query = 'Where does the cat sleep?'  # nothing before it, as the README says (#157)
         docs = ['The cat sleeps on the red sofa.', 'Die Katze schläft auf dem Sofa.', 'Revenue grew by twelve percent.']
         # OpenAI: a list, floats; the vectors are unit length, in order, with usage
-        status, out = call('/v1/embeddings', {'model': 'x', 'input': [query] + docs, 'encoding_format': 'float'})
+        status, out = call('/v1/embeddings', {'model': os.path.basename(path), 'input': [query] + docs, 'encoding_format': 'float'})
         assert status == 200 and out['object'] == 'list' and [d['index'] for d in out['data']] == [0, 1, 2, 3], out
         vectors = [d['embedding'] for d in out['data']]
         assert all(len(v) == 1024 and abs(sum(x * x for x in v) - 1) < 1e-3 for v in vectors)
@@ -1056,7 +1150,7 @@ def section_embed():
         packed = struct.unpack('<1024f', base64.b64decode(out['data'][0]['embedding']))
         assert status == 200 and max(abs(a - b) for a, b in zip(packed, vectors[1])) < 1e-6
         # Ollama: /api/embed, a text or a list
-        status, out = call('/api/embed', {'model': 'x', 'input': docs[0]})
+        status, out = call('/api/embed', {'model': os.path.basename(path) + ':latest', 'input': docs[0]})
         assert status == 200 and len(out['embeddings']) == 1 and max(abs(a - b) for a, b in zip(out['embeddings'][0], vectors[1])) < 1e-6, out
         status, out = call('/api/embed', {'input': docs})
         assert status == 200 and len(out['embeddings']) == 3 and out['prompt_eval_count'] > 0, out
@@ -1335,6 +1429,10 @@ def pull_vision():
     assert r.returncode == 1 and 'out of date' in r.stderr and len(ranges) == 6 and not os.path.exists(target), (r.stderr, ranges)
     r = run('0' * 64)  # the catalog says another tower: fetched again, refused, removed
     assert r.returncode == 1 and 'does not match' in r.stderr and not os.path.exists(target), r.stderr
+    files[f'/x/y/resolve/{rev}/model.safetensors'] = checkpoint.replace(b'[64,88]', b'[-8,88]')  # a bad offset (#203)
+    n = len(ranges)
+    r = run(hashlib.sha256(tower).hexdigest())  # refused after the header: no data asked for
+    assert r.returncode == 1 and 'bad tensor model.vision_tower.a' in r.stderr and len(ranges) == n + 2, (r.stderr, ranges)
     server.shutdown()
 
 def section_pull():
@@ -1389,38 +1487,98 @@ def section_pull():
             assert r.returncode == 1 and word in r.stderr and 'No error' not in r.stderr, r.stderr
             assert not os.path.exists(target + '.part') and open(target, 'rb').read() == previous, r.stderr
         os.unlink(target)
-        # first run (#89): nothing installed → the recommendation; piped, only the command; in a terminal
-        # n downloads nothing, Enter downloads, verifies and opens the chat
+        # a disk too small (#206): said before the download, without the hint to resume, and no part left;
+        # a write that fails (a file size limit, like a full disk) is named, not taken for the network
+        full_models = os.path.join(tmp, 'full-models')
+        full = ['--models', full_models, '--catalog', catalog_path]
+        r = subprocess.run([geistr, 'pull', 'tiny', *full], capture_output=True, text=True, timeout=60,
+                           env={**env, 'GEISTR_TEST_FREE_BYTES': '20000'})  # tiny is 23000 bytes
+        assert r.returncode == 1 and f'no space left in {full_models} (tiny needs 1 MB, 0 MB free); free some space or use --models' \
+            in r.stderr and 'resume' not in r.stderr and not os.listdir(full_models), r.stderr
+        def small_files():
+            import resource
+            resource.setrlimit(resource.RLIMIT_FSIZE, (1000, 1000))
+            signal.signal(signal.SIGXFSZ, signal.SIG_IGN)  # a write past 1000 bytes fails (EFBIG) instead
+        r = subprocess.run([geistr, 'pull', 'tiny', *full], capture_output=True, text=True, env=env, timeout=60, preexec_fn=small_files)
+        assert r.returncode == 1 and 'geistr: cannot write ' in r.stderr and 'resume' not in r.stderr, r.stderr
+        # first run (#89, #189): nothing installed → the models that can run here, the suggestion first; piped,
+        # only the command; in a terminal a list: Ctrl-C twice cancels and says how to do it later, Enter on the
+        # suggestion downloads, verifies and opens the chat
         first_models, first_catalog = os.path.join(tmp, 'first-models'), os.path.join(tmp, 'first-catalog.json')
         os.makedirs(first_models)
         with open(first_catalog, 'w') as f:
-            json.dump({**catalog, 'models': [catalog['models'][0]]}, f)  # ref alone: the one to recommend
+            json.dump({**catalog, 'models': [catalog['models'][0], catalog['models'][3]]}, f)  # ref, and huge: never offered
         link_or_copy(model_path, os.path.join(www, ref_file))
         first = ['--models', first_models, '--catalog', first_catalog]
         first_env = {**env, 'GEISTEN_HOME': os.path.join(tmp, 'home-first'), 'TERM': 'xterm'}
         r = subprocess.run([geistr, 'chat', *first], input='', capture_output=True, text=True, env=first_env)
         assert r.returncode == 2 and 'For this computer: ref' in r.stdout and 'geistr pull ref' in r.stdout, (r.stdout, r.stderr)
         assert not os.listdir(first_models)
-        for key in (b'n\r', b'\r'):
+        for keys, code in ((b'\x03\x03', 130), (b'\r', None)):
             pid, fd = pty.fork()
             if pid == 0:
                 os.execve(geistr, [geistr, 'chat', *first], first_env)
-            until(fd, '[Y/n]')
-            os.write(fd, key)
-            if key == b'n\r':
+            shown = until(fd, 'suggested for this computer')
+            assert b'\xe2\x9d\xaf ref' in shown and b'suggested' in shown and b'huge' not in shown, shown[-400:]
+            if keys == b'\x03\x03':
+                os.write(fd, b'\x03'); until(fd, 'Ctrl-C again to cancel'); os.write(fd, b'\x03')
+            else:
+                os.write(fd, keys)
+            if code is not None:
                 until(fd, 'Later: geistr pull ref')
-                assert os.waitpid(pid, 0)[1] >> 8 == 2 and not os.listdir(first_models)
+                status = os.waitpid(pid, 0)[1]
+                assert os.WEXITSTATUS(status) == code and not os.listdir(first_models), (keys, status)
                 os.close(fd)
             else:
                 until(fd, 'ref installed', 120)
                 until(fd, 'Ctrl-C twice exits', 120)  # the chat, with the downloaded model
                 finish_chat(pid, fd)
                 assert os.path.exists(os.path.join(first_models, ref_file))
+        # a named model that is not installed (#191): in a terminal offered for download (Ctrl-C twice:
+        # the old message, exit 1; Enter: downloaded and the chat opens); piped: the message, nothing downloaded
+        offer_models = os.path.join(tmp, 'offer-models'); os.makedirs(offer_models)
+        offer = ['--models', offer_models, '--catalog', first_catalog]
+        offer_env = {**first_env, 'GEISTEN_HOME': os.path.join(tmp, 'home-offer')}
+        r = subprocess.run([geistr, 'run', 'ref', 'hi', *offer], input='', capture_output=True, text=True, env=offer_env)
+        assert r.returncode == 1 and 'geistr pull ref' in r.stderr and not os.listdir(offer_models), r.stderr
+        for cancel in (True, False):
+            pid, fd = pty.fork()
+            if pid == 0:
+                os.execve(geistr, [geistr, 'chat', 'ref', *offer], offer_env)
+            until(fd, 'Download ref')
+            if cancel:
+                os.write(fd, b'\x03'); until(fd, 'Ctrl-C again to cancel'); os.write(fd, b'\x03')
+                until(fd, 'geistr pull ref')
+                assert os.WEXITSTATUS(os.waitpid(pid, 0)[1]) == 1 and not os.listdir(offer_models)
+                os.close(fd)
+            else:
+                os.write(fd, b'\r')
+                until(fd, 'ref installed', 120)
+                until(fd, 'Ctrl-C twice exits', 120)
+                finish_chat(pid, fd)
+                assert os.path.exists(os.path.join(offer_models, ref_file))
+        # installed, none chosen (#189): the only one is used
+        only_env = {**first_env, 'GEISTEN_HOME': os.path.join(tmp, 'home-only')}
+        pid, fd = pty.fork()
+        if pid == 0:
+            os.execve(geistr, [geistr, 'chat', *first], only_env)
+        until(fd, 'geistr · ref', 120)
+        finish_chat(pid, fd)
+        # several installed, none chosen, no terminal: they are named, best first (#189)
+        two_models, two_catalog = os.path.join(tmp, 'two-models'), os.path.join(tmp, 'two-catalog.json')
+        os.makedirs(two_models)
+        twin = dict(catalog['models'][0], id='ref2', file='ref2.gguf', group_id='ref2', group_name='REF2')
+        with open(two_catalog, 'w') as f:
+            json.dump({**catalog, 'models': [catalog['models'][0], twin]}, f)
+        link_or_copy(model_path, os.path.join(two_models, ref_file)); link_or_copy(model_path, os.path.join(two_models, 'ref2.gguf'))
+        r = subprocess.run([geistr, 'chat', '--models', two_models, '--catalog', two_catalog], input='', capture_output=True,
+                           text=True, env={**first_env, 'GEISTEN_HOME': os.path.join(tmp, 'home-two')})
+        assert r.returncode == 2 and 'which model? installed: ref' in r.stderr and 'ref2' in r.stderr, (r.stdout, r.stderr)
         r = geistr_run('pull')  # nothing left to update
         assert r.returncode == 0 and 'installed models are current' in r.stdout, (r.stdout, r.stderr)
         server.shutdown()
         pull_vision()
-        print('geistr pull: download, restart after an ignored range, verify, refuse a mismatch, keep the previous file, size mismatch, first run, a vision tower by ranges; PULL=0 has no network code passed')
+        print('geistr pull: download, restart after an ignored range, verify, refuse a mismatch, keep the previous file, size mismatch, a full disk, first run, a vision tower by ranges; PULL=0 has no network code passed')
     else:
         print('geistr pull: PULL=0 has no network code passed (no libcurl: download not tested)')
 

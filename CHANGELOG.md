@@ -2,15 +2,74 @@
 
 ## Unreleased
 
-### Engine
+### Features
 
-- geistlib `3841fa6` (from `d53560d`): snapshot-backed prefix scoring for
-  decisions (geistlib#5, built only with `DECISION_CONTEXT=1`). The range
-  also brings AVX2/FMA kernels for the native GEMM on x86 (geistlib#12) and
-  Vulkan attention for head_dim 96 (geistlib#739).
+- `geistr serve --http` without a model offers every installed model:
+  `/v1/models` and `/api/tags` list them (Open WebUI shows them all), and a
+  request's `model` chooses. Only one model is in memory: a request for
+  another one unloads the loaded model completely and loads the requested
+  one (qwen3-0.6b ⇄ gemma4-e2b: 0.5–0.7 s on an M1 Max, RSS steady over
+  20 switches), for small computers. Conversations are processed anew after
+  a switch. A model that is not installed gets 404; nothing is
+  downloaded. `geistr serve <model>` is unchanged (#195).
+
+### Fixes
+
+- `geistr serve --http`: a request that names another model (`"model":
+  "gemma4-e2b"` to a qwen3-0.6b service) gets 404 `model_not_found` instead of
+  an answer from the served model. Its id, `id:latest`, its file name or no
+  model are accepted as before (#193).
+- `geistr pull` refuses a vision tower checkpoint whose header has a negative,
+  fractional or huge tensor offset, naming the tensor, instead of asking the
+  server for a bogus range. `geistr chat --socket` clamps token counts from
+  the service's stats line that are negative or too large: casting them was
+  undefined behaviour (#203).
+- `geistr serve`: a socket line over `--max-request` is answered
+  `{"error":"the request is over the limit of N MiB (geistr serve
+  --max-request=MiB)","status":"too_large"}`, as HTTP's 413 says it. Before it
+  was `"one JSON object per line"` with the status `invalid`, as bad JSON
+  (#207).
+- `geistr chat`: a system prompt set or removed with `/system` in a
+  conversation is written to its file at once. Before it was written only
+  with the next answer, so a chat that ended before it resumed without the
+  system prompt `/info` had shown (#205).
+- `geistr pull` onto a disk that is too small says so before it downloads:
+  `no space left in <folder> (<model> needs N MB, M MB free); free some space
+  or use --models`. A write that fails while downloading (the disk filled up
+  meanwhile, a file size limit) names the error. Before it was taken for the
+  network ("Failure when receiving data from the peer", "Failed writing
+  received data") with the hint to resume, which failed the same way (#206).
+
+### Changed
+
+- `geistr chat` the first time: instead of one yes/no question, a list of the
+  models that can run on this computer, the suggestion first, to choose with
+  ↑↓ and Enter (Ctrl-C twice cancels). With models installed but none
+  chosen, the only one is used, or one is chosen from a list (in a terminal) or
+  named (#189).
+- `geistr chat`, `run`, `serve`, `/model` and `index` offer, in a terminal, to
+  download a model that is not installed (or outdated, damaged) and go on with
+  it; Ctrl-C twice keeps the old message. Without a terminal nothing changes:
+  scripts still get the `geistr pull` line (#191).
 
 ### Decisions (EXPERIMENTAL)
 
+- Preparation for several questions over one context (#162; the API follows
+  in #163): one registry entry per verified profile (artifact, template,
+  roles, thinking-off), a common prefix without question or IDs, a cached cut
+  before the prefix's last token on a prefill-chunk boundary, and an exact
+  prefix check of every full prompt. Single-question prompts are unchanged.
+  Native fixtures for both profiles (`*_context.json`).
+- Reusable contexts and atomic question batches (#163):
+  `geistr_decision_context_open` prefills the context once into an engine
+  snapshot. `geistr_decision_context_score_batch` answers 1–32 independent
+  questions over it, restoring the snapshot before each. Every question is
+  checked before any is scored. Answers are published only when all
+  succeed; otherwise there are none, and the failing question is named.
+  There is also cancel, info (cached tokens, snapshot bytes, chunk, hashes)
+  and close. All of it is new, EXPERIMENTAL API; the existing calls are
+  unchanged. It needs `make runtime DECISION=1 DECISION_CONTEXT=1` and the
+  model's permission; otherwise every call answers "unsupported".
 - `geistr decide-batch MODEL --config FILE --shared-context --request-file
   FILE|-` (#164): the questions of one JSON request (a shared context, 1–32
   questions with their options) over one context. stdout gets
@@ -23,22 +82,13 @@
   and up to the end. Needs `make geistr DECISION=1 DECISION_CONTEXT=1` and
   the model's permission; `geistr decide-batch --help` says whether the
   build has it.
-- Reusable contexts and atomic question batches (#163):
-  `geistr_decision_context_open` prefills the context once into an engine
-  snapshot. `geistr_decision_context_score_batch` answers 1–32 independent
-  questions over it, restoring the snapshot before each. Every question is
-  checked before any is scored. Answers are published only when all
-  succeed; otherwise there are none, and the failing question is named.
-  There is also cancel, info (cached tokens, snapshot bytes, chunk, hashes)
-  and close. All of it is new, EXPERIMENTAL API; the existing calls are
-  unchanged. It needs `make runtime DECISION=1 DECISION_CONTEXT=1` and the
-  model's permission; otherwise every call answers "unsupported".
-- Preparation for several questions over one context (#162; the API follows
-  in #163): one registry entry per verified profile (artifact, template,
-  roles, thinking-off), a common prefix without question or IDs, a cached cut
-  before the prefix's last token on a prefill-chunk boundary, and an exact
-  prefix check of every full prompt. Single-question prompts are unchanged.
-  Native fixtures for both profiles (`*_context.json`).
+
+### Engine
+
+- geistlib `3841fa6` (from `d53560d`): snapshot-backed prefix scoring for
+  decisions (geistlib#5, built only with `DECISION_CONTEXT=1`). The range
+  also brings AVX2/FMA kernels for the native GEMM on x86 (geistlib#12) and
+  Vulkan attention for head_dim 96 (geistlib#739).
 
 ## 0.3.4
 
