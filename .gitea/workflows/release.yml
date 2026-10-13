@@ -9,6 +9,7 @@ name: release
 # SHA256SUMS to www.geisten.net/download/geistr/vX.Y.Z/, checks them over HTTPS and
 # points "latest" there. Run by hand with the input `tag` (an existing vX.Y.Z), it
 # publishes that tag the same way, e.g. to repeat a release that failed after the build.
+# Then the job prune deletes all but the newest KEEP (5) release folders there (#148).
 
 on:
   workflow_dispatch:
@@ -248,6 +249,31 @@ jobs:
           python3 -m venv /tmp/twine && /tmp/twine/bin/pip install -q twine
           /tmp/twine/bin/twine check dist/geistr-*.whl
           TWINE_USERNAME=__token__ TWINE_PASSWORD="$PYPI_TOKEN" /tmp/twine/bin/twine upload --skip-existing dist/geistr-*.whl
+
+  # After a successful release (#148): www.geisten.net/download/geistr/ keeps the newest KEEP
+  # release folders (version order); latest, install.sh and this tag stay. Its own job, so a
+  # failure here holds back nothing else. Repository variable PRUNE_DRY_RUN=1: print only.
+  prune:
+    needs: [release]
+    runs-on: ubuntu-24.04
+    env:
+      KEEP: 5  # also stated in docs/DEVELOPMENT.md (Releases), README.md and install.sh
+      DRY_RUN: ${{ vars.PRUNE_DRY_RUN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: delete the release folders older than the newest ${{ env.KEEP }}
+        env:
+          DOWNLOAD_SSH_KEY: ${{ secrets.DOWNLOAD_SSH_KEY }}
+        run: |
+          set -eu
+          sh scripts/apt-need.sh rsync
+          mkdir -p ~/.ssh && umask 077
+          printf '%s\n' "$DOWNLOAD_SSH_KEY" > ~/.ssh/download_key
+          echo "www.geisten.net ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO66CjOfnd/GIiCFyqhGxLudBXi/mCD0IA8DBbbZ2O2i" > ~/.ssh/known_hosts_download
+          export RSYNC_RSH="ssh -F /dev/null -i $HOME/.ssh/download_key -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts_download"
+          sh scripts/prune-releases.sh "$KEEP" "$TAG" germar@www.geisten.net:geistr/
 
   # After the upload (#172): what users download, on systems older and newer than the build
   # runners. The static Linux archive through install.sh on Debian 12, Ubuntu 22.04 and 24.04;
