@@ -1487,6 +1487,20 @@ def section_pull():
             assert r.returncode == 1 and word in r.stderr and 'No error' not in r.stderr, r.stderr
             assert not os.path.exists(target + '.part') and open(target, 'rb').read() == previous, r.stderr
         os.unlink(target)
+        # a disk too small (#206): said before the download, without the hint to resume, and no part left;
+        # a write that fails (a file size limit, like a full disk) is named, not taken for the network
+        full_models = os.path.join(tmp, 'full-models')
+        full = ['--models', full_models, '--catalog', catalog_path]
+        r = subprocess.run([geistr, 'pull', 'tiny', *full], capture_output=True, text=True, timeout=60,
+                           env={**env, 'GEISTR_TEST_FREE_BYTES': '20000'})  # tiny is 23000 bytes
+        assert r.returncode == 1 and f'no space left in {full_models} (tiny needs 1 MB, 0 MB free); free some space or use --models' \
+            in r.stderr and 'resume' not in r.stderr and not os.listdir(full_models), r.stderr
+        def small_files():
+            import resource
+            resource.setrlimit(resource.RLIMIT_FSIZE, (1000, 1000))
+            signal.signal(signal.SIGXFSZ, signal.SIG_IGN)  # a write past 1000 bytes fails (EFBIG) instead
+        r = subprocess.run([geistr, 'pull', 'tiny', *full], capture_output=True, text=True, env=env, timeout=60, preexec_fn=small_files)
+        assert r.returncode == 1 and 'geistr: cannot write ' in r.stderr and 'resume' not in r.stderr, r.stderr
         # first run (#89, #189): nothing installed → the models that can run here, the suggestion first; piped,
         # only the command; in a terminal a list: Ctrl-C twice cancels and says how to do it later, Enter on the
         # suggestion downloads, verifies and opens the chat
@@ -1564,7 +1578,7 @@ def section_pull():
         assert r.returncode == 0 and 'installed models are current' in r.stdout, (r.stdout, r.stderr)
         server.shutdown()
         pull_vision()
-        print('geistr pull: download, restart after an ignored range, verify, refuse a mismatch, keep the previous file, size mismatch, first run, a vision tower by ranges; PULL=0 has no network code passed')
+        print('geistr pull: download, restart after an ignored range, verify, refuse a mismatch, keep the previous file, size mismatch, a full disk, first run, a vision tower by ranges; PULL=0 has no network code passed')
     else:
         print('geistr pull: PULL=0 has no network code passed (no libcurl: download not tested)')
 

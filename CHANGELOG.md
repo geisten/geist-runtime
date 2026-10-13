@@ -33,6 +33,12 @@
   conversation is written to its file at once. Before it was written only
   with the next answer, so a chat that ended before it resumed without the
   system prompt `/info` had shown (#205).
+- `geistr pull` onto a disk that is too small says so before it downloads:
+  `no space left in <folder> (<model> needs N MB, M MB free); free some space
+  or use --models`. A write that fails while downloading (the disk filled up
+  meanwhile, a file size limit) names the error. Before it was taken for the
+  network ("Failure when receiving data from the peer", "Failed writing
+  received data") with the hint to resume, which failed the same way (#206).
 
 ### Changed
 
