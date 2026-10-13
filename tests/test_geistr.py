@@ -1338,12 +1338,12 @@ def section_bench():
     with open(speeds, 'a') as f:  # a model recorded by path counts for its catalog entry
         # by the installed file's path: models/ may be on another file system
         # than model_path (a container's /tmp), where install_models copies
-        f.write(f'{os.path.join(models, ref_file)}\tcpu\t1000.0\t0.1\t0\t{engine}\n' * 11)
+        f.write(f'{os.path.join(models, ref_file)}\tcpu\t1000.0\t0.1\t0\t{engine}\tbench\n' * 11)
         f.write(f'ref\tcpu\t5.0\t0.1\t0\tanother-engine\n' * 11)  # not this engine's: ignored
         elsewhere = os.path.join(tmp, 'elsewhere', os.path.basename(model_path))  # the same name, another file
         os.makedirs(os.path.dirname(elsewhere), exist_ok=True)
         open(elsewhere, 'wb').close()
-        f.write(f'{elsewhere}\tcpu\t1.0\t0.1\t0\t{engine}\n' * 11)
+        f.write(f'{elsewhere}\tcpu\t1.0\t0.1\t0\t{engine}\tbench\n' * 11)
     measured = listing()['ref']['tokens_per_s']
     assert measured['cpu'] == 1000.0, measured  # the median of the last ten with this engine
     assert listing()['tiny']['tokens_per_s'] == {'cpu': None, 'gpu': None}
@@ -1365,7 +1365,14 @@ def section_bench():
     r = geistr_run('bench', '--compare', 'aaaa', 'bbbb')
     assert '×2  ⚠' in r.stdout and 'busy machine' in r.stdout, r.stdout
     assert geistr_run('bench', '--compare', 'zzzz').returncode == 1
-    print('geistr bench / catalog speeds: recorded per answer with the engine, median of the last ten, by id or path, --compare passed')
+    with open(speeds, 'a') as f:  # bench and answer mixed: only bench rows while there are any (#217)
+        f.write(f'tiny\tcpu\t50.0\t0.1\t0\t{engine}\tanswer\n' * 3 + f'tiny\tgpu\t70.0\t0.1\t0\t{engine}\n'
+                'tiny\tcpu\t5.0\t0.1\t0\tanother-engine\tbench\n')  # another engine's bench run does not count
+    assert listing()['tiny']['tokens_per_s'] == {'cpu': 50.0, 'gpu': 70.0}  # no bench run: the answers
+    with open(speeds, 'a') as f:
+        f.write(f'tiny\tcpu\t20.0\t0.1\t0\t{engine}\tbench\n' + f'tiny\tcpu\t50.0\t0.1\t0\t{engine}\tanswer\n' * 9)
+    assert listing()['tiny']['tokens_per_s'] == {'cpu': 20.0, 'gpu': 70.0}  # the bench run, not the newer answers
+    print('geistr bench / catalog speeds: recorded per answer with the engine, median of the last ten bench runs (answers without one), by id or path, --compare passed')
 
 # ---- pull -------------------------------------------------------------------
 def pull_vision():
