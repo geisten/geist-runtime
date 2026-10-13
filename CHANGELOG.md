@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- `geistr pull` refuses a vision tower checkpoint whose header has a negative,
+  fractional or huge tensor offset, naming the tensor, instead of asking the
+  server for a bogus range. `geistr chat --socket` clamps token counts from
+  the service's stats line that are negative or too large: casting them was
+  undefined behaviour (#203).
+
 ## 0.3.4
 
 ### Security

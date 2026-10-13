@@ -4,6 +4,7 @@
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 
 struct json {
@@ -25,6 +26,8 @@ int         json_parent(const struct json *j, int t); /* the token t belongs to;
 double json_number(const struct json *j, int t, double dflt);
 /* A count (max tokens): a negative number 0, past UINT_MAX UINT_MAX; dflt if no number. */
 unsigned json_unsigned(const struct json *j, int t, unsigned dflt);
+/* An offset or size in a file: a whole number 0 to 2^53; false (v unchanged) if t is none. */
+bool   json_offset(const struct json *j, int t, uint64_t *v);
 bool   json_bool(const struct json *j, int t, bool dflt); /* true or false, else dflt */
 
 /* A top-level string or number of one object as text into out ("" if absent). */
