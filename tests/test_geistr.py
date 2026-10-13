@@ -1407,7 +1407,6 @@ def section_pull():
             assert r.returncode == 1 and word in r.stderr and 'No error' not in r.stderr, r.stderr
             assert not os.path.exists(target + '.part') and open(target, 'rb').read() == previous, r.stderr
         os.unlink(target)
-<<<<<<< HEAD
         # a disk too small (#206): said before the download, without the hint to resume, and no part left;
         # a write that fails (a file size limit, like a full disk) is named, not taken for the network
         full_models = os.path.join(tmp, 'full-models')
@@ -1422,13 +1421,9 @@ def section_pull():
             signal.signal(signal.SIGXFSZ, signal.SIG_IGN)  # a write past 1000 bytes fails (EFBIG) instead
         r = subprocess.run([geistr, 'pull', 'tiny', *full], capture_output=True, text=True, env=env, timeout=60, preexec_fn=small_files)
         assert r.returncode == 1 and 'geistr: cannot write ' in r.stderr and 'resume' not in r.stderr, r.stderr
-        # first run (#89): nothing installed → the recommendation; piped, only the command; in a terminal
-        # n downloads nothing, Enter downloads, verifies and opens the chat
-=======
         # first run (#89, #189): nothing installed → the models that can run here, the suggestion first; piped,
         # only the command; in a terminal a list: Ctrl-C twice cancels and says how to do it later, Enter on the
         # suggestion downloads, verifies and opens the chat
->>>>>>> origin/main
         first_models, first_catalog = os.path.join(tmp, 'first-models'), os.path.join(tmp, 'first-catalog.json')
         os.makedirs(first_models)
         with open(first_catalog, 'w') as f:
