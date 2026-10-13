@@ -60,7 +60,8 @@ with tempfile.TemporaryDirectory() as directory:
 # start to exit) against the command's own total_ms.
 batch_on = b'shared contexts on' in subprocess.run([binary, 'decide-batch', '--help'], capture_output=True,
                                                    check=True).stdout
-context = 'You answer questions about simple facts. Pick exactly one option. ' * 8
+# longer than Metal's prefill chunk (256 tokens): a shorter one caches nothing there
+context = 'You answer questions about simple facts. Pick exactly one option. ' * 24
 questions = [
     {'id': 'frage-ü', 'question': 'Which option equals 4?',
      'options': [{'id': 'röt', 'description': '4'}, {'id': 'blau', 'description': '5'}]},
