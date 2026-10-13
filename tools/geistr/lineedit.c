@@ -136,14 +136,15 @@ static void draw(struct le *e, bool with_menu) {
     char                h[256];
     struct le_candidate c[CANDIDATES_MAX];
     size_t              n    = with_menu && !e->searching ? menu(e, c) : 0;
-    const char         *tail = with_menu && !e->searching ? hint(e, h) : "";
+    const char         *tail = with_menu && !e->searching && !e->plain ? hint(e, h) : "";
+    const char         *faint = e->plain ? "" : "\033[2m", *reset = e->plain ? "" : "\033[0m";
     if (e->cursor_row)
         fprintf(e->out, "\033[%uA", e->cursor_row);
     fputs("\r\033[J", e->out);
     fputs(e->prompt, e->out);
     put_line(e);
     if (*tail)
-        fprintf(e->out, "\033[2m%s\033[0m", tail);
+        fprintf(e->out, "%s%s%s", faint, tail, reset);
     unsigned w      = e->width ? e->width : 80;
     unsigned prompt = columns(e->prompt, strlen(e->prompt));
     unsigned total  = prompt + columns(e->buf, e->len) + columns(tail, strlen(tail));
@@ -161,27 +162,28 @@ static void draw(struct le *e, bool with_menu) {
             name        = cw > name ? cw : name;
         }
         for (size_t i = first; i < n && shown < MENU_ROWS; i++, shown++) {
-            fputs("\r\n  ", e->out);
             bool chosen = i == e->sel;
-            fputs(chosen ? "\033[7m" : "", e->out);
+            fputs(e->plain && chosen ? "\r\n› " : "\r\n  ", e->out);
+            fputs(chosen && !e->plain ? "\033[7m" : "", e->out);
             put_cut(e->out, c[i].line, w > 4 ? w - 4 : 1);
             unsigned used = 2 + columns(c[i].line, strlen(c[i].line));
             for (unsigned k = columns(c[i].line, strlen(c[i].line)); k < name && used < w - 1; k++, used++)
                 fputc(' ', e->out);
-            fputs(chosen ? "\033[0m" : "", e->out);
+            fputs(chosen && !e->plain ? "\033[0m" : "", e->out);
             if (c[i].help && used + 3 < w) {
-                fputs("  \033[2m", e->out);
+                fprintf(e->out, "  %s", faint);
                 put_cut(e->out, c[i].help, w - used - 3);
-                fputs("\033[0m", e->out);
+                fputs(reset, e->out);
             }
         }
         if (n > shown)
-            fprintf(e->out, "\r\n  \033[2m… %zu more\033[0m", n - shown), shown++;
+            fprintf(e->out, "\r\n  %s… %zu more%s", faint, n - shown, reset), shown++;
     }
     if (e->searching) { /* the query under the line, as the list would be */
-        fputs("\r\n  \033[2msearch:\033[0m ", e->out);
+        fprintf(e->out, "\r\n  %ssearch:%s ", faint, reset);
         put_cut(e->out, e->query, w > 24 ? w - 24 : 1);
-        fputs(e->found < e->n_history || !e->n_query ? "" : "\033[2m  (no match)\033[0m", e->out);
+        if (e->n_query && e->found == e->n_history)
+            fprintf(e->out, "%s  (no match)%s", faint, reset);
         shown++;
     }
     unsigned up = end_row - row + shown;

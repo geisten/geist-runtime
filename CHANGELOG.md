@@ -23,6 +23,9 @@
   were skipped without a word (#173).
 - `geistr --help` says what `serve --max-request` limits and its default
   (16 MiB) (#147).
+- `NO_COLOR` makes `geistr chat` plain: before, the `/` list, the hint, the
+  Ctrl-R search line, "Ctrl-C again to exit" and the resumed `↻` line were
+  still styled, and the intro and the spinner were left out altogether (#134).
 
 ### Security
 

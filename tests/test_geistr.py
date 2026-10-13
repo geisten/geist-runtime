@@ -493,6 +493,228 @@ def section_resume():
     assert r.returncode == 0 and 'usage: geistr' in (r.stdout + r.stderr), r
     print('geistr chat: continues the last conversation in a terminal, --new, private files, input history, context meter, drop notice, resume budget, /retry, /copy, loops cut, piped chats keep nothing passed')
 
+# ---- the chat in a terminal: keys, styles, width, processors (#134) -----------
+# The E2E plan's terminal-only cases (docs/E2E-TESTPLAN.md), by their IDs.
+import struct, termios, fcntl, unicodedata
+SGR = re.compile(rb'\x1b\[[0-9;]*m')
+ANSI = re.compile(r'\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b\[[0-9;?]*[A-Za-z]')
+def shown_width(line):
+    return sum(2 if unicodedata.east_asian_width(c) in 'WF' else 0 if unicodedata.combining(c) else 1 for c in line)
+def terminal(*args, cols=100, rows=30, **extra):
+    """geistr chat ref … in a pty of cols × rows; extra: environment variables."""
+    pid, fd = pty.fork()
+    if pid == 0:
+        fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
+        os.execve(geistr, [geistr, 'chat', 'ref', *args, *base], {**env, 'TERM': 'xterm', **extra})
+    return pid, fd
+def resize(fd, cols, rows=30):
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))  # the chat gets SIGWINCH
+def keys(fd, data, settle=.4, seconds=30):
+    """Type data, then read until the chat has drawn and been quiet for settle seconds."""
+    os.write(fd, data)
+    seen, deadline, last = b'', time.time() + seconds, None
+    while time.time() < deadline and (last is None or time.time() - last < settle):
+        if select.select([fd], [], [], .05)[0]:
+            try: seen += os.read(fd, 4096)
+            except OSError: break
+            last = time.time()
+    return seen
+ANSWER = 600  # seconds for a whole answer: a loaded CI runner prefills slowly
+EDITING, READING = b'\x1b[?2004l', b'\x1b[?2004h'  # the editor ends a line / begins to read the next
+def plain(out):
+    """What the chat said, as text: no escapes, and lines wrapped at the terminal's width joined again."""
+    return re.sub(r'\s+', ' ', ANSI.sub('', out.decode(errors='replace')))
+def more(fd, seen, text, seconds=60):
+    """seen, read on until it holds text (unless it does)."""
+    return seen if text.encode() in seen else seen + until(fd, text, seconds)
+def ready(fd, seconds=180):
+    """Read until the editor reads its first line: the intro, a resumed chat's line, all of it."""
+    return until(fd, READING.decode(), seconds)
+def turn(fd, line, seconds=60):
+    """Send a line; read all the chat writes until the editor reads the next one."""
+    os.write(fd, line + b'\r')
+    seen, deadline = b'', time.time() + seconds
+    done = lambda: EDITING in seen and READING in seen[seen.index(EDITING):]
+    while not done() and time.time() < deadline:
+        if select.select([fd], [], [], 1)[0]:
+            try: seen += os.read(fd, 4096)
+            except OSError: break
+    assert done(), (line, seen[-400:])
+    return seen
+def drawn(out):
+    """The editor's line as it was drawn last (without the prompt), and the cursor's column."""
+    tail = out.rsplit(b'\r\x1b[J', 1)[-1]
+    column = re.findall(rb'\x1b\[(\d+)C', tail)
+    text = ANSI.sub('', tail.decode(errors='replace')).split('\r')[0]
+    return text.split('> ', 1)[-1], int(column[-1]) if column else 0
+def until_any(fd, texts, seconds=60):
+    seen, deadline = b'', time.time() + seconds
+    while not any(t.encode() in seen for t in texts) and time.time() < deadline:
+        if select.select([fd], [], [], 1)[0]:
+            try: seen += os.read(fd, 4096)
+            except OSError: break
+    assert any(t.encode() in seen for t in texts), (texts, seen[-400:])
+    return seen
+def running(fd, seconds=2):
+    """Read for a while: the answer is still being written (no speed line yet)."""
+    seen, deadline = b'', time.time() + seconds
+    while time.time() < deadline:
+        if select.select([fd], [], [], .1)[0]: seen += os.read(fd, 4096)
+    assert b'tok/s' not in seen and b'[stopped]' not in seen, seen[-300:]
+    return seen
+
+def section_terminal():
+    chats = os.path.join(env['GEISTEN_HOME'], 'chats')
+    def newest():
+        names = sorted(os.listdir(chats), key=lambda n: os.stat(os.path.join(chats, n)).st_mtime)
+        return [json.loads(l) for l in open(os.path.join(chats, names[-1]))]
+    story = b'Write a very long story about a lighthouse keeper, at least 3000 words.\r'
+
+    # D7 Esc stops an answer; E8 keys typed while it runs, Enter included, wait for the prompt and send there
+    pid, fd = terminal('--new')
+    ready(fd)
+    os.write(fd, story); running(fd)
+    os.write(fd, b'What is the capital of France? Answer in one word.\r'); time.sleep(.3)  # type-ahead
+    os.write(fd, b'\x1b')                                                                   # Esc alone
+    out = until(fd, '[stopped]', 60)          # soon, and not at the end of 3000 words
+    out = out.split(b'[stopped]')[-1]
+    out = more(fd, out, 'tok/s', ANSWER)      # the typed question was sent from the next prompt
+    assert b'capital of France' in out and b'Paris' in out, out[-400:]
+    said = newest()
+    assert said[-2]['content'] == 'What is the capital of France? Answer in one word.' and said[1].get('stopped'), said
+    # G10 a stopped answer is the last: resumed, the chat says so
+    more(fd, out.split(b'tok/s')[-1], READING.decode())
+    os.write(fd, story); running(fd); os.write(fd, b'\x1b'); until(fd, '[stopped]', 60)
+    finish_chat(pid, fd)
+    assert newest()[-1].get('stopped') is True, newest()[-1]
+    pid, fd = terminal()
+    out = plain(ready(fd))
+    assert 'its last answer was stopped · /clear new' in out, out[-300:]
+    finish_chat(pid, fd)
+
+    # E4 Ctrl-R: search: under the line, the newest match; again: older; Esc: the line as it was; Enter takes it
+    pid, fd = terminal('--new')
+    ready(fd)
+    assert 'temperature 0.5' in plain(turn(fd, b'/temp 0.5'))
+    assert 'temperature 0.25' in plain(turn(fd, b'/temp 0.25'))
+    assert 'tokens (' in plain(turn(fd, b'/info'))
+    keys(fd, b'/temp 1')                                         # a draft
+    out = keys(fd, b'\x12') + keys(fd, b'temp')
+    assert b'search:' in out and drawn(out)[0] == '/temp 0.25', (drawn(out), out[-300:])
+    out = keys(fd, b'\x12')
+    assert drawn(out)[0] == '/temp 0.5', drawn(out)
+    out = keys(fd, b'\x1b')
+    assert drawn(out)[0] == '/temp 1' and b'search:' not in out.rsplit(b'\r\x1b[J', 1)[-1], drawn(out)
+    keys(fd, b'\x12'); out = keys(fd, b'0.2') + keys(fd, b'\r')  # Enter takes the match, does not send it
+    assert drawn(out)[0] == '/temp 0.25' and b'temperature' not in out, out[-300:]
+    assert 'temperature 0.25' in plain(turn(fd, b''))
+
+    # E9 UTF-8: whole characters move and vanish, the cursor follows their width (👋 is two columns)
+    keys(fd, b'/system Gr\xc3\xbc\xc3\x9fe \xf0\x9f\x91\x8b')
+    _, home = drawn(keys(fd, b'\x01'))                            # Ctrl-A: right after the prompt
+    text, end = drawn(keys(fd, b'\x05'))                          # Ctrl-E
+    assert text == '/system Grüße 👋' and end - home == 16, (text, home, end)
+    assert drawn(keys(fd, b'\x1b[D'))[1] == end - 2               # ← over 👋
+    assert drawn(keys(fd, b'\x1b[D'))[1] == end - 3               # ← over the space
+    text, at = drawn(keys(fd, b'\x7f'))                           # Backspace: the e
+    assert text == '/system Grüß 👋' and at == end - 4, (text, at, end)
+    text, at = drawn(keys(fd, b'\x7f'))                           # Backspace: ß, two bytes, one column
+    assert text == '/system Grü 👋' and at == end - 5, (text, at, end)
+    assert 'system prompt set' in plain(turn(fd, b''))
+    out = plain(turn(fd, b'/system'))
+    assert 'Grü 👋 /system <text> sets it' in out, out[-300:]
+    finish_chat(pid, fd)
+
+    # F6 /system: set, shown, removed; the conversation has it, then not
+    pid, fd = terminal('--new')
+    ready(fd)
+    assert 'system prompt set' in plain(turn(fd, b'/system Answer like a pirate.'))
+    out = plain(turn(fd, b'/system'))
+    assert 'Answer like a pirate. /system <text> sets it' in out, out[-300:]
+    assert 'tok/s' in plain(turn(fd, b'Say hello.', ANSWER))
+    assert newest()[0] == {'role': 'system', 'content': 'Answer like a pirate.'}, newest()
+    out = plain(turn(fd, b'/info'))    # one line, wrapped at the terminal's width (the threads differ)
+    assert 'tokens (' in out and 'system: Answer like a pirate.' in out, out[-300:]
+    assert 'no system prompt' in plain(turn(fd, b'/system off'))
+    out = plain(turn(fd, b'/system'))
+    assert 'no system prompt' in out and 'pirate' not in out, out[-300:]
+    out = plain(turn(fd, b'/info'))
+    assert 'tokens (' in out and 'system:' not in out, out[-300:]
+    assert 'tok/s' in plain(turn(fd, b'Say hello again.', ANSWER))
+    assert [m['role'] for m in newest()] == ['user', 'assistant'] * 2, newest()
+
+    # F4 /gpu, /auto, /cpu: the prompt's symbol follows, the conversation moves along (a GPU only where there is one)
+    def switch(command):
+        raw = turn(fd, command, 300)
+        out = plain(raw)
+        moved = re.findall(r'(⚙|⚡) (\S+) · ref · the conversation moves along', out)
+        if moved:
+            prompt = ANSI.sub('', raw.rsplit(READING, 1)[-1].decode(errors='replace')).strip()
+            assert prompt.startswith(moved[-1][0]), (command, prompt)
+        else:
+            assert 'geistr: ' in out, (command, out[-300:])   # refused: the model stays
+        return moved[-1] if moved else None
+    assert switch(b'/cpu') == ('⚙', 'cpu')
+    moved = switch(b'/gpu')
+    if moved:
+        assert moved[0] == '⚡', moved
+        assert 'tok/s' in plain(turn(fd, b'Say hello on the GPU.', ANSWER))
+        assert switch(b'/auto')
+        assert switch(b'/cpu') == ('⚙', 'cpu')
+    else:
+        assert sys.platform != 'darwin', 'Metal: /gpu must work here'
+        print('  (F4: no GPU here: /gpu refused, the CPU model stays)')
+        assert switch(b'/auto')
+    assert 'tok/s' in plain(turn(fd, b'Say hello once more.', ANSWER))
+    finish_chat(pid, fd)
+
+    # D10 the terminal resized while an answer runs: the next answer and the editor use the new width
+    pid, fd = terminal('--new', cols=100)
+    ready(fd)
+    os.write(fd, story); running(fd, 1)
+    resize(fd, 40)
+    os.write(fd, b'\x1b'); more(fd, until(fd, '[stopped]', 60).split(b'[stopped]')[-1], READING.decode())
+    out = turn(fd, b'Describe the sea in three long sentences.', ANSWER)
+    out = out.rsplit(b'three long sentences.', 1)[-1]
+    text = ANSI.sub('', out.decode(errors='replace'))
+    lines = [l for l in re.split(r'[\r\n]', text) if l.strip()]
+    assert sum(map(len, lines)) > 80 and max(map(shown_width, lines)) <= 40, lines
+    out = keys(fd, b'x' * 50)                       # 4 + 50 columns: the editor's second row
+    out = keys(fd, b'y')
+    assert b'\x1b[1A\r\x1b[J' in out, out[-200:]    # redrawn from the row above
+    keys(fd, b'\x15')
+    finish_chat(pid, fd)
+
+    # D9 NO_COLOR: no colours or styles anywhere: intro, list, shortcuts, answer, search, hints, resumed chat
+    pid, fd = terminal(NO_COLOR='1')
+    out = ready(fd)                                          # resumed: the ↻ line
+    out += keys(fd, b'/') + keys(fd, b'\x15') + keys(fd, b'?')
+    out += turn(fd, b'Write one sentence with a **bold** word.', ANSWER)
+    out += keys(fd, b'\x12') + keys(fd, b'bold') + keys(fd, b'\x1b') + keys(fd, b'\x15')
+    out += turn(fd, b'/info') + turn(fd, b'/help')
+    os.write(fd, b'\x03'); out += until(fd, 'Ctrl-C again to exit')
+    finish_chat(pid, fd)
+    text = plain(out)
+    assert '/clear new' in text and 'another model' in text and 'search:' in text, text[-300:]
+    assert 'Ctrl-L clear screen' in text and 'tok/s' in text and 'end (or Ctrl-D)' in text, text[-300:]
+    assert 'Ctrl-C twice exits' in text, 'NO_COLOR keeps the intro, plain'
+    assert not SGR.search(out), SGR.findall(out)[:10]
+
+    # G4 resume off: nothing resumed, no conversation file, no history
+    assert geistr_run('config', 'resume', 'off').returncode == 0
+    history = os.path.join(env['GEISTEN_HOME'], 'history')
+    kept, typed = sorted(os.listdir(chats)), open(history).read()
+    for _ in range(2):
+        pid, fd = terminal()
+        out = ready(fd)
+        out += turn(fd, b'My name is Ada.', ANSWER)
+        finish_chat(pid, fd)
+        assert 'tok/s' in plain(out) and '↻' not in plain(out), plain(out)[-300:]
+    assert sorted(os.listdir(chats)) == kept and open(history).read() == typed, 'resume off writes nothing'
+    assert geistr_run('config', 'resume', 'on').returncode == 0
+    print('geistr chat in a terminal: Esc (D7), NO_COLOR (D9), resize (D10), Ctrl-R (E4), type-ahead (E8), UTF-8 (E9), '
+          '/gpu /auto /cpu (F4), /system (F6), resume off (G4), a stopped answer resumed (G10) passed')
+
 # ---- serve and chat --socket --------------------------------------------------
 def section_serve():
     import socket as unix
