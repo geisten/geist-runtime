@@ -13,6 +13,12 @@ on:
     - cron: '41 3 * * 0'
   workflow_dispatch:
 
+# A new push to a pull request cancels its older run (the mac runner is the
+# bottleneck); runs on main are keyed by commit, so none of them is cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
