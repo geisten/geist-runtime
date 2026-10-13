@@ -130,4 +130,5 @@ int  chat(const char *name, const char *processor, const char *remote, bool fres
 
 extern const char *models_dir;
 geistr_catalog    *load_catalog(void);
-int                resolve(const char *model, char *path, size_t cap, geistr_reasoning *reasoning, bool *embedding);
+/* *embedding: the catalog's kind, 0 chat, 1 embedding, 2 reranker (geistr_catalog_entry). */
+int                resolve(const char *model, char *path, size_t cap, geistr_reasoning *reasoning, int *embedding);

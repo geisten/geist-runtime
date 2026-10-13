@@ -128,7 +128,7 @@ test: all $(BUILD)/test_decide_driver
 	  { echo "example chat failed: $$out"; exit 1; }
 
 # ---- the real runtime on geistlib (#4) ---------------------------------------
-ENGINE_GOALS := runtime test-clients test-upgrade test-real test-embed fetch-embed-model chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python $(BUILD)/test_decision_real $(BUILD)/bench_decision
+ENGINE_GOALS := runtime test-clients test-upgrade test-real test-embed fetch-embed-model fetch-rerank-model chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python $(BUILD)/test_decision_real $(BUILD)/bench_decision
 ifneq (,$(filter $(ENGINE_GOALS),$(MAKECMDGOALS)))
 GEIST_REPO ?= https://github.com/geisten/geistlib.git
 GEIST_REF  ?= d53560d743ccbee1652aafc338405071d79f9f18
@@ -280,6 +280,10 @@ test-embed: $(BUILD)/test_embed
 
 fetch-embed-model:
 	sh scripts/fetch-model.sh models/catalog.json bitnet-embed-0.6b $(GEISTLIB)/gguf_artifacts
+
+# #150: --files' reranker (test_geistr.py's rerank section: GEISTR_TEST_RERANK_MODEL).
+fetch-rerank-model:
+	sh scripts/fetch-model.sh models/catalog.json qwen3-reranker-0.6b $(GEISTLIB)/gguf_artifacts
 
 # An explicit target never skips: a missing model is an error, not a pass.
 test-real: $(BUILD)/test_real

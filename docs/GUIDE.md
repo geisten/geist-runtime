@@ -147,6 +147,7 @@ The models in catalog revision 12:
 | `qwen38-27b-q4` | Qwen3.8 27B, Q4_0 | 16 GB | 32 GB | thinks |
 | `qwen38-27b-q8` | Qwen3.8 27B, Q8_0 | 29 GB | 48 GB | thinks |
 | `bitnet-embed-0.6b` | BitNet embedding 0.6B | 0.4 GB | 2 GB | embeddings only: [your files](#your-files), `/v1/embeddings` |
+| `qwen3-reranker-0.6b` | Qwen3 Reranker 0.6B | 0.6 GB | 2 GB | reranker only: which of [your files](#your-files) answer |
 
 The list ships inside geistr, so a new geistr brings new models.
 `--catalog FILE` uses another catalog file (JSON, same format as
@@ -387,6 +388,8 @@ answer is. Over HTTP it is left out of the answer too.
 
 `geistr chat bitnet-embed-0.6b` refuses: the model makes vectors for
 [your files](#your-files) and `/v1/embeddings`, it does not write text.
+`geistr chat qwen3-reranker-0.6b` refuses too: the reranker only judges
+whether a passage answers a question, for `--files`.
 
 ## Your files
 
@@ -400,13 +403,33 @@ geistr chat --files ~/Notes        # or /files ~/Notes in a chat
 geistr run qwen3-0.6b --files ~/Notes "When is the shed key needed?"
 ```
 
-For each question, geistr finds the four passages of your files closest to
-it and puts them in front of the question. The answer is followed by where
+For each question, geistr finds the passages of your files closest to it
+and puts them in front of the question. The answer is followed by where
 they came from:
 
 ```
   sources: garden/shed.md, notes/2026-05.md
 ```
+
+**Only the files that answer.** Closeness alone cannot tell a passage that
+answers from one about something similar, so without more, the four
+nearest passages go in and all their files are named. With the reranker
+installed, geistr asks it about each paragraph of the eight nearest
+passages and keeps those it judges to answer, at most four:
+
+```sh
+geistr pull qwen3-reranker-0.6b    # 639 MB, once
+```
+
+Then `sources:` names only those files, and for a question your files do
+not answer nothing goes in front of it, no files are named, and you see
+`nothing relevant in your files`. Until it is installed, `--files` says
+once how to get it. On the retrieval benchmark
+(`scripts/retrieval-bench.py --sources`: 39 questions the files answer, 16
+they do not) it named the right files with a precision of 0.95 (top 4 without
+it: 0.24) and recall 0.90, and nothing for 88 % of the questions the files
+do not answer. The cost is time: about 1.3 s per question on an M1 Max's GPU
+(it runs on the GPU when there is one), 6 s on its CPU.
 
 **What is read.** Files ending in `.txt`, `.md`, `.markdown`, `.rst`,
 `.org`, `.text` and `.pdf`, in the folder and all folders below it, up to

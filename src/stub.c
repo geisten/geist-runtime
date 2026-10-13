@@ -30,7 +30,7 @@
 #define TOKEN_BYTES 3u
 
 const char *geistr_version(void) {
-    return "0.3.3-stub";
+    return "0.3.4-stub";
 }
 
 static void put_error(char *error, size_t cap, const char *text) {
@@ -156,6 +156,14 @@ geistr_status geistr_embed(geistr_model *m, const char *text, float *out, size_t
     *dims = 0;
     if (tokens)
         *tokens = 0;
+    return GEISTR_FORMAT;
+}
+
+/* No stub model has logits (#150). */
+geistr_status geistr_logits(geistr_model *m, const char *prompt, size_t n_tokens, const char *const tokens[],
+                            float out[]) {
+    if (!m || !prompt || (n_tokens && (!tokens || !out)))
+        return GEISTR_INVALID;
     return GEISTR_FORMAT;
 }
 

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Fixes
+
+- `geistr serve --http`: a request that names another model (`"model":
+  "gemma4-e2b"` to a qwen3-0.6b service) gets 404 `model_not_found` instead of
+  an answer from the served model. Its id, `id:latest`, its file name or no
+  model are accepted as before (#193).
+
+## 0.3.4
+
 ### Security
 
 - `geistr serve --http` refuses requests from a web page of another site
@@ -11,12 +20,31 @@
   `Host` check no longer takes a name like `127.evil.example` for a loopback
   address (#171).
 
+### Features
+
+- `--files` names only the files that answer: with the new catalog model
+  `qwen3-reranker-0.6b` installed (Qwen3-Reranker-0.6B, Q8_0, 639 MB, Apache
+  2.0), each paragraph of the 8 nearest passages is judged by the reranker,
+  only the passages it finds relevant go before the question (at most 4),
+  and `sources:` names only their files. A question the files do not
+  answer gets no passages, no `sources:` line and the note `nothing relevant
+  in your files`. Without the reranker `--files` works as before and says
+  once how to get it. On `scripts/retrieval-bench.py --sources`: precision
+  0.95 (was 0.24), recall 0.90 (was 0.90), no file named for 88 % of the
+  off-topic questions (was 0 %); about 1.3 s per question on an M1 Max's GPU,
+  6 s on its CPU. Same for `/files` and `run --files`; HTTP is unchanged
+  (#150).
+- `geistr_logits` (C API): the model's logits of given tokens after a
+  prompt, without generating; a reranker's yes/no (#150).
+- The catalog knows the kind `"reranker"` (`embedding` = 2 in
+  `geistr_catalog_entry`): not a chat model, never recommended (#150).
+- `scripts/retrieval-bench.py --rerank-gguf … [--pieces] [--lib libgeistr]`
+  scores a Qwen3-Reranker GGUF (through llama-server or `geistr_logits`), with
+  a leave-one-out threshold row and recall split by questions in the files'
+  language and across it (#150).
+
 ### Fixes
 
-- `geistr serve --http`: a request that names another model (`"model":
-  "gemma4-e2b"` to a qwen3-0.6b service) gets 404 `model_not_found` instead of
-  an answer from the served model. Its id, `id:latest`, its file name or no
-  model are accepted as before (#193).
 - `--files` finds the right passages more often: the question is embedded as
   it is, without the `Instruct: …\nQuery: ` line before it, which made the
   ranking almost independent of the question. On the new retrieval benchmark
@@ -39,10 +67,10 @@
 - `NO_COLOR` makes `geistr chat` plain: before, the `/` list, the hint, the
   Ctrl-R search line, "Ctrl-C again to exit" and the resumed `↻` line were
   still styled, and the intro and the spinner were left out altogether (#134).
-- The macOS archive, the Homebrew binary and the macOS wheel were built with the
-  runner's own macOS (27) as the minimum, so they did not start on macOS 15 or
-  26 and PyPI refused the wheel tag `macosx_27_0`. They are built for macOS 15
-  and later now (`minos 15.0`, checked in the release workflow) (#152).
+- The macOS binary of 0.3.2 and of the first 0.3.3 build needed macOS 27 (the
+  runner's own), so it did not start on macOS 15 or 26, and PyPI refused the
+  wheel tag `macosx_27_0`. Releases are built for macOS 15 and later now
+  (`minos 15.0`, checked); 0.3.3 was published again that way (#152).
 
 ### Release
 

@@ -38,7 +38,7 @@ extern "C" {
 
 #define GEISTR_VERSION_MAJOR 0
 #define GEISTR_VERSION_MINOR 3
-#define GEISTR_VERSION_PATCH 3
+#define GEISTR_VERSION_PATCH 4
 
 /* Every call that can fail returns geistr_status: ignoring it is a warning
  * with C23 or C++17 (attribute [[nodiscard]]), nothing on older compilers. */
@@ -48,7 +48,7 @@ extern "C" {
 #define GEISTR_NODISCARD
 #endif
 
-/* "0.3.3" — the library's version, which may be newer than this header's. */
+/* "0.3.4" — the library's version, which may be newer than this header's. */
 const char *geistr_version(void);
 
 /* ------------------------------------------------------------------------ */
@@ -145,6 +145,19 @@ GEISTR_NODISCARD geistr_status geistr_model_info_get(const geistr_model *model, 
  * Thread safety: any thread; calls on one model take turns. */
 GEISTR_NODISCARD geistr_status geistr_embed(geistr_model *model, const char *text, float *out, size_t cap,
                                             size_t *dims, uint32_t *tokens);
+
+/* The model's raw logits for the token after prompt, without generating
+ * anything: out[i] for tokens[i], each the text of exactly one vocabulary
+ * token ("yes", "no"). For scoring, e.g. a reranker's yes/no (#150):
+ * softmax over out is the model's choice between those tokens. prompt is
+ * tokenized as it is, special tokens such as <|im_start|> included, no chat
+ * template; the model's BOS first if it wants one. A call that begins as the
+ * previous one did processes only the rest (a question before each passage).
+ * GEISTR_INVALID: a text is not one token; GEISTR_CONTEXT: prompt is longer
+ * than the window; GEISTR_FORMAT: an embedding model.
+ * Thread safety: any thread; calls on one model take turns (with geistr_embed). */
+GEISTR_NODISCARD geistr_status geistr_logits(geistr_model *model, const char *prompt, size_t n_tokens,
+                                             const char *const tokens[], float out[]);
 
 /* Detail of the last failure caused by this model handle (never nullptr). */
 const char *geistr_model_error(const geistr_model *model);
