@@ -116,6 +116,7 @@ struct geistr_model {
     /* GPU backends run one engine call at a time on a model (geistlib#576);
      * CPU sessions run in parallel. */
     bool            serialize;
+    bool            metal; /* geistr_logits rounds what it prefills up to METAL_ROWS (#201) */
     pthread_mutex_t engine;
     pthread_rwlock_t setup;
     bool            borrowed; /* geistr_model_wrap: the caller owns m and be */
@@ -228,6 +229,7 @@ static geistr_status model_describe(geistr_model *m, struct geist_model *gm, str
     m->add_bos   = geist_model_add_bos(gm);
     const char *name = geist_backend_name(be);
     m->serialize = name && (!strcmp(name, "metal") || !strcmp(name, "vulkan"));
+    m->metal     = name && !strcmp(name, "metal");
     if (pthread_mutex_init(&m->engine, nullptr) != 0) {
         put_error(error, cap, "model synchronization setup failed");
         return GEISTR_BACKEND;
@@ -552,6 +554,8 @@ geistr_status geistr_embed(geistr_model *m, const char *text, float *out, size_t
     return s;
 }
 
+#define METAL_ROWS 32
+
 geistr_status geistr_logits(geistr_model *m, const char *prompt, size_t n_tokens, const char *const tokens[],
                             float out[]) {
     if (!m || !prompt || (n_tokens && (!tokens || !out)))
@@ -585,6 +589,16 @@ geistr_status geistr_logits(geistr_model *m, const char *prompt, size_t n_tokens
     size_t keep = 0;
     while (keep < m->n_scored && keep + 1 < n && m->scored[keep] == v[keep])
         keep++;
+    /* Metal prefills a multiple of METAL_ROWS tokens on its fast kernels;
+     * any other count falls back to bounds-checked GEMMs and, unless a
+     * multiple of 8, to the scalar attention (geistlib#35). Processing up
+     * to 31 cached tokens again costs less: a reranker's 24 pieces of ~77
+     * new tokens, 1.28 s a question on an M1 Max before, 0.63 s after
+     * (llama-server: 0.62 s); P(yes) moves by 0.002 at most (#201). On a
+     * CPU the extra tokens only cost. */
+    const size_t pad = m->metal ? (METAL_ROWS - (n - keep) % METAL_ROWS) % METAL_ROWS : 0;
+    if (keep >= pad)
+        keep -= pad;
     if (s == GEISTR_OK && es == GEIST_OK && geist_session_truncate(m->embed, keep) != GEIST_OK)
         keep = 0, es = geist_session_truncate(m->embed, 0);
     m->n_scored = 0;
