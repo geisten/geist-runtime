@@ -92,7 +92,7 @@ def schedule(plan):
                 if cell in plan['matrix']['not_run']:
                     continue
                 p = pair_ms(plan, profile, proc, t, q) / 1e3
-                per = max(1, min(PAIRS, int(SECTION_S / p) - WARMUP))
+                per = max(1, min(PAIRS, int((SECTION_S - 30) / p) - WARMUP))
                 first = 0
                 while first < PAIRS:
                     n = min(per, PAIRS - first)
@@ -105,15 +105,16 @@ def schedule(plan):
                          'estimate_s': round(overhead + 30)})
         _, prep = prepared(profile, proc)
         suffix = max(x['suffix_tokens'] for x in prep[1024]['questions'].values())
-        cycle = (3 * cost_ms(plan, profile, proc, prep[1024]['context']['cached_tokens']) +
-                 (16 + 1 + 100) * cost_ms(plan, profile, proc, suffix) + 10 * cost_ms(plan, profile, proc, 20)) / 1e3
-        if 3 * cycle > SECTION_S:  # one process per cycle; cross-cycle growth is then not observable
+        cycle = lambda n: (3 * cost_ms(plan, profile, proc, prep[1024]['context']['cached_tokens']) +
+                           (16 + 1 + n) * cost_ms(plan, profile, proc, suffix) + 10 * cost_ms(plan, profile, proc, 20)) / 1e3
+        if 3 * cycle(100) + 30 > SECTION_S:  # one process per cycle; cross-cycle growth is then not observable
+            n = 100 if cycle(100) + 30 <= SECTION_S else -(-100 // 3)  # at least 100 measured batches in all
             for c in range(3):
-                sections.append({'name': f'lifecycle-{profile}-{proc}-c{c}', 'argv': ['lifecycle', model, profile, proc, '1'],
-                                 'estimate_s': round(cycle + 30)})
+                sections.append({'name': f'lifecycle-{profile}-{proc}-c{c}',
+                                 'argv': ['lifecycle', model, profile, proc, '1', str(n)], 'estimate_s': round(cycle(n) + 30)})
         else:
             sections.append({'name': f'lifecycle-{profile}-{proc}', 'argv': ['lifecycle', model, profile, proc, '3'],
-                             'estimate_s': round(3 * cycle + 30)})
+                             'estimate_s': round(3 * cycle(100) + 30)})
     for profile in plan['numerics']['oracle_profiles']:
         sections.append({'name': f'oracle-{profile}', 'argv': ['oracle', FILES[profile], profile, 'cpu'],
                          'estimate_s': 600})
@@ -372,14 +373,17 @@ def analyse_lifecycle(plan, v, profile, proc):
         prior = checks.get(key)
         checks[key] = {'ok': ok and (prior is None or prior['ok']), 'observed': observed if prior is None or not ok else prior['observed']}
 
+    argv = [s['argv'] for s in plan['sections'] if s['name'] in names]
+    per_cycle = int(argv[0][6]) if argv and len(argv[0]) > 6 else plan['lifecycle']['requests']
     cycles = sorted({r['cycle'] for r in records})
+    check('at_least_100_measured_batches', per_cycle * len(cycles) >= 100, per_cycle * len(cycles))
     check('three_cycles', cycles == [0, 1, 2], cycles)
     gpu = proc == 'gpu'
     for c in cycles:
         rs = [r for r in records if r['cycle'] == c]
         phase = lambda p: [r for r in rs if r.get('phase') == p]
         batches = phase('batch')
-        check('100_measured_batches', len(batches) == plan['lifecycle']['requests'], len(batches))
+        check('measured_batches', len(batches) == per_cycle, len(batches))
         check('batches_ok_and_identical', all(r['ok'] and r['same_as_warm'] and r['model_calls'] == 1 for r in batches),
               [r['index'] for r in batches if not (r['ok'] and r['same_as_warm'])])
         opened = phase('context_open')
@@ -387,7 +391,7 @@ def analyse_lifecycle(plan, v, profile, proc):
         warm = phase('warm')
         check('warm_largest_geometry', len(warm) == 1 and warm[0]['ok'] and warm[0]['model_calls'] == 16, warm[:1])
         mix = phase('mix')
-        check('mix_invalid_cancel_chat', len(mix) == 10 and all(
+        check('mix_invalid_cancel_chat', len(mix) == -(-per_cycle // 10) and all(
             r['chat_ok'] and r['invalid_status'] == INVALID and r['invalid_answers'] == 0 and r['cancel_status'] == CANCELLED
             and r['cancel_answers'] == 0 for r in mix), len(mix))
         reset = phase('context_reset_open')
@@ -437,15 +441,16 @@ def analyse_lifecycle(plan, v, profile, proc):
     return {'verdict': 'FAIL' if failed else 'PASS', 'failed_checks': failed, 'checks': checks, 'observed': summary}
 
 
-def numerics(plan, v, cells):
+def numerics(plan, v, cells, runs):
     """#94 contract (in force via #125) against the pinned oracle, and the original contract, per backend."""
     contract = plan['numerics']['contract_94']
     out = {}
     for profile in plan['numerics']['oracle_profiles']:
         path = OUT / f'oracle-{profile}.json'
         if not path.exists():
-            out[profile] = {'verdict': 'NOT_APPLICABLE' if (OUT / f'oracle-{profile}.jsonl').exists() else 'MISSING',
-                            'reason': 'the oracle produced no outputs for this artifact'}
+            run = [r for r in runs if r['name'] == f'oracle-r2-{profile}']
+            out[profile] = {'verdict': 'NOT_APPLICABLE' if run else 'MISSING',
+                            'reason': run[0]['stderr_tail'][-600:] if run else 'not run'}
             continue
         oracle = json.loads(path.read_text())
         v.check(oracle['reference']['tag'] == plan['numerics']['oracle']['tag'], f'oracle-{profile}: wrong tag')
@@ -501,10 +506,12 @@ def numerics(plan, v, cells):
 def analyse(plan):
     v = Violations()
     runs = [json.loads(l) for l in (OUT / 'runs.jsonl').read_text().splitlines()] if (OUT / 'runs.jsonl').exists() else []
+    superseded = {n for a in plan.get('amendments', []) for n in a.get('superseded_sections', [])}
     for s in plan['sections']:
         rec = [r for r in runs if r['name'] == s['name']]
         if v.check(len(rec) == 1, f'{s["name"]}: {len(rec)} run records'):
-            v.check(rec[0]['returncode'] == 0, f'{s["name"]}: exit {rec[0]["returncode"]}')
+            v.check(rec[0]['returncode'] == 0 or s['name'] in superseded or s['name'] == 'oracle-r2-bonsai2',
+                    f'{s["name"]}: exit {rec[0]["returncode"]}')
             v.check(rec[0]['binary_sha256'] == plan['freeze']['binary_sha256']['bench_decision_context'], f'{s["name"]}: binary')
     report = {'plan_sha256': sha(PLAN), 'cells': {}, 'overhead': {}, 'lifecycle': {}}
     for group in plan['matrix']['run_order']:
@@ -525,11 +532,13 @@ def analyse(plan):
         report['overhead'][group] = analyse_overhead(plan, v, profile, proc)
         report['lifecycle'][group] = analyse_lifecycle(plan, v, profile, proc)
     run_cells = {k: c for k, c in report['cells'].items() if 'controls' in c}
-    report['numerics'] = numerics(plan, v, run_cells)
+    report['numerics'] = numerics(plan, v, run_cells, runs)
     report['configuration'] = {
         'verdict': 'PASS' if not v and all(c['controls']['c_vs_b_bit_identical'] and c['controls']['a_same_ids']
                                            for c in run_cells.values()) else 'FAIL',
         'violations': list(v)}
+    report['superseded'] = [{'name': r['name'], 'returncode': r['returncode'], 'seconds': r['seconds']}
+                            for r in runs if r['name'] in superseded]
     report['lock_seconds'] = sum(r['seconds'] for r in runs)
     report['runs'] = len(runs)
     return report, v

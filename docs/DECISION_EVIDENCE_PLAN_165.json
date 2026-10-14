@@ -20,7 +20,7 @@
     "engine_version": "0.20.0",
     "engine_build": "make BUILD=build/ctx DECISION=1 DECISION_CONTEXT=1 build/ctx/bench_decision_context (GEMM_PROVIDER native, BACKENDS cpu_neon cpu_scalar metal, release, static libomp)",
     "binary_sha256": {
-      "bench_decision_context": "6cede2040ede6c1ede22992ec4bc9df79a1f4722e00409fa007c429632f0777e",
+      "bench_decision_context": "c21cc06cc4c75a8752a02ec7d091aec1ef757ebab9e83b02b1871045348b67da",
       "libgeist.a": "bff6761e23890da23ebe7157cd4d54d0ad9de0d61ac1ff0976601c2c216ec9eb",
       "libgeistr.a": "57c265a10d5fb69ed1c7023c227b33eb644cc40137a592d8ecd824ec970766c1"
     },
@@ -154,7 +154,7 @@
     "per_cycle": "model create; chat opened (max 1 token); context at the largest geometry (T = 1024, capacity 1216) opened and warmed with one batch of all 16 questions; a second context on the same weights opened, used once and closed; 100 measured batches of one question each (q01..q16 in turn), each bit-identical to the warm batch; every 10th index first a chat turn, an invalid batch (duplicate question IDs, must be INVALID with zero answers) and a cancelled batch (must be CANCELLED with zero answers); at index 50 the context is closed and opened again (reset/recovery); context closed, chat closed, model destroyed",
     "cycles": 3,
     "requests": 100,
-    "process": "the three cycles in one process; where three cycles exceed the section limit (Bonsai NEON) one process per cycle, and the cross-cycle growth check is then reported as not observable (never PASS)",
+    "process": "the three cycles in one process; where they exceed the 30-minute section limit (Bonsai NEON) one process per cycle with 34 measured batches each (102 in all, the issue's at-least-100), and the cross-cycle growth check is then reported as not observable (never PASS)",
     "synchronization": "every sample follows a completed synchronous call (scoring includes device synchronization); nothing runs concurrently",
     "counters": "runtime decision-wrapper live allocations/bytes, process RSS (mach resident_size) and the backend's scoped MTLDevice.currentAllocatedSize, each reported on its own; none is total system GPU memory",
     "budgets_rule": "#17's rule plus room for two FP32 contexts at the largest geometry: max = 1.5 x file bytes + 2 GiB (RSS and Metal); after the model is destroyed 1 GiB RSS; Metal is readable only with a model loaded",
@@ -201,27 +201,17 @@
     "gap_between_sections_s": 180
   },
   "estimate": {
-    "sections": 102,
-    "lock_hours": 36.4,
-    "wall_hours_with_gaps": 41.5,
+    "sections": 103,
+    "lock_hours": 35.8,
+    "wall_hours_with_gaps": 40.9,
     "per_group_hours": {
       "gemma4-gpu": 1.4,
       "gemma4-cpu": 7.2,
-      "bonsai2-cpu": 3.1,
-      "bonsai2-gpu": 24.4
+      "bonsai2-cpu": 2.3,
+      "bonsai2-gpu": 24.6
     },
-    "over_section_limit": [
-      "cell-gemma4-cpu-64-16-p00",
-      "lifecycle-bonsai2-cpu-c0",
-      "lifecycle-bonsai2-cpu-c1",
-      "lifecycle-bonsai2-cpu-c2",
-      "cell-bonsai2-gpu-64-16-p00",
-      "cell-bonsai2-gpu-64-16-p13",
-      "cell-bonsai2-gpu-1024-8-p00",
-      "cell-bonsai2-gpu-1024-8-p08",
-      "cell-bonsai2-gpu-1024-8-p16"
-    ],
-    "note": "from calibration.cost_ms; the Bonsai NEON lifecycle cycles (~40 min each) cannot be split further without dropping required steps"
+    "over_section_limit": [],
+    "note": "from calibration.cost_ms; every section is estimated at most 1800 s including 30 s of model load"
   },
   "sections": [
     {
@@ -236,6 +226,26 @@
     },
     {
       "name": "oracle-bonsai2",
+      "argv": [
+        "oracle",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "cpu"
+      ],
+      "estimate_s": 600
+    },
+    {
+      "name": "oracle-r2-gemma4",
+      "argv": [
+        "oracle",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "cpu"
+      ],
+      "estimate_s": 600
+    },
+    {
+      "name": "oracle-r2-bonsai2",
       "argv": [
         "oracle",
         "Ternary-Bonsai-2-27B-PQ2_0.gguf",
@@ -484,13 +494,13 @@
         "cpu",
         "64",
         "16",
-        "27",
+        "26",
         "0"
       ],
-      "estimate_s": 1803
+      "estimate_s": 1748
     },
     {
-      "name": "cell-gemma4-cpu-64-16-p27",
+      "name": "cell-gemma4-cpu-64-16-p26",
       "argv": [
         "cell",
         "gemma4-e2b-Q4_K_M.gguf",
@@ -498,10 +508,10 @@
         "cpu",
         "64",
         "16",
-        "3",
-        "27"
+        "4",
+        "26"
       ],
-      "estimate_s": 473
+      "estimate_s": 529
     },
     {
       "name": "cell-gemma4-cpu-256-1-p00",
@@ -554,13 +564,13 @@
         "cpu",
         "256",
         "16",
-        "18",
+        "17",
         "0"
       ],
-      "estimate_s": 1800
+      "estimate_s": 1723
     },
     {
-      "name": "cell-gemma4-cpu-256-16-p18",
+      "name": "cell-gemma4-cpu-256-16-p17",
       "argv": [
         "cell",
         "gemma4-e2b-Q4_K_M.gguf",
@@ -568,10 +578,10 @@
         "cpu",
         "256",
         "16",
-        "12",
-        "18"
+        "13",
+        "17"
       ],
-      "estimate_s": 1338
+      "estimate_s": 1415
     },
     {
       "name": "cell-gemma4-cpu-1024-1-p00",
@@ -779,9 +789,10 @@
         "Ternary-Bonsai-2-27B-PQ2_0.gguf",
         "bonsai2",
         "cpu",
-        "1"
+        "1",
+        "34"
       ],
-      "estimate_s": 2369
+      "estimate_s": 1336
     },
     {
       "name": "lifecycle-bonsai2-cpu-c1",
@@ -790,9 +801,10 @@
         "Ternary-Bonsai-2-27B-PQ2_0.gguf",
         "bonsai2",
         "cpu",
-        "1"
+        "1",
+        "34"
       ],
-      "estimate_s": 2369
+      "estimate_s": 1336
     },
     {
       "name": "lifecycle-bonsai2-cpu-c2",
@@ -801,9 +813,10 @@
         "Ternary-Bonsai-2-27B-PQ2_0.gguf",
         "bonsai2",
         "cpu",
-        "1"
+        "1",
+        "34"
       ],
-      "estimate_s": 2369
+      "estimate_s": 1336
     },
     {
       "name": "cell-bonsai2-gpu-64-1-p00",
@@ -856,13 +869,13 @@
         "gpu",
         "64",
         "16",
-        "13",
+        "12",
         "0"
       ],
-      "estimate_s": 1810
+      "estimate_s": 1711
     },
     {
-      "name": "cell-bonsai2-gpu-64-16-p13",
+      "name": "cell-bonsai2-gpu-64-16-p12",
       "argv": [
         "cell",
         "Ternary-Bonsai-2-27B-PQ2_0.gguf",
@@ -870,13 +883,13 @@
         "gpu",
         "64",
         "16",
-        "13",
-        "13"
+        "12",
+        "12"
       ],
-      "estimate_s": 1810
+      "estimate_s": 1711
     },
     {
-      "name": "cell-bonsai2-gpu-64-16-p26",
+      "name": "cell-bonsai2-gpu-64-16-p24",
       "argv": [
         "cell",
         "Ternary-Bonsai-2-27B-PQ2_0.gguf",
@@ -884,10 +897,10 @@
         "gpu",
         "64",
         "16",
-        "4",
-        "26"
+        "6",
+        "24"
       ],
-      "estimate_s": 920
+      "estimate_s": 1118
     },
     {
       "name": "cell-bonsai2-gpu-256-1-p00",
@@ -1122,13 +1135,13 @@
         "gpu",
         "1024",
         "8",
-        "8",
+        "7",
         "0"
       ],
-      "estimate_s": 1803
+      "estimate_s": 1667
     },
     {
-      "name": "cell-bonsai2-gpu-1024-8-p08",
+      "name": "cell-bonsai2-gpu-1024-8-p07",
       "argv": [
         "cell",
         "Ternary-Bonsai-2-27B-PQ2_0.gguf",
@@ -1136,13 +1149,13 @@
         "gpu",
         "1024",
         "8",
-        "8",
-        "8"
+        "7",
+        "7"
       ],
-      "estimate_s": 1803
+      "estimate_s": 1667
     },
     {
-      "name": "cell-bonsai2-gpu-1024-8-p16",
+      "name": "cell-bonsai2-gpu-1024-8-p14",
       "argv": [
         "cell",
         "Ternary-Bonsai-2-27B-PQ2_0.gguf",
@@ -1150,13 +1163,13 @@
         "gpu",
         "1024",
         "8",
-        "8",
-        "16"
+        "7",
+        "14"
       ],
-      "estimate_s": 1803
+      "estimate_s": 1667
     },
     {
-      "name": "cell-bonsai2-gpu-1024-8-p24",
+      "name": "cell-bonsai2-gpu-1024-8-p21",
       "argv": [
         "cell",
         "Ternary-Bonsai-2-27B-PQ2_0.gguf",
@@ -1164,10 +1177,24 @@
         "gpu",
         "1024",
         "8",
-        "6",
-        "24"
+        "7",
+        "21"
       ],
-      "estimate_s": 1530
+      "estimate_s": 1667
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-8-p28",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "8",
+        "2",
+        "28"
+      ],
+      "estimate_s": 985
     },
     {
       "name": "cell-bonsai2-gpu-1024-16-p00",
@@ -1609,26 +1636,6 @@
         "3"
       ],
       "estimate_s": 897
-    },
-    {
-      "name": "oracle-r2-gemma4",
-      "argv": [
-        "oracle",
-        "gemma4-e2b-Q4_K_M.gguf",
-        "gemma4",
-        "cpu"
-      ],
-      "estimate_s": 600
-    },
-    {
-      "name": "oracle-r2-bonsai2",
-      "argv": [
-        "oracle",
-        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
-        "bonsai2",
-        "cpu"
-      ],
-      "estimate_s": 600
     }
   ],
   "verdicts": "PASS/FAIL/INCONCLUSIVE published separately for configuration, numerics (within engine; against the oracle under #94; original contract reported), each latency cell and package kind, overhead per model x backend, lifecycle per model x backend; NOT_RUN and MISSING cells are listed and cannot pass",
@@ -1645,6 +1652,33 @@
       "superseded_sections": [
         "oracle-gemma4",
         "oracle-bonsai2"
+      ]
+    },
+    {
+      "date": "2026-10-14 20:40, before any latency, overhead or lifecycle section (the runner was stopped in the gap after the two oracle sections)",
+      "section": "schedule, lifecycle split, harness binary",
+      "reason": "the coordinator requires every section to be at most 30 minutes; the frozen rule let sections reach 1810 s (it ignored the 30 s model load it adds) and a Bonsai NEON lifecycle cycle with 100 batches is about 40 minutes",
+      "change": [
+        "schedule: pairs per section = floor((1800 - 30) / pair estimate) - 5, so no cell section exceeds 1800 s estimated",
+        "Bonsai NEON lifecycle: 3 processes of one cycle with 34 measured batches each (102 >= 100 in all, every 10th with the chat/invalid/cancel mix, reset at batch 17); other combinations unchanged (3 x 100 in one process)",
+        "harness: lifecycle takes an optional batch count (default 100); nothing else changed; new binary sha256 c21cc06c...; engine and runtime libraries unchanged"
+      ],
+      "sections_changed": [
+        "cell-bonsai2-gpu-1024-8-p07",
+        "cell-bonsai2-gpu-1024-8-p08",
+        "cell-bonsai2-gpu-1024-8-p14",
+        "cell-bonsai2-gpu-1024-8-p16",
+        "cell-bonsai2-gpu-1024-8-p21",
+        "cell-bonsai2-gpu-1024-8-p24",
+        "cell-bonsai2-gpu-1024-8-p28",
+        "cell-bonsai2-gpu-64-16-p12",
+        "cell-bonsai2-gpu-64-16-p13",
+        "cell-bonsai2-gpu-64-16-p24",
+        "cell-bonsai2-gpu-64-16-p26",
+        "cell-gemma4-cpu-256-16-p17",
+        "cell-gemma4-cpu-256-16-p18",
+        "cell-gemma4-cpu-64-16-p26",
+        "cell-gemma4-cpu-64-16-p27"
       ]
     }
   ]

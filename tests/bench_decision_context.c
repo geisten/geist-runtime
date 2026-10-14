@@ -6,7 +6,7 @@
  *   bench_decision_context prepare   MODEL PROFILE cpu|gpu              prompts, IDs and cuts; no inference
  *   bench_decision_context cell      MODEL PROFILE cpu|gpu T Q N P0     controls A/B/C, 5 warm-up + N pairs
  *   bench_decision_context overhead  MODEL PROFILE cpu|gpu              context batch (wrapper) vs direct prefix
- *   bench_decision_context lifecycle MODEL PROFILE cpu|gpu CYCLES       create-use-destroy, resources
+ *   bench_decision_context lifecycle MODEL PROFILE cpu|gpu CYCLES [N]   create-use-destroy, resources (N batches, 100)
  *
  * A: geistr_decision_score per question (independent full prompt, DENSE).
  * B: a fresh engine session: prefill(cached prefix), prefill(suffix), logits.
@@ -642,7 +642,7 @@ static void measured(geistr_decision_context *c, const struct workload *w, int c
            s == GEISTR_OK && !memcmp(r.answers[0].logits, ref_c[k], sizeof ref_c[k]) ? "true" : "false");
 }
 
-static int lifecycle(const char *path, const char *profile, bool gpu, int cycles) {
+static int lifecycle(const char *path, const char *profile, bool gpu, int cycles, int requests) {
     for (int cycle = 0; cycle < cycles; ++cycle) {
         resources("process_before_model", cycle, -1, nullptr);
         puts("}");
@@ -694,7 +694,7 @@ static int lifecycle(const char *path, const char *profile, bool gpu, int cycles
         printf(",\"ok\":%s,\"rss_delta_bytes\":%lld}\n", second_ok ? "true" : "false",
                (long long)rss_bytes() - (long long)before_second);
         geistr_decision_context_close(c2);
-        for (int index = 0; index < REQUESTS; ++index) {
+        for (int index = 0; index < requests; ++index) {
             if (index % 10 == 0) {
                 /* chat, an invalid batch (duplicate IDs), a cancelled batch */
                 const bool chatted = chat_turn(chat);
@@ -711,7 +711,7 @@ static int lifecycle(const char *path, const char *profile, bool gpu, int cycles
                        chatted ? "true" : "false", (int)invalid, invalid_answers, invalid_index, (int)cancelled,
                        x.n_answers);
             }
-            if (index == REQUESTS / 2) { /* reset: the context is destroyed and created again */
+            if (index == requests / 2) { /* reset: the context is destroyed and created again */
                 geistr_decision_context_close(c);
                 resources("context_reset_closed", cycle, index, m);
                 puts("}");
@@ -749,8 +749,8 @@ int main(int argc, char **argv) {
         return prepare(argv[2], argv[3], gpu);
     if (!strcmp(argv[1], "overhead"))
         return overhead(argv[2], argv[3], gpu);
-    if (!strcmp(argv[1], "lifecycle") && argc == 6)
-        return lifecycle(argv[2], argv[3], gpu, atoi(argv[5]));
+    if (!strcmp(argv[1], "lifecycle") && (argc == 6 || argc == 7))
+        return lifecycle(argv[2], argv[3], gpu, atoi(argv[5]), argc == 7 ? atoi(argv[6]) : REQUESTS);
     if (!strcmp(argv[1], "cell") && argc == 9)
         return cell(argv[2], argv[3], gpu, (size_t)atoi(argv[5]), (size_t)atoi(argv[6]), atoi(argv[7]),
                     atoi(argv[8]));
