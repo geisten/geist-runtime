@@ -26,6 +26,13 @@
 
 ### Fixes
 
+- `scripts/retrieval-bench.py --rerank-gguf` (through llama-server) takes
+  the exact log-probs of "yes" and "no": when one was not among the top 50
+  tokens, the 50th one's stood in, which raised P(yes) of unrelated passages
+  (0.0029 instead of 0.0002 on the first piece of #225, "yes" outside the top
+  50 for 449 of 480 pieces). geistr_logits was right all along: same token
+  ids as llama-server, yes − no within 0.02 of llama-server's on Metal and
+  0.08 on the CPU, and the same pieces cross `--files`' 0.2 (#225).
 - `geistr serve --http`: a request that names another model (`"model":
   "gemma4-e2b"` to a qwen3-0.6b service) gets 404 `model_not_found` instead of
   an answer from the served model. Its id, `id:latest`, its file name or no
