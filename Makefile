@@ -121,6 +121,7 @@ test: all $(BUILD)/test_decide_driver
 	$(BUILD)/test_decision_batch
 	python3 tests/test_decide_cli.py $(BUILD)/test_decide_driver
 	python3 tests/test_decision_evidence.py
+	python3 tests/test_retrieval_bench.py
 	python3 tests/test_catalog.py $(BUILD)/test_catalog models/catalog.json
 	$(BUILD)/test_fit
 	$(BUILD)/test_render

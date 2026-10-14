@@ -267,12 +267,33 @@ def judge(ask, qs, top, cs, instruct, split):
     return out, took
 
 
+def llama_p_yes(top):
+    """P(yes) = softmax(logit yes, logit no) from llama-server's log-probs:
+    top(n) gives the n most likely tokens as (text, log-prob), most likely
+    first. Both must be among them: for an unrelated passage "yes" is often
+    far down (beyond the top 50 for 449 of 480 pieces), and its log-prob is
+    needed exactly; standing in the lowest listed one put P(yes) at 0.0029
+    instead of 0.0002 (#225). So n grows until both are listed. Several
+    tokens can have the same text (byte tokens all print as U+FFFD): the
+    most likely one counts, as for the token "yes" itself."""
+    import math
+    n = 50
+    while True:
+        listed = top(n)
+        lp = {}
+        for text, logprob in listed:
+            lp.setdefault(text, logprob)
+        if 'yes' in lp and 'no' in lp:
+            return 1 / (1 + math.exp(lp['no'] - lp['yes']))
+        if len(listed) < n:
+            sys.exit('llama-server: "yes" or "no" is not a token of the model')
+        n *= 8
+
+
 def rerank_gguf(path, qs, top, cs, ngl, instruct, split=lambda t: [t]):
     """Qwen3-Reranker GGUF through llama-server: P(yes) = softmax(logit yes, logit no)
     of the token after the prompt, for each of a question's top chunks; with
-    split, the best of the chunk's pieces. ponytail: yes/no from the top 50
-    tokens; one missing takes the 50th's log-prob (both missing: 0.5)."""
-    import math
+    split, the best of the chunk's pieces (yes/no as llama_p_yes finds them)."""
     probe = socket.socket(); probe.bind(('127.0.0.1', 0)); port = probe.getsockname()[1]; probe.close()
     p = subprocess.Popen(['llama-server', '-m', path, '--port', str(port), '-ngl', str(ngl), '-c', '4096', '-np', '1',
                           '--no-webui'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -290,16 +311,13 @@ def rerank_gguf(path, qs, top, cs, ngl, instruct, split=lambda t: [t]):
                 sys.exit('llama-server did not start')
             time.sleep(.3)
 
-        def ask(prompt):
+        def logprobs(prompt, n_probs):
             c = http.client.HTTPConnection('127.0.0.1', port, timeout=600)
-            c.request('POST', '/completion', body=json.dumps({'prompt': prompt, 'n_predict': 1, 'n_probs': 50,
+            c.request('POST', '/completion', body=json.dumps({'prompt': prompt, 'n_predict': 1, 'n_probs': n_probs,
                                                               'temperature': 0, 'cache_prompt': True}))
             r = json.loads(c.getresponse().read()); c.close()
-            lp = {t['token']: t['logprob'] for t in r['completion_probabilities'][0]['top_logprobs']}
-            floor = min(lp.values())
-            y, n = lp.get('yes', floor), lp.get('no', floor)
-            return 1 / (1 + math.exp(n - y))
-        return judge(ask, qs, top, cs, instruct, split)
+            return [(t['token'], t['logprob']) for t in r['completion_probabilities'][0]['top_logprobs']]
+        return judge(lambda prompt: llama_p_yes(lambda n: logprobs(prompt, n)), qs, top, cs, instruct, split)
     finally:
         p.send_signal(signal.SIGTERM); p.wait(30)
 
