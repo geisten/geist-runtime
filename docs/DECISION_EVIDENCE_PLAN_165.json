@@ -1,0 +1,1615 @@
+{
+  "schema": 1,
+  "issue": "geisten/geist-runtime#165",
+  "parent": "geisten/geist-runtime#161",
+  "frozen": "2026-10-14, before any measured inference of this campaign; nothing below is changed after measuring. Amendments, if any, are appended with their date and never replace a rule.",
+  "scope": "Apple development evidence for the prefix/batch path (geistlib#5, #162, #163, #164): latency, overhead, numerics within the engine and against the pinned oracle, lifecycle and resources. No quality claim (#166 owns quality), no universal speed multiplier, no Jev equivalence; a FAIL or INCONCLUSIVE cannot certify a profile or remove default-off.",
+  "reuses": {
+    "methodology": "docs/DECISION_EVIDENCE_17.md and docs/DECISION_EVIDENCE_PLAN_17.json (paired AB/BA, ratio of paired means, 10000-resample bootstrap with seed 14917, the 2 % overhead gate, lifecycle budget rule, the #94 contract and the latest-release oracle via tools/llama_oracle.py)",
+    "not_reused": "#17's timings and its allocator-growth exception: nothing historical widens a budget here"
+  },
+  "pre_freeze_disclosure": [
+    "calibration for the run-time estimate only: build/ctx/bench_decision direct, 5 warm-up + 1 scoring of #17's fixtures, each model x backend (engine 3841fa6); its numbers set calibration.cost_ms below and nothing else",
+    "harness smoke runs on Gemma 4 Metal (cell T=256 Q=2 with 1 pair, overhead, lifecycle with 1 cycle) to validate the tool; not evidence and not used by any verdict. They showed C=B=A bit-identical and, in the lifecycle, 213 MiB more RSS after a context closed than before it opened (Metal provider bytes returned); the RSS retention after a context closes is therefore reported, not gated, and the gates below follow the #17 rules",
+    "prepare (tokenization only, no inference): the frozen prompts, IDs, cuts and chunks in tests/fixtures/decisions/validation/apple-165/prepare-*.jsonl"
+  ],
+  "freeze": {
+    "runtime_base_commit": "643ccb5f2eab3f643ad555fed580608a01c88a21",
+    "runtime_harness": "tests/bench_decision_context.c and tests/decision_context_source.h at the commit that adds this plan",
+    "engine_revision": "3841fa68e277b8ce33211aa84e4728dd61c133de",
+    "engine_version": "0.20.0",
+    "engine_build": "make BUILD=build/ctx DECISION=1 DECISION_CONTEXT=1 build/ctx/bench_decision_context (GEMM_PROVIDER native, BACKENDS cpu_neon cpu_scalar metal, release, static libomp)",
+    "binary_sha256": {
+      "bench_decision_context": "6cede2040ede6c1ede22992ec4bc9df79a1f4722e00409fa007c429632f0777e",
+      "libgeist.a": "bff6761e23890da23ebe7157cd4d54d0ad9de0d61ac1ff0976601c2c216ec9eb",
+      "libgeistr.a": "57c265a10d5fb69ed1c7023c227b33eb644cc40137a592d8ecd824ec970766c1"
+    },
+    "host": "Apple M1 Max, 10 cores, 64 GiB, macOS 27.0 (shared machine, sections under ~/bin/with-mac-lock)",
+    "models": {
+      "gemma4": {
+        "file": "~/geist-models/gemma4-e2b-Q4_K_M.gguf",
+        "profile": "gemma4-e2b-q4-v1",
+        "sha256": "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
+        "bytes": 3106738272,
+        "template_sha256": "241c50d86bdfe5e43307da87f559cd2416aacd67a8de46c15acc0105ef2200b7"
+      },
+      "bonsai2": {
+        "file": "~/geist-models/Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "profile": "bonsai2-27b-pq2-v1",
+        "sha256": "3907dc1658db1f78a9826bf8d5bcb8dc65db0d466388937af57f2294fae62ec1",
+        "bytes": 7206168928,
+        "template_sha256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041"
+      }
+    },
+    "tokenizer": "each artifact's own GGUF tokenizer through geist_session_tokenize (content tokens, no added BOS; the Gemma render carries BOS as text), exactly as the runtime prepares decisions",
+    "backends": {
+      "cpu": "cpu_neon",
+      "gpu": "metal"
+    },
+    "threads": 6,
+    "model_context": 1280,
+    "mode": "DENSE; SELECTED_ROWS is not part of the context path (FORMAT)",
+    "kv_cache": "FP32 for A, B and C (the runtime passes GEIST_KV_FP32 for decisions and contexts)",
+    "activation_arithmetic": "not reported by the engine (geistr_decision_context_info.activation is null); recorded as unknown, never implied FP32. The engine's own default arithmetic per backend at 3841fa6 applies equally to A, B and C",
+    "chunk_schedule": "the engine's resolved prefill chunk per handle (geist_decision_prefill_chunk with the default m_max), recorded per backend/capacity in prepare-*.jsonl: Gemma NEON 64, Gemma Metal 256, Bonsai NEON 128, Bonsai Metal 320. B uses the same chunk as m_max",
+    "cut": "strictly before the last token of the rendered common prefix, aligned down to the chunk (decision_prefix_cut); zero is a valid cut and is reported as such",
+    "capacity_margin": 192,
+    "capacity": "max_prompt_tokens = T + 192 for A, B and C (256, 448, 1216); every frozen full prompt fits (prepare: fits=true)",
+    "max_snapshot_bytes": 1073741824,
+    "snapshot_budget_note": "explicitly 1 GiB so the measurement is not cut by the 256 MiB product default; each cell reports its snapshot bytes against the default",
+    "workload": "tests/decision_context_source.h: one invented common context, cut by whole words to at most T content tokens of each model (the longest word prefix that fits), and 16 fixed-option questions (IDs q01..q16, options A..D); a cell with Q questions asks q01..qQ in order. Exact prompts, IDs, cuts: prepare-*.jsonl",
+    "power_thermal": "on AC power (a section on battery is refused, not measured); pmset -g batt and pmset -g therm recorded before and after every section; the 1-minute load average recorded per section and per pair. The machine is shared: no load threshold is waited for, no section is excluded or repeated because of load or temperature",
+    "oracle": "llama.cpp v0.6.0 (d81235049384534c167caea52b85a694f6103d14), the latest upstream release resolved on 2026-10-14 via the GitHub releases API and pinned for the whole campaign; built CPU-only by tools/llama_oracle.py (reference_score a38e9b1756b8fc37df12dc335908c4c570fa0b606a5522c2c913cd40b3492588 at freeze)"
+  },
+  "controls": {
+    "A": "independent full-prompt DENSE decisions: geistr_decision_score per question with the context in the request (the existing single-question path), one handle opened before the pairs, capacity T+192",
+    "B": "freshly recomputed prefix+suffix with the exact split geometry: a fresh engine session (FP32 KV, m_max = the context's chunk, capacity T+192) prefills the cached prefix IDs, then the suffix IDs, and reads the candidate logits; untimed control, every question of every section",
+    "C": "geistr_decision_context_open + geistr_decision_context_score_batch (snapshot restore + suffix)",
+    "gates": "C vs B bit-identical on every question (else the campaign stops and an issue is filed); A's prompt/candidate IDs equal C's full prompt; C vs A differences are reported per question (bit-identity, max |delta|, selection), never hidden"
+  },
+  "matrix": {
+    "models": [
+      "gemma4",
+      "bonsai2"
+    ],
+    "backends": [
+      "cpu",
+      "gpu"
+    ],
+    "questions": [
+      1,
+      4,
+      8,
+      16
+    ],
+    "context_tokens": [
+      64,
+      256,
+      1024
+    ],
+    "suffix_geometry": "suffix = uncached context tail + the rendered question/options; 77-165 tokens per question (prepare-*.jsonl)",
+    "run_order": [
+      "gemma4-gpu",
+      "gemma4-cpu",
+      "bonsai2-cpu",
+      "bonsai2-gpu"
+    ],
+    "not_run": {
+      "bonsai2-cpu-64-4": "Bonsai NEON prefills ~6.5 tokens/s (calibration); the twelve Bonsai NEON cells need about 98 h of exclusive machine time, beyond this campaign. Only the smallest cell (T=64, Q=1) runs. A cell not run is reported NOT_RUN and cannot pass",
+      "bonsai2-cpu-64-8": "as bonsai2-cpu-64-4",
+      "bonsai2-cpu-64-16": "as bonsai2-cpu-64-4",
+      "bonsai2-cpu-256-1": "as bonsai2-cpu-64-4",
+      "bonsai2-cpu-256-4": "as bonsai2-cpu-64-4",
+      "bonsai2-cpu-256-8": "as bonsai2-cpu-64-4",
+      "bonsai2-cpu-256-16": "as bonsai2-cpu-64-4",
+      "bonsai2-cpu-1024-1": "as bonsai2-cpu-64-4",
+      "bonsai2-cpu-1024-4": "as bonsai2-cpu-64-4",
+      "bonsai2-cpu-1024-8": "as bonsai2-cpu-64-4",
+      "bonsai2-cpu-1024-16": "as bonsai2-cpu-64-4"
+    }
+  },
+  "latency": {
+    "pairs": "5 warm-up pairs, then 30 measured pairs per cell, alternating RI/IR (reuse first on even pair indices); a cell split into several sections (one process each, at most ~30 min estimated) repeats the 5 warm-up pairs in every section, warm-up pairs are never measured, measured pair indices continue across sections",
+    "reuse_side": "context open (render, tokenize, prefix prefill, snapshot) + batch 1 (first package) + batch 2 on the same handle (repeated package) + close (teardown); each timed",
+    "independent_side": "Q x geistr_decision_score on the A handle (package = sum of per-question wall times)",
+    "first_package": "reuse open + batch 1 wall time vs the independent package of the same pair",
+    "repeated_package": "reuse batch 2 wall time vs the independent package of the same pair",
+    "statistic": "ratio of paired means reuse/independent and its two-sided 95 % paired bootstrap interval, 10000 resamples, seed 14917 (tools/decision_evidence_165.py paired_ratio = #17's)",
+    "gate": "per cell and per package kind: PASS upper < 1.0, FAIL lower > 1.0, else INCONCLUSIVE; any failed side in a measured pair makes that cell FAIL; no pooling across cells, no exclusions",
+    "reported": "p50/p95/mean per side; component p50s (open/setup, preparation = render+tokenize, scoring = restore+suffix prefill+readout+copy under the engine lock, close); the API does not time restore, readout or copy separately, so they are reported inside scoring; model calls (setup prefill per context, one per question per batch); snapshot bytes; RSS; output stability (every batch bit-identical to the cell's control C)"
+  },
+  "overhead_gate": {
+    "protocol": "#17's, unchanged: 5 warm-up pairs, 30 measured pairs, AB/BA alternating, ratio of paired means, 10000-resample paired bootstrap, seed 14917, PASS upper <= 1.02, FAIL lower > 1.02, else INCONCLUSIVE",
+    "A": "geistr_decision_context_score_batch with one question: its scoring_ms (restore + suffix + readout under the engine lock, results copied)",
+    "B": "geist_decision_score_from_prefix on a direct engine handle with its own prefix prepared from the same cached IDs (same capacity, chunk, FP32 KV), same suffix and candidate IDs, under the same engine lock, logits and probabilities copied",
+    "workload": "T = 256, questions q01..q16 in turn, one per pair; both outputs must be bit-identical to the context's complete batch",
+    "combinations": "gemma4 and bonsai2 x cpu_neon and metal",
+    "decode": "not applicable (no generation is invented)"
+  },
+  "numerics": {
+    "contract_in_force": "the #94 contract adopted by #125 (2026-10-09), resolved for this campaign as below; the original strict contract is reported separately",
+    "contract_94": {
+      "winner_gap": 3.0,
+      "envelope": 4.0,
+      "original_atol": 0.1,
+      "original_rtol": 0.01
+    },
+    "independent": "C's logits (control rows of the Q=16 cells, first section, every T and both backends: 48 prompts per backend) against the oracle on the same full-prompt IDs: the selection must equal the oracle's where the oracle's top-two gap >= 3.0 logits, and every candidate within 4.0 logits; original contract: atol 0.10 + rtol 0.01 per candidate and the selection, INCONCLUSIVE where the gap is within twice the allowance",
+    "oracle": {
+      "project": "ggml-org/llama.cpp",
+      "tag": "v0.6.0",
+      "commit": "d81235049384534c167caea52b85a694f6103d14",
+      "execution": "CPU only, F32 KV, no flash attention, six threads, last prompt logits (tools/llama_oracle.py, unchanged)"
+    },
+    "oracle_profiles": [
+      "gemma4",
+      "bonsai2"
+    ],
+    "bonsai_oracle": "attempted once with the same tool; if upstream v0.6.0 cannot load or score the PQ2_0 artifact, Bonsai's independent numerics are NOT_APPLICABLE (never PASS)",
+    "within_engine": "C vs B bit-identical (gate); C vs A: bit-identical expected (the cut is on the chunk boundary); #94's within-engine bound atol 0.10 / rtol 0.01 is the upper limit, any excess FAIL",
+    "reruns": "one oracle run per profile; no threshold, oracle or repeat chosen after observing results"
+  },
+  "lifecycle": {
+    "tool": "bench_decision_context lifecycle",
+    "per_cycle": "model create; chat opened (max 1 token); context at the largest geometry (T = 1024, capacity 1216) opened and warmed with one batch of all 16 questions; a second context on the same weights opened, used once and closed; 100 measured batches of one question each (q01..q16 in turn), each bit-identical to the warm batch; every 10th index first a chat turn, an invalid batch (duplicate question IDs, must be INVALID with zero answers) and a cancelled batch (must be CANCELLED with zero answers); at index 50 the context is closed and opened again (reset/recovery); context closed, chat closed, model destroyed",
+    "cycles": 3,
+    "requests": 100,
+    "process": "the three cycles in one process; where three cycles exceed the section limit (Bonsai NEON) one process per cycle, and the cross-cycle growth check is then reported as not observable (never PASS)",
+    "synchronization": "every sample follows a completed synchronous call (scoring includes device synchronization); nothing runs concurrently",
+    "counters": "runtime decision-wrapper live allocations/bytes, process RSS (mach resident_size) and the backend's scoped MTLDevice.currentAllocatedSize, each reported on its own; none is total system GPU memory",
+    "budgets_rule": "#17's rule plus room for two FP32 contexts at the largest geometry: max = 1.5 x file bytes + 2 GiB (RSS and Metal); after the model is destroyed 1 GiB RSS; Metal is readable only with a model loaded",
+    "budgets": {
+      "gemma4": {
+        "rss_max_bytes": 6807591056,
+        "metal_max_bytes": 6807591056,
+        "rss_cleanup_max_bytes": 1073741824
+      },
+      "bonsai2": {
+        "rss_max_bytes": 12956737040,
+        "metal_max_bytes": 12956737040,
+        "rss_cleanup_max_bytes": 1073741824
+      }
+    },
+    "weights_once": "the second context's RSS increase is below half the file bytes, and RSS/Metal stay within the max (a second copy of the weights exceeds it)",
+    "ownership": "wrapper live allocations/bytes constant per request and exactly 0 after every context close (reset, final) and before the model closes",
+    "metal_context_retention_bytes": 67108864,
+    "growth_bytes": 67108864,
+    "retention_checks": "Metal provider bytes after the final context close at most 64 MiB above the value before the first context opened; RSS after the final context close at most 64 MiB above RSS after the reset close (no growth across context create/destroy); model-closed RSS of cycle 3 at most 64 MiB above cycle 1 (in-process cycles only); RSS retained after a context close is reported, not gated",
+    "missing": "a missing sample, cycle or check is FAIL, never PASS; no historical exception (#17's Bonsai NEON growth) applies"
+  },
+  "calibration": {
+    "source": "build/ctx/bench_decision direct (5 warm-up + 1 of #17's 64/80/77-token fixtures) and the Gemma Metal smoke cell, engine 3841fa6, load average about 7",
+    "cost_ms": {
+      "gemma4-gpu": {
+        "fixed": 200,
+        "per_token": 1.0
+      },
+      "gemma4-cpu": {
+        "fixed": 400,
+        "per_token": 6.7
+      },
+      "bonsai2-gpu": {
+        "fixed": 500,
+        "per_token": 10.0
+      },
+      "bonsai2-cpu": {
+        "fixed": 0,
+        "per_token": 155.0
+      }
+    },
+    "section_limit_s": 1800,
+    "gap_between_sections_s": 180
+  },
+  "estimate": {
+    "sections": 102,
+    "lock_hours": 36.4,
+    "wall_hours_with_gaps": 41.5,
+    "per_group_hours": {
+      "gemma4-gpu": 1.4,
+      "gemma4-cpu": 7.2,
+      "bonsai2-cpu": 3.1,
+      "bonsai2-gpu": 24.4
+    },
+    "over_section_limit": [
+      "cell-gemma4-cpu-64-16-p00",
+      "lifecycle-bonsai2-cpu-c0",
+      "lifecycle-bonsai2-cpu-c1",
+      "lifecycle-bonsai2-cpu-c2",
+      "cell-bonsai2-gpu-64-16-p00",
+      "cell-bonsai2-gpu-64-16-p13",
+      "cell-bonsai2-gpu-1024-8-p00",
+      "cell-bonsai2-gpu-1024-8-p08",
+      "cell-bonsai2-gpu-1024-8-p16"
+    ],
+    "note": "from calibration.cost_ms; the Bonsai NEON lifecycle cycles (~40 min each) cannot be split further without dropping required steps"
+  },
+  "sections": [
+    {
+      "name": "oracle-gemma4",
+      "argv": [
+        "oracle",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "cpu"
+      ],
+      "estimate_s": 600
+    },
+    {
+      "name": "oracle-bonsai2",
+      "argv": [
+        "oracle",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "cpu"
+      ],
+      "estimate_s": 600
+    },
+    {
+      "name": "cell-gemma4-gpu-64-1-p00",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "gpu",
+        "64",
+        "1",
+        "30",
+        "0"
+      ],
+      "estimate_s": 68
+    },
+    {
+      "name": "cell-gemma4-gpu-64-4-p00",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "gpu",
+        "64",
+        "4",
+        "30",
+        "0"
+      ],
+      "estimate_s": 179
+    },
+    {
+      "name": "cell-gemma4-gpu-64-8-p00",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "gpu",
+        "64",
+        "8",
+        "30",
+        "0"
+      ],
+      "estimate_s": 326
+    },
+    {
+      "name": "cell-gemma4-gpu-64-16-p00",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "gpu",
+        "64",
+        "16",
+        "30",
+        "0"
+      ],
+      "estimate_s": 623
+    },
+    {
+      "name": "cell-gemma4-gpu-256-1-p00",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "gpu",
+        "256",
+        "1",
+        "30",
+        "0"
+      ],
+      "estimate_s": 86
+    },
+    {
+      "name": "cell-gemma4-gpu-256-4-p00",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "gpu",
+        "256",
+        "4",
+        "30",
+        "0"
+      ],
+      "estimate_s": 204
+    },
+    {
+      "name": "cell-gemma4-gpu-256-8-p00",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "gpu",
+        "256",
+        "8",
+        "30",
+        "0"
+      ],
+      "estimate_s": 359
+    },
+    {
+      "name": "cell-gemma4-gpu-256-16-p00",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "gpu",
+        "256",
+        "16",
+        "30",
+        "0"
+      ],
+      "estimate_s": 673
+    },
+    {
+      "name": "cell-gemma4-gpu-1024-1-p00",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "gpu",
+        "1024",
+        "1",
+        "30",
+        "0"
+      ],
+      "estimate_s": 140
+    },
+    {
+      "name": "cell-gemma4-gpu-1024-4-p00",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "gpu",
+        "1024",
+        "4",
+        "30",
+        "0"
+      ],
+      "estimate_s": 338
+    },
+    {
+      "name": "cell-gemma4-gpu-1024-8-p00",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "gpu",
+        "1024",
+        "8",
+        "30",
+        "0"
+      ],
+      "estimate_s": 602
+    },
+    {
+      "name": "cell-gemma4-gpu-1024-16-p00",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "gpu",
+        "1024",
+        "16",
+        "30",
+        "0"
+      ],
+      "estimate_s": 1131
+    },
+    {
+      "name": "overhead-gemma4-gpu",
+      "argv": [
+        "overhead",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "gpu"
+      ],
+      "estimate_s": 50
+    },
+    {
+      "name": "lifecycle-gemma4-gpu",
+      "argv": [
+        "lifecycle",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "gpu",
+        "3"
+      ],
+      "estimate_s": 152
+    },
+    {
+      "name": "cell-gemma4-cpu-64-1-p00",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "cpu",
+        "64",
+        "1",
+        "30",
+        "0"
+      ],
+      "estimate_s": 185
+    },
+    {
+      "name": "cell-gemma4-cpu-64-4-p00",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "cpu",
+        "64",
+        "4",
+        "30",
+        "0"
+      ],
+      "estimate_s": 543
+    },
+    {
+      "name": "cell-gemma4-cpu-64-8-p00",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "cpu",
+        "64",
+        "8",
+        "30",
+        "0"
+      ],
+      "estimate_s": 1015
+    },
+    {
+      "name": "cell-gemma4-cpu-64-16-p00",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "cpu",
+        "64",
+        "16",
+        "27",
+        "0"
+      ],
+      "estimate_s": 1803
+    },
+    {
+      "name": "cell-gemma4-cpu-64-16-p27",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "cpu",
+        "64",
+        "16",
+        "3",
+        "27"
+      ],
+      "estimate_s": 473
+    },
+    {
+      "name": "cell-gemma4-cpu-256-1-p00",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "cpu",
+        "256",
+        "1",
+        "30",
+        "0"
+      ],
+      "estimate_s": 274
+    },
+    {
+      "name": "cell-gemma4-cpu-256-4-p00",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "cpu",
+        "256",
+        "4",
+        "30",
+        "0"
+      ],
+      "estimate_s": 765
+    },
+    {
+      "name": "cell-gemma4-cpu-256-8-p00",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "cpu",
+        "256",
+        "8",
+        "30",
+        "0"
+      ],
+      "estimate_s": 1415
+    },
+    {
+      "name": "cell-gemma4-cpu-256-16-p00",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "cpu",
+        "256",
+        "16",
+        "18",
+        "0"
+      ],
+      "estimate_s": 1800
+    },
+    {
+      "name": "cell-gemma4-cpu-256-16-p18",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "cpu",
+        "256",
+        "16",
+        "12",
+        "18"
+      ],
+      "estimate_s": 1338
+    },
+    {
+      "name": "cell-gemma4-cpu-1024-1-p00",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "cpu",
+        "1024",
+        "1",
+        "30",
+        "0"
+      ],
+      "estimate_s": 635
+    },
+    {
+      "name": "cell-gemma4-cpu-1024-4-p00",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "cpu",
+        "1024",
+        "4",
+        "30",
+        "0"
+      ],
+      "estimate_s": 1669
+    },
+    {
+      "name": "cell-gemma4-cpu-1024-8-p00",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "cpu",
+        "1024",
+        "8",
+        "15",
+        "0"
+      ],
+      "estimate_s": 1751
+    },
+    {
+      "name": "cell-gemma4-cpu-1024-8-p15",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "cpu",
+        "1024",
+        "8",
+        "15",
+        "15"
+      ],
+      "estimate_s": 1751
+    },
+    {
+      "name": "cell-gemma4-cpu-1024-16-p00",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "cpu",
+        "1024",
+        "16",
+        "5",
+        "0"
+      ],
+      "estimate_s": 1678
+    },
+    {
+      "name": "cell-gemma4-cpu-1024-16-p05",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "cpu",
+        "1024",
+        "16",
+        "5",
+        "5"
+      ],
+      "estimate_s": 1678
+    },
+    {
+      "name": "cell-gemma4-cpu-1024-16-p10",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "cpu",
+        "1024",
+        "16",
+        "5",
+        "10"
+      ],
+      "estimate_s": 1678
+    },
+    {
+      "name": "cell-gemma4-cpu-1024-16-p15",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "cpu",
+        "1024",
+        "16",
+        "5",
+        "15"
+      ],
+      "estimate_s": 1678
+    },
+    {
+      "name": "cell-gemma4-cpu-1024-16-p20",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "cpu",
+        "1024",
+        "16",
+        "5",
+        "20"
+      ],
+      "estimate_s": 1678
+    },
+    {
+      "name": "cell-gemma4-cpu-1024-16-p25",
+      "argv": [
+        "cell",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "cpu",
+        "1024",
+        "16",
+        "5",
+        "25"
+      ],
+      "estimate_s": 1678
+    },
+    {
+      "name": "overhead-gemma4-cpu",
+      "argv": [
+        "overhead",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "cpu"
+      ],
+      "estimate_s": 100
+    },
+    {
+      "name": "lifecycle-gemma4-cpu",
+      "argv": [
+        "lifecycle",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "cpu",
+        "3"
+      ],
+      "estimate_s": 482
+    },
+    {
+      "name": "cell-bonsai2-cpu-64-1-p00",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "cpu",
+        "64",
+        "1",
+        "18",
+        "0"
+      ],
+      "estimate_s": 1795
+    },
+    {
+      "name": "cell-bonsai2-cpu-64-1-p18",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "cpu",
+        "64",
+        "1",
+        "12",
+        "18"
+      ],
+      "estimate_s": 1334
+    },
+    {
+      "name": "overhead-bonsai2-cpu",
+      "argv": [
+        "overhead",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "cpu"
+      ],
+      "estimate_s": 1006
+    },
+    {
+      "name": "lifecycle-bonsai2-cpu-c0",
+      "argv": [
+        "lifecycle",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "cpu",
+        "1"
+      ],
+      "estimate_s": 2369
+    },
+    {
+      "name": "lifecycle-bonsai2-cpu-c1",
+      "argv": [
+        "lifecycle",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "cpu",
+        "1"
+      ],
+      "estimate_s": 2369
+    },
+    {
+      "name": "lifecycle-bonsai2-cpu-c2",
+      "argv": [
+        "lifecycle",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "cpu",
+        "1"
+      ],
+      "estimate_s": 2369
+    },
+    {
+      "name": "cell-bonsai2-gpu-64-1-p00",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "64",
+        "1",
+        "30",
+        "0"
+      ],
+      "estimate_s": 256
+    },
+    {
+      "name": "cell-bonsai2-gpu-64-4-p00",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "64",
+        "4",
+        "30",
+        "0"
+      ],
+      "estimate_s": 906
+    },
+    {
+      "name": "cell-bonsai2-gpu-64-8-p00",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "64",
+        "8",
+        "30",
+        "0"
+      ],
+      "estimate_s": 1762
+    },
+    {
+      "name": "cell-bonsai2-gpu-64-16-p00",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "64",
+        "16",
+        "13",
+        "0"
+      ],
+      "estimate_s": 1810
+    },
+    {
+      "name": "cell-bonsai2-gpu-64-16-p13",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "64",
+        "16",
+        "13",
+        "13"
+      ],
+      "estimate_s": 1810
+    },
+    {
+      "name": "cell-bonsai2-gpu-64-16-p26",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "64",
+        "16",
+        "4",
+        "26"
+      ],
+      "estimate_s": 920
+    },
+    {
+      "name": "cell-bonsai2-gpu-256-1-p00",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "256",
+        "1",
+        "30",
+        "0"
+      ],
+      "estimate_s": 457
+    },
+    {
+      "name": "cell-bonsai2-gpu-256-4-p00",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "256",
+        "4",
+        "30",
+        "0"
+      ],
+      "estimate_s": 1712
+    },
+    {
+      "name": "cell-bonsai2-gpu-256-8-p00",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "256",
+        "8",
+        "13",
+        "0"
+      ],
+      "estimate_s": 1750
+    },
+    {
+      "name": "cell-bonsai2-gpu-256-8-p13",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "256",
+        "8",
+        "13",
+        "13"
+      ],
+      "estimate_s": 1750
+    },
+    {
+      "name": "cell-bonsai2-gpu-256-8-p26",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "256",
+        "8",
+        "4",
+        "26"
+      ],
+      "estimate_s": 890
+    },
+    {
+      "name": "cell-bonsai2-gpu-256-16-p00",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "256",
+        "16",
+        "4",
+        "0"
+      ],
+      "estimate_s": 1749
+    },
+    {
+      "name": "cell-bonsai2-gpu-256-16-p04",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "256",
+        "16",
+        "4",
+        "4"
+      ],
+      "estimate_s": 1749
+    },
+    {
+      "name": "cell-bonsai2-gpu-256-16-p08",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "256",
+        "16",
+        "4",
+        "8"
+      ],
+      "estimate_s": 1749
+    },
+    {
+      "name": "cell-bonsai2-gpu-256-16-p12",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "256",
+        "16",
+        "4",
+        "12"
+      ],
+      "estimate_s": 1749
+    },
+    {
+      "name": "cell-bonsai2-gpu-256-16-p16",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "256",
+        "16",
+        "4",
+        "16"
+      ],
+      "estimate_s": 1749
+    },
+    {
+      "name": "cell-bonsai2-gpu-256-16-p20",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "256",
+        "16",
+        "4",
+        "20"
+      ],
+      "estimate_s": 1749
+    },
+    {
+      "name": "cell-bonsai2-gpu-256-16-p24",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "256",
+        "16",
+        "4",
+        "24"
+      ],
+      "estimate_s": 1749
+    },
+    {
+      "name": "cell-bonsai2-gpu-256-16-p28",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "256",
+        "16",
+        "2",
+        "28"
+      ],
+      "estimate_s": 1367
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-1-p00",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "1",
+        "30",
+        "0"
+      ],
+      "estimate_s": 945
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-4-p00",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "4",
+        "19",
+        "0"
+      ],
+      "estimate_s": 1794
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-4-p19",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "4",
+        "11",
+        "19"
+      ],
+      "estimate_s": 1206
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-8-p00",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "8",
+        "8",
+        "0"
+      ],
+      "estimate_s": 1803
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-8-p08",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "8",
+        "8",
+        "8"
+      ],
+      "estimate_s": 1803
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-8-p16",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "8",
+        "8",
+        "16"
+      ],
+      "estimate_s": 1803
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-8-p24",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "8",
+        "6",
+        "24"
+      ],
+      "estimate_s": 1530
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p00",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "0"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p01",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "1"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p02",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "2"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p03",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "3"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p04",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "4"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p05",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "5"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p06",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "6"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p07",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "7"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p08",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "8"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p09",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "9"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p10",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "10"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p11",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "11"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p12",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "12"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p13",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "13"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p14",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "14"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p15",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "15"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p16",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "16"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p17",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "17"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p18",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "18"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p19",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "19"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p20",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "20"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p21",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "21"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p22",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "22"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p23",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "23"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p24",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "24"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p25",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "25"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p26",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "26"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p27",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "27"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p28",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "28"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "cell-bonsai2-gpu-1024-16-p29",
+      "argv": [
+        "cell",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "1024",
+        "16",
+        "1",
+        "29"
+      ],
+      "estimate_s": 1605
+    },
+    {
+      "name": "overhead-bonsai2-gpu",
+      "argv": [
+        "overhead",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu"
+      ],
+      "estimate_s": 128
+    },
+    {
+      "name": "lifecycle-bonsai2-gpu",
+      "argv": [
+        "lifecycle",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "gpu",
+        "3"
+      ],
+      "estimate_s": 897
+    }
+  ],
+  "verdicts": "PASS/FAIL/INCONCLUSIVE published separately for configuration, numerics (within engine; against the oracle under #94; original contract reported), each latency cell and package kind, overhead per model x backend, lifecycle per model x backend; NOT_RUN and MISSING cells are listed and cannot pass"
+}

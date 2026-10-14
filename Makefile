@@ -138,7 +138,7 @@ test: all $(BUILD)/test_decide_driver
 	  { echo "example chat failed: $$out"; exit 1; }
 
 # ---- the real runtime on geistlib (#4) ---------------------------------------
-ENGINE_GOALS := runtime test-clients test-upgrade test-real test-embed fetch-embed-model fetch-rerank-model chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python $(BUILD)/test_decision_real $(BUILD)/bench_decision
+ENGINE_GOALS := runtime test-clients test-upgrade test-real test-embed fetch-embed-model fetch-rerank-model chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python $(BUILD)/test_decision_real $(BUILD)/bench_decision $(BUILD)/bench_decision_context
 ifneq (,$(filter $(ENGINE_GOALS),$(MAKECMDGOALS)))
 GEIST_REPO ?= https://github.com/geisten/geistlib.git
 GEIST_REF  ?= 3841fa68e277b8ce33211aa84e4728dd61c133de
@@ -310,6 +310,10 @@ $(BUILD)/test_decision_real: tests/test_decision_real.c tests/native_cases.h tes
 
 # #17's timing and numeric controls (DECISION=1): docs/DECISION_EVIDENCE_PLAN_17.json.
 $(BUILD)/bench_decision: tests/bench_decision.c tests/native_cases.h tests/fixtures/decisions/*.h $(RUNTIME) $(ENGINE_LIB)
+	$(CC) $(CFLAGS) $(ENGINE_CFLAGS) -Isrc -isystem $(GEISTLIB)/include $< $(BUILD)/common.o $(TEXT) $(ENGINE_LINK) $(LDFLAGS) $(LDLIBS) -o $@
+
+# #165's prefix-reuse controls and timings (DECISION=1 DECISION_CONTEXT=1): docs/DECISION_EVIDENCE_PLAN_165.json.
+$(BUILD)/bench_decision_context: tests/bench_decision_context.c tests/decision_context_source.h $(RUNTIME) $(ENGINE_LIB)
 	$(CC) $(CFLAGS) $(ENGINE_CFLAGS) -Isrc -isystem $(GEISTLIB)/include $< $(BUILD)/common.o $(TEXT) $(ENGINE_LINK) $(LDFLAGS) $(LDLIBS) -o $@
 
 test-decision-real: $(BUILD)/test_decision_real
