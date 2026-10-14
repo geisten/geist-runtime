@@ -320,7 +320,7 @@ static geistr_model *reranker_open(void) {
         snprintf(path, sizeof path, "%s/%s", models_dir, m->file);
         char              error[256];
         geistr_model_opts mo = GEISTR_MODEL_OPTS_INIT;
-        mo.processor         = GEISTR_PROCESSOR_GPU; /* 1.3 s a question on an M1 Max's GPU, 6.3 s on its CPU */
+        mo.processor         = GEISTR_PROCESSOR_GPU; /* 0.63 s a question on an M1 Max's GPU, 6.3 s on its CPU */
         mo.context           = 2048;                 /* a question and a piece in the reranker's prompt */
         mo.threads           = engine_threads();
         if (geistr_model_open(path, &mo, &model, error, sizeof error) != GEISTR_OK)

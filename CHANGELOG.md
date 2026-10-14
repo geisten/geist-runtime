@@ -68,6 +68,12 @@
   download a model that is not installed (or outdated, damaged) and go on with
   it; Ctrl-C twice keeps the old message. Without a terminal nothing changes:
   scripts still get the `geistr pull` line (#191).
+- `--files` with the reranker on Metal takes half the time: 0.63 s per
+  question instead of 1.28 s on an M1 Max (top 8 chunks in paragraph pieces;
+  llama-server on the same GGUF takes 0.62 s). `geistr_logits` on Metal now
+  processes a multiple of 32 new tokens and goes over up to 31 cached tokens
+  again for that. The engine runs any other count on slower kernels
+  (geistlib#35). P(yes) moves by 0.002 at most. The CPU is unchanged (#201).
 
 ### Decisions (EXPERIMENTAL)
 
