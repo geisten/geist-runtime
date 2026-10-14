@@ -23,8 +23,10 @@ int main(int argc, char **argv) {
     if (!model)
         return 1;
     auto cp = llama_context_default_params();
-    cp.n_ctx = 512;
-    cp.n_batch = 512;
+    /* Prompts up to 2048 tokens in one decode (#165's 1024-token contexts); the
+     * micro-batch stays 512, so a prompt of at most 512 tokens runs as before. */
+    cp.n_ctx = 2048;
+    cp.n_batch = 2048;
     cp.n_ubatch = 512;
     cp.n_threads = 6;
     cp.n_threads_batch = 6;
@@ -42,13 +44,13 @@ int main(int argc, char **argv) {
     std::string line;
     int code = 0;
     while (std::getline(std::cin, line)) {
-        if (line.size() > 16384) {
+        if (line.size() > 65536) {
             code = 2;
             break;
         }
         std::istringstream input(line);
         int n = 0, k = 0;
-        if (!(input >> n >> k) || n < 1 || n > 512 || k < 1 || k > 26) {
+        if (!(input >> n >> k) || n < 1 || n > 2048 || k < 1 || k > 26) {
             code = 2;
             break;
         }

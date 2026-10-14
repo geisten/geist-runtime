@@ -74,7 +74,9 @@ def main():
     src, commit, binary = build(tag, a.cache)
     cases = ''.join(f"{len(c['ids'])} {len(c['candidate_ids'])} {' '.join(map(str, c['ids'] + c['candidate_ids']))}\n"
                     for c in fixture['cases'])
-    r = run([binary, a.model], input=cases, capture_output=True, text=True)
+    r = subprocess.run([str(binary), str(a.model)], input=cases, capture_output=True, text=True)
+    if r.returncode:  # the oracle's own diagnostics, e.g. an artifact it cannot load
+        raise SystemExit(f'reference_score exit {r.returncode}: {r.stderr[-1500:]}')
     outputs = [json.loads(l) for l in r.stdout.splitlines() if l.startswith('{')]
     if len(outputs) != len(fixture['cases']):
         raise SystemExit(f'expected {len(fixture["cases"])} outputs, got {len(outputs)}: {r.stderr[-500:]}')

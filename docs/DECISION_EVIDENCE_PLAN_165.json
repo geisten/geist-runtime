@@ -1609,7 +1609,43 @@
         "3"
       ],
       "estimate_s": 897
+    },
+    {
+      "name": "oracle-r2-gemma4",
+      "argv": [
+        "oracle",
+        "gemma4-e2b-Q4_K_M.gguf",
+        "gemma4",
+        "cpu"
+      ],
+      "estimate_s": 600
+    },
+    {
+      "name": "oracle-r2-bonsai2",
+      "argv": [
+        "oracle",
+        "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+        "bonsai2",
+        "cpu"
+      ],
+      "estimate_s": 600
     }
   ],
-  "verdicts": "PASS/FAIL/INCONCLUSIVE published separately for configuration, numerics (within engine; against the oracle under #94; original contract reported), each latency cell and package kind, overhead per model x backend, lifecycle per model x backend; NOT_RUN and MISSING cells are listed and cannot pass"
+  "verdicts": "PASS/FAIL/INCONCLUSIVE published separately for configuration, numerics (within engine; against the oracle under #94; original contract reported), each latency cell and package kind, overhead per model x backend, lifecycle per model x backend; NOT_RUN and MISSING cells are listed and cannot pass",
+  "amendments": [
+    {
+      "date": "2026-10-14 20:25, after the two oracle sections failed and before any oracle output or any latency, overhead or lifecycle section",
+      "section": "numerics (oracle tool only; no threshold, oracle version, prompt or gate changes)",
+      "reason": "tools/reference_score.cpp accepted prompts of at most 512 tokens (n_ctx/n_batch 512); the frozen prompts reach 1125 tokens, so oracle-gemma4 stopped with exit 2 and produced no output. oracle-bonsai2 exited 1 within seconds; llama_oracle.py discarded the oracle's stderr, so the cause was not recorded",
+      "change": [
+        "reference_score.cpp: n_ctx = n_batch = 2048 and prompts up to 2048 tokens (line limit 65536); n_ubatch stays 512, so prompts of at most 512 tokens are computed exactly as before",
+        "llama_oracle.py: a failing reference_score now reports its stderr",
+        "the oracle runs again once per profile as oracle-r2-gemma4 and oracle-r2-bonsai2 (same tag v0.6.0, same fixtures); the failed first sections stay recorded and reported as superseded tool failures"
+      ],
+      "superseded_sections": [
+        "oracle-gemma4",
+        "oracle-bonsai2"
+      ]
+    }
+  ]
 }
