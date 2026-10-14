@@ -3,6 +3,8 @@ import copy
 import hashlib
 import importlib.util
 import json
+import shutil
+import tempfile
 from pathlib import Path
 
 root = Path(__file__).resolve().parent.parent
@@ -89,4 +91,55 @@ for profile in ('bonsai2', 'gemma4'):
             assert cut == (len(c['prefix_ids']) - 1) // int(chunk) * int(chunk), (profile, c['id'])
             for q in c['questions']:
                 assert q['prompt'].startswith(c['prefix']) and q['ids'][:cut] == c['prefix_ids'][:cut]
-print('evidence verifier: independent Gemma drift FAIL preserved (Apple NEON, Metal and x86 records, both contracts); finite complete output required; manifest hashes match; context fixtures bound and current')
+# #165: every raw record's hash, the verdicts the doc reports, and the verifier rejects drift
+spec165 = importlib.util.spec_from_file_location('evidence165', root / 'tools/decision_evidence_165.py')
+e165 = importlib.util.module_from_spec(spec165)
+spec165.loader.exec_module(e165)
+plan165 = json.loads((root / 'docs/DECISION_EVIDENCE_PLAN_165.json').read_text())
+m165 = manifest['apple_165']
+for name, digest in m165['records'].items():
+    assert hashlib.sha256((validation / 'apple-165' / name).read_bytes()).hexdigest() == digest, name
+report165 = json.loads((validation / 'apple-165/report.json').read_text())
+assert hashlib.sha256((validation / 'apple-165/report.json').read_bytes()).hexdigest() == m165['report_sha256']
+assert m165['plan_sha256'] == hashlib.sha256((root / 'docs/DECISION_EVIDENCE_PLAN_165.json').read_bytes()).hexdigest()
+for key, cell in report165['cells'].items():
+    assert m165['cells'][key] == [cell['first']['verdict'], cell['repeat']['verdict']], key
+key = m165['tamper_cell']
+profile, proc, t, q = key.split('-')
+names = [s['name'] for s in plan165['sections'] if s['name'].startswith(f'cell-{key}-p')]
+clean = e165.Violations()
+again = e165.analyse_cell(plan165, clean, profile, proc, int(t), int(q), names)
+assert not clean and [again['first']['verdict'], again['repeat']['verdict']] == m165['cells'][key]
+
+
+def tampered(edit):
+    """The cell's records with one edit, analysed from a scratch copy."""
+    with tempfile.TemporaryDirectory() as tmp:
+        for f in (validation / 'apple-165').glob('prepare-*.jsonl'):
+            shutil.copy(f, tmp)
+        for n in names:
+            lines = (validation / 'apple-165' / f'{n}.jsonl').read_text().splitlines()
+            (Path(tmp) / f'{n}.jsonl').write_text('\n'.join(edit(lines)) + '\n')
+        e165.OUT, saved = Path(tmp), e165.OUT
+        try:
+            found = e165.Violations()
+            return found, e165.analyse_cell(plan165, found, profile, proc, int(t), int(q), names)
+        finally:
+            e165.OUT = saved
+
+
+backend = {'cpu': 'cpu_neon', 'gpu': 'metal'}[proc]
+found, _ = tampered(lambda ls: [ls[0].replace(f'"backend":"{backend}"', '"backend":"cpu_scalar"')] + ls[1:])
+assert any('wrong backend' in x for x in found), 'accepted a wrong backend'
+found, _ = tampered(lambda ls: [ls[0].replace('"profile":"', '"profile":"x')] + ls[1:])
+assert any('wrong profile' in x for x in found), 'accepted a wrong profile'
+found, _ = tampered(lambda ls: [l.replace(f'"cap":{int(t) + 192}', '"cap":512', 1) for l in ls])
+assert any('geometry' in x for x in found), 'accepted a wrong geometry'
+found, _ = tampered(lambda ls: [l for l in ls if '"pair":7,"warmup":false' not in l])
+assert any('measured pairs' in x for x in found), 'accepted a missing row'
+found, r = tampered(lambda ls: [l.replace('"failed":false', '"failed":true', 1) if '"pair":3,"warmup":false' in l else l
+                                for l in ls])
+assert r['first']['verdict'] == r['repeat']['verdict'] == 'FAIL' and r['failed_pairs'] == [3], 'a failure passed'
+found, r = tampered(lambda ls: [l.replace('"c_vs_b_bit_identical":true', '"c_vs_b_bit_identical":false', 1) for l in ls])
+assert not r['controls']['c_vs_b_bit_identical'], 'C != B hidden'
+print('evidence verifier: independent Gemma drift FAIL preserved (Apple NEON, Metal and x86 records, both contracts); finite complete output required; manifest hashes match; context fixtures bound and current; #165 records bound, verdicts as reported, drift rejected')

@@ -172,15 +172,46 @@ def execute(plan, name):
     return r.returncode
 
 
+NIGHT = ((22, 45), (5, 0))  # local time: no section holds the machine lock in between (user's rule)
+MARGIN = 1.25  # estimates are estimates: a section starts only if 1.25 x its estimate ends before 22:45
+
+
+def night_start(now):
+    """The pause that comes next (local time): its start and the 05:00 that ends it."""
+    y, m, d = time.localtime(now)[:3]
+    morning = time.mktime((y, m, d, *NIGHT[1], 0, 0, 0, -1))
+    if now < morning:  # after midnight: inside the pause already
+        return now, morning
+    return time.mktime((y, m, d, *NIGHT[0], 0, 0, 0, -1)), time.mktime((y, m, d + 1, *NIGHT[1], 0, 0, 0, -1))
+
+
 def run(plan, only, gap):
     todo = [s for s in plan['sections'] if s['name'].startswith(only or '') and not (OUT / f'{s["name"]}.jsonl').exists()]
     total = sum(s['estimate_s'] for s in todo)
     print(f'{len(todo)} sections, estimated {total / 3600:.1f} h of lock time', flush=True)
-    for i, s in enumerate(todo):
+    i = 0
+    while i < len(todo):
+        s = todo[i]
+        now = time.time()
+        start, end = night_start(now)
+        latest = start - MARGIN * s['estimate_s']  # the section must have the lock by then
+        if now >= latest:
+            print(f'night pause until {time.strftime("%Y-%m-%d %H:%M", time.localtime(end))} '
+                  f'(next: {s["name"]})', flush=True)
+            time.sleep(max(0.0, end - time.time()))
+            continue
         status = subprocess.run([LOCK, 'status'], capture_output=True, text=True).stdout.strip()
         print(f'[{i + 1}/{len(todo)}] {s["name"]} (est. {s["estimate_s"]} s), lock: {status}', flush=True)
-        subprocess.run([LOCK, sys.executable, __file__, 'exec', s['name']])
-        if i + 1 < len(todo):
+        # bounded wait for the lock: if it frees too late, the section waits for the morning instead
+        r = subprocess.run([LOCK, sys.executable, __file__, 'exec', s['name']],
+                           env={**os.environ, 'WAIT': str(max(1, int(latest - time.time())))})
+        if r.returncode and not (OUT / f'{s["name"]}.jsonl').exists():
+            if time.time() < latest - 5:  # not the lock timeout: refused (battery, binary); stop
+                raise SystemExit(f'{s["name"]}: refused, runner stopped')
+            print(f'{s["name"]}: lock not free before {time.strftime("%H:%M", time.localtime(latest))}', flush=True)
+            continue  # re-evaluated: the night pause
+        i += 1
+        if i < len(todo):
             time.sleep(gap)  # the mac CI runner may take queued jobs
 
 
