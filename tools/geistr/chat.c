@@ -310,6 +310,7 @@ static void intro(const char *name, const char *backend, bool gpu) {
 }
 
 void session_close(struct session *x) {
+    geistr_decision_close(x->decision);
     geistr_chat_close(x->chat);
     geistr_model_close(x->model);
     *x = (struct session) {};
@@ -328,8 +329,14 @@ static bool session_chat(struct session *x, bool interactive) {
     return s == GEISTR_OK;
 }
 
+/* /decide: the policy for the next session_open only (a failed reopen of the
+ * previous model must not inherit it). */
+static const geistr_decision_policy *open_policy;
+
 int session_open(struct session *x, const char *name, const char *processor, double temperature,
                         bool interactive) {
+    const geistr_decision_policy *policy = open_policy;
+    open_policy                          = nullptr;
     char             path[4200] = "";
     geistr_reasoning reasoning;
     int              embedding;
@@ -357,8 +364,10 @@ int session_open(struct session *x, const char *name, const char *processor, dou
     if (getenv("GEISTR_TEST_CONTEXT")) /* a small window: the tests fill it quickly */
         mo.context = (uint32_t) strtoul(getenv("GEISTR_TEST_CONTEXT"), nullptr, 10);
 #endif
+    mo.decision = policy; /* enabled: the runtime hashes the whole file once, here */
     char error[256];
-    *x = (struct session) {.temperature = temperature, .reasoning = reasoning, .embedding = embedding == 1};
+    *x = (struct session) {.temperature = temperature, .reasoning = reasoning, .embedding = embedding == 1,
+                           .decisions = policy != nullptr};
     spinner_start(name, path);
     geistr_status opened = geistr_model_open(path, &mo, &x->model, error, sizeof error);
     spinner_stop();
@@ -398,6 +407,7 @@ static const struct le_candidate commands[] = {
         {"/temp ", "sampling temperature, 0 to 2"},
         {"/system ", "system prompt (off: none)"},
         {"/think ", "a thinking model: on, or off (answers at once)"},
+        {"/decide ", "one of your options: /decide question | option | option"},
         {"/info", "what runs now"},
         {"/files ", "answers from a folder of your files (off: none)"},
         {"/save", "keep these settings for the next chat"},
@@ -670,6 +680,115 @@ static const char *clipboard(const char *text, size_t len) {
     return nullptr;
 }
 
+/* /decide: the verified decision profile for the running model's file, if
+ * any (the registry in src/decision_profile.c). A catalog model has its hash
+ * in the catalog; a .gguf path is hashed. */
+static bool decision_policy_for(const char *name, geistr_decision_policy *out) {
+    char            sha[65] = "";
+    geistr_catalog *c       = strchr(name, '/') || strstr(name, ".gguf") ? nullptr : load_catalog();
+    const geistr_catalog_entry *e = c ? geistr_catalog_find(c, name) : nullptr;
+    if (e)
+        snprintf(sha, sizeof sha, "%s", e->sha256);
+    geistr_catalog_free(c);
+    if (!*sha) {
+        char             path[4200];
+        geistr_reasoning reasoning;
+        if (resolve(name, path, sizeof path, &reasoning, nullptr) != OK || geistr_sha256_file(path, sha) != GEISTR_OK)
+            return false;
+    }
+    for (int p = GEISTR_DECISION_PROFILE_NONE + 1; p < GEISTR_DECISION_MAX_POLICIES; ++p) {
+        const char *known = geistr_decision_profile_sha256((geistr_decision_profile) p);
+        if (!*known)
+            break;
+        if (!strcmp(known, sha)) {
+            *out = (geistr_decision_policy) {.enabled = true, .profile = (geistr_decision_profile) p,
+                                            .mode    = GEISTR_DECISION_DENSE};
+            snprintf(out->sha256, sizeof out->sha256, "%s", sha);
+            return true;
+        }
+    }
+    return false;
+}
+
+static int command(struct session *x, struct conversation *said, char *line, const char *remote);
+
+/* /decide question | option | option …: the model's choice among the options,
+ * read from one prefill (docs/DECISIONS.md); the conversation is not part of
+ * it. The first /decide reopens the model with its verified profile (the
+ * runtime hashes the file once); the conversation moves along. */
+static int decide(struct session *x, struct conversation *said, char *arg, const char *remote) {
+    if (remote) {
+        usage("decisions need the model here: geistr chat <model>");
+        return GO_ON;
+    }
+    char  *field[GEISTR_DECISION_MAX_OPTIONS + 2];
+    size_t n = 0;
+    for (char *f = arg; f && n < sizeof field / sizeof *field;) {
+        char *bar = strchr(f, '|');
+        if (bar)
+            *bar = 0;
+        while (*f == ' ')
+            f++;
+        for (char *end = f + strlen(f); end > f && end[-1] == ' ';)
+            *--end = 0;
+        field[n++] = f;
+        f          = bar ? bar + 1 : nullptr;
+    }
+    if (n < 2 || !*field[0] || n - 1 > GEISTR_DECISION_MAX_OPTIONS) {
+        usage("/decide question | option | option … (1 to 26 options)");
+        return GO_ON;
+    }
+    if (!x->decisions) {
+        static geistr_decision_policy policy;
+        if (!decision_policy_for(x->name, &policy)) {
+            printf("%s has no verified decision profile\n", x->name);
+            usage("decisions: gemma4-e2b, bonsai2-27b-pq2 (geistr decide --help)");
+            return GO_ON;
+        }
+        char again[300];
+        snprintf(again, sizeof again, "/model %s", x->name);
+        open_policy = &policy;
+        int rc      = command(x, said, again, remote);
+        open_policy = nullptr;
+        if (rc != GO_ON || !x->decisions)
+            return rc;
+    }
+    char error[256];
+    if (!x->decision) {
+        geistr_decision_opts opts = GEISTR_DECISION_OPTS_INIT;
+        if (geistr_decision_open(x->model, sizeof error, &opts, &x->decision, error) != GEISTR_OK) {
+            printf("/decide: %s\n", error);
+            return GO_ON;
+        }
+    }
+    geistr_decision_option options[GEISTR_DECISION_MAX_OPTIONS];
+    for (size_t i = 1; i < n; i++)
+        options[i - 1] = (geistr_decision_option) {strlen(field[i]), strlen(field[i]), field[i], field[i]};
+    geistr_decision_request request = {.size         = sizeof request,
+                                       .operation    = GEISTR_OPERATION_DECISION,
+                                       .question_len = strlen(field[0]),
+                                       .n_options    = n - 1,
+                                       .question     = field[0],
+                                       .options      = options};
+    if (geistr_decision_request_validate(sizeof error, &request, error) != GEISTR_OK) {
+        printf("/decide: %s\n", error);
+        return GO_ON;
+    }
+    geistr_decision_result result = {.size = sizeof result};
+    if (geistr_decision_score(x->decision, &request, &result) != GEISTR_OK) {
+        printf("/decide: %s\n", geistr_decision_error(x->decision));
+        return GO_ON;
+    }
+    int width = 0;
+    for (size_t i = 0; i < result.n_options; i++)
+        if ((int) options[i].id_len > width)
+            width = (int) options[i].id_len;
+    printf("%s\n", result.external_id);
+    for (size_t i = 0; i < result.n_options; i++)
+        printf("  %-*s  %.2f\n", width, options[i].id, result.selection_probabilities[i]);
+    return GO_ON;
+}
+
 static int command(struct session *x, struct conversation *said, char *line, const char *remote) {
     char *arg = strchr(line, ' ');
     if (arg)
@@ -797,6 +916,8 @@ static int command(struct session *x, struct conversation *said, char *line, con
             files_close(files), files = f;
             say("answers from %s\n", files_dir(f));
         }
+    } else if (!strcmp(line, "/decide")) {
+        return decide(x, said, arg, remote);
     } else if (!strcmp(line, "/info")) {
         status_line(x, remote ? " · service" : "");
         char threads[32] = ""; /* the CPU's share: what the engine runs on (#93) */

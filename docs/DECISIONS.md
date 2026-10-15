@@ -7,7 +7,9 @@ JSON, a continuous rating or calibrated correctness/truth confidence.
 
 ## Permission and identity
 
-Decision permission is absent/disabled by default. A model's options can point
+In the C API, decision permission is absent/disabled by default. The `geistr`
+CLI enables every verified profile for its exact artifact when no `--config`
+is given (see CLI below); a `--config` file replaces that list. A model's options can point
 at a policy returned by the immutable configuration parser. Model open copies
 that value: later edits or freeing the config cannot change a loaded model.
 An enabled policy requires a known profile bound to the exact model SHA-256.
@@ -249,8 +251,9 @@ that evidence is #165/#166.
 
 Build the optional engine with `make runtime DECISION=1` (add
 `DECISION_CONTEXT=1` for reusable contexts, #163) (or `make geistr
-DECISION=1 PULL=0`, `make wheel DECISION=1`). `DECISION=0` remains the default;
-all decision symbols stay linkable and return explicit unsupported errors.
+DECISION=1 PULL=0`, `make wheel DECISION=1`). `DECISION=1` is the default, so
+release binaries and wheels include the engine; with `DECISION=0` all decision
+symbols stay linkable and return explicit unsupported errors.
 The engine is the Makefile's pin (`GEIST_REF`). The recorded validation evidence
 (`tests/fixtures/decisions/validation`): the Apple records (NEON, Metal) were
 produced on engine `5dd7e1747df86092a320e638c66993afd409e3b6` and are kept as
@@ -310,15 +313,21 @@ Use the existing binary and catalog/path lookup; neither execution nor listing
 attempts a download:
 
 ```sh
-geistr decide gemma4-e2b --config decisions.json --processor cpu \
+geistr decide gemma4-e2b "Which team handles this?" billing technical sales
+geistr decide gemma4-e2b --processor cpu \
   --question 'Which option equals 4?' --option four '4' --option five '5'
 geistr decide model.gguf --config decisions.json --question-file - \
   --option yes 'Yes' --option no 'No'
 geistr catalog --decision-config decisions.json --json
 ```
 
-Set the intended artifact policy's enabled field to true explicitly; the sample
-above is disabled. `--question` and `--question-file FILE|-` are alternatives.
+Without `--config`, every verified profile is enabled for its exact artifact
+(the registry in `src/decision_profile.c`); other models are refused. With
+`--config FILE`, only that file's policies apply, so a file can disable a
+model; set a policy's enabled field to true explicitly. The short form takes
+the question as the first argument that is not a flag and every further one as
+an option ID that is also its description; it mixes with the flags.
+`--question` and `--question-file FILE|-` are alternatives.
 `--context`, `--mode dense|selected_rows`, `--profile NAME`, `--models` and
 `--catalog` accept one value each. Repeated/conflicting flags are errors;
 `--option ID DESCRIPTION` is the only repeatable flag. Profile override must
@@ -326,8 +335,20 @@ match the configured exact artifact. This first CLI limits model context to
 512 tokens and refuses overflow. C/Python callers may choose a checked larger
 capacity within the loaded model context.
 
-Success stdout is exactly the external ID plus LF. Program-generated stderr
-JSON schema1 includes profile/artifact/template hash, engine pin/version,
+In `geistr chat`, `/decide question | option | option …` scores the options
+on the chat's model (each option ID is its own description; the conversation
+is not part of the request) and prints the chosen ID and each option's
+probability. The chat model is opened without a decision policy; the first
+`/decide` looks up the verified profile for the model's file (catalog hash, or
+the file's hash for a path), reopens the model with it as `/model` does (the
+runtime hashes the file once) and keeps the decision instance for later
+`/decide`s. A model without a verified profile is refused; a chat on a
+service (`--socket`) has no `/decide`.
+
+Success stdout is exactly the external ID plus LF when stdout is not a
+terminal. On a terminal, each option's ID and selection probability follow,
+one per line. Program-generated stderr JSON schema1 (written only when stderr
+is not a terminal) includes profile/artifact/template hash, engine pin/version,
 runtime version, actual backend, requested/resolved numeric mode, explicit
 operation, prompt tokens, attempts and setup/preparation/scoring timing.
 `until_result_ms` ends before stdout/teardown; it is **not whole command latency**.

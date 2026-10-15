@@ -175,6 +175,26 @@ file hash whenever you use the folder, so only new and changed files are
 read again. It stays on your computer, readable only by you, in the data
 folder (`index/`); hidden files and folders are left out.
 
+## Decisions
+
+Some questions have a fixed set of answers: which team gets a ticket, is a
+text urgent. `geistr decide` reads the model's choice among your options from
+one pass over the prompt, without writing an answer:
+
+```
+$ geistr decide gemma4-e2b "I was charged twice. Which team handles this?" billing technical sales
+billing
+  billing    1.00
+  technical  0.00
+  sales      0.00
+```
+
+Piped, it prints only the chosen option, for scripts. The probabilities are
+the model's own, read from the option keys; nothing else can come out. It
+works for models with a verified decision profile, today `gemma4-e2b` and
+`bonsai2-27b-pq2`; other models are refused. EXPERIMENTAL: details, limits
+and evidence in [docs/DECISIONS.md](docs/DECISIONS.md).
+
 ## Use it from other tools
 
 Keep a model loaded and talk to it over the OpenAI or Ollama API, e.g. from

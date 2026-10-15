@@ -106,7 +106,8 @@ def batch(binary):
             refused(request([{**one, 'id': bad}]))
             refused(request([{**one, 'options': [{'id': bad, 'description': 'x'}]}]))
         path.write_bytes(request())
-        for args in [[], ['decide-batch'], base[:2] + base[4:], base[:5], base + ['--shared-context'],
+        assert off in call(binary, base[:2] + base[4:], 1)  # without --config: the verified profiles are allowed
+        for args in [[], ['decide-batch'], base[:5], base + ['--shared-context'],
                      base + ['--config', 'x'], base + ['--unknown', 'x'], base + ['--mode', 'dense'],
                      base + ['--processor', 'ternary'], base + ['--request-file', str(path)],
                      base + ['--context-tokens'], base[:-1] + [str(Path(directory) / 'absent.json')],
@@ -132,6 +133,14 @@ def main():
     call(binary, base + ['--processor', 'ternary'], 2)
     call(binary, base + ['--option', 'yes', 'duplicate'], 2)
     call(binary, base + ['--option', '', 'empty'], 2)
+    # Short form: the question, then option IDs (each its own description); --config is optional.
+    call(binary, ['stub:echo', 'Q?', 'yes', 'no'], 1)
+    call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--processor', 'cpu'], 1)
+    call(binary, ['stub:echo', 'Q?', 'yes', 'yes'], 2)  # duplicate ID
+    call(binary, ['stub:echo', 'Q?'], 2)  # no option
+    call(binary, ['stub:echo', '--question', 'Q?', 'second?', 'yes'], 1)  # positional after --question: options
+    call(binary, ['stub:echo', 'Q?', '--question', 'again'], 2)  # two questions
+    call(binary, ['stub:echo', 'Q?'] + [chr(65 + i) for i in range(27)], 2)  # 27 options
     for bad in ['bad\nID', 'bad\rID', '\x1b[31m', '\x7f', '\u0085', '\u2028', '\u2029', 'x' * 129]:
         call(binary, base + ['--option', bad, 'invalid'], 2)
     with tempfile.TemporaryDirectory() as directory:

@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 static double milliseconds(void) {
     struct timespec t;
@@ -62,6 +63,28 @@ geistr_status geistr_decide_config_read(size_t error_cap, const char *path, geis
     free(json);
     return status;
 }
+/* Without --config: every verified profile of the registry (#162), enabled
+ * for its exact artifact. A --config file replaces this list, so it can still
+ * withhold or disable a model. */
+static geistr_status builtin_config(size_t error_cap, geistr_decision_config **out, char *error) {
+    char json[4096];
+    size_t used = (size_t)snprintf(json, sizeof json, "{\"schema\":1,\"models\":[");
+    for (int p = GEISTR_DECISION_PROFILE_NONE + 1; p < GEISTR_DECISION_MAX_POLICIES; ++p) {
+        const char *sha = geistr_decision_profile_sha256((geistr_decision_profile)p);
+        if (!*sha)
+            break;
+        int n = snprintf(json + used, sizeof json - used, "%s{\"sha256\":\"%s\",\"enabled\":true,\"profile\":\"%s\"}",
+                         p > GEISTR_DECISION_PROFILE_NONE + 1 ? "," : "", sha,
+                         geistr_decision_profile_name((geistr_decision_profile)p));
+        if (n < 0 || (size_t)n >= sizeof json - used)
+            return GEISTR_INVALID;
+        used += (size_t)n;
+    }
+    int n = snprintf(json + used, sizeof json - used, "]}");
+    if (n < 0 || (size_t)n >= sizeof json - used)
+        return GEISTR_INVALID;
+    return geistr_decision_config_parse(used + (size_t)n, error_cap, json, out, error);
+}
 static bool argument(size_t argc, size_t *index, const char *const *argv, const char **value) {
     if (*index + 1 >= argc || !argv[*index + 1])
         return false;
@@ -92,7 +115,8 @@ static int load(struct loaded *l, const char *model, const char *config_file, co
                 geistr_processor processor, uint32_t context) {
     char error[256];
     size_t n = 0;
-    geistr_status status = geistr_decide_config_read(sizeof error, config_file, &l->config, error);
+    geistr_status status = config_file ? geistr_decide_config_read(sizeof error, config_file, &l->config, error)
+                                       : builtin_config(sizeof error, &l->config, error);
     if (status != GEISTR_OK)
         return failure(1, error);
     char path[4096], directory[4096];
@@ -161,6 +185,18 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
     for (size_t i = 1; i < argc; ++i) {
         const char *value = nullptr;
         unsigned bit = 0;
+        if (strncmp(argv[i], "--", 2)) { /* short form: the question, then option IDs */
+            if (!(seen & 1)) {
+                seen |= 1;
+                question = argv[i];
+            } else if (count == GEISTR_DECISION_MAX_OPTIONS)
+                return failure(2, "too many options");
+            else {
+                const size_t n = strnlen(argv[i], GEISTR_DECISION_MAX_ID + 1);
+                options[count++] = (geistr_decision_option){n, n, argv[i], argv[i]};
+            }
+            continue;
+        }
         if (!strcmp(argv[i], "--option")) {
             if (count == GEISTR_DECISION_MAX_OPTIONS || !argument(argc, &i, argv, &value))
                 return failure(2, "--option requires a bounded ID and description");
@@ -222,8 +258,6 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
     }
     if (!question && !question_file)
         return failure(2, "--question TEXT (or --question-file) required");
-    if (!config_file)
-        return failure(2, "--config FILE required");
     if (!count)
         return failure(2, "at least one --option ID DESC required");
     char *owned_question = nullptr;
@@ -285,7 +319,8 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
         code = failure(1, "diagnostics unavailable");
         goto done;
     }
-    fprintf(stderr,
+    if (!isatty(STDERR_FILENO)) /* the diagnostics are for programs, not for a terminal */
+        fprintf(stderr,
             "{\"schema\":1,\"profile\":\"%s\",\"artifact_sha256\":\"%s\",\"template_sha256\":\"%s\","
             "\"runtime\":\"%s\","
             "\"engine_revision\":\"%s\",\"engine\":\"%s\",\"operation\":\"decision\",\"backend\":\"%s\","
@@ -296,7 +331,20 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
             capability.engine_revision, capability.engine_version, capability.backend, mode, result.mode,
             result.prompt_tokens, result.model_calls, ready - start, result.preparation_ms, result.scoring_ms,
             milliseconds() - start);
-    if (printf("%s\n", result.external_id) < 0 || fflush(stdout)) {
+    if (printf("%s\n", result.external_id) < 0) {
+        code = failure(1, "selection output failed");
+        goto done;
+    }
+    if (isatty(STDOUT_FILENO)) { /* a person reads it: each option's probability too */
+        int width = 0;
+        for (size_t i = 0; i < result.n_options; ++i)
+            if ((int)options[i].id_len > width)
+                width = (int)options[i].id_len;
+        for (size_t i = 0; i < result.n_options; ++i)
+            printf("  %-*.*s  %.2f\n", width, (int)options[i].id_len, options[i].id,
+                   result.selection_probabilities[i]);
+    }
+    if (fflush(stdout)) {
         code = failure(1, "selection output failed");
         goto done;
     }
@@ -605,8 +653,6 @@ int geistr_decide_batch_command(size_t argc, const char *const *argv, const geis
     }
     if (!(seen & 1))
         return failure(2, "--shared-context required: V1 has only the explicit shared-context operation");
-    if (!config_file)
-        return failure(2, "--config FILE required");
     if (!request_file)
         return failure(2, "--request-file FILE|- required");
     char *json = nullptr;

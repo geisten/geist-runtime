@@ -14,9 +14,9 @@
  *                                    the model as a service on a Unix socket (service.h)
  *   geistr serve --http[=ADDR:PORT] …  every installed model, the one a request names loaded
  *   geistr chat --socket[=PATH]      chat with that service
- *   geistr decide <model> --config FILE --question TEXT --option ID DESC…
- *                                    fixed-option scoring (EXPERIMENTAL, default-off; docs/DECISIONS.md)
- *   geistr decide-batch <model> --config FILE --shared-context --request-file FILE|-
+ *   geistr decide <model> "QUESTION" OPTION…  (or --question TEXT --option ID DESC…)
+ *                                    fixed-option scoring (EXPERIMENTAL; docs/DECISIONS.md)
+ *   geistr decide-batch <model> [--config FILE] --shared-context --request-file FILE|-
  *                                    several questions over one context, atomic (EXPERIMENTAL, #164)
  *   geistr catalog --decision-config FILE
  *                                    also show each model's decision permission (no model is loaded)
@@ -110,10 +110,10 @@ static int usage(void) {
           "       geistr serve --http[=ADDR:PORT] [...]  every installed model; a request's model is loaded\n"
           "                                       in place of the one before (one in memory)\n"
           "       geistr chat --socket[=PATH]\n"
-          "       geistr decide <model> --config FILE --question TEXT --option ID DESC [--option ID DESC…]\n"
-          "decision: --question-file FILE|-  --context TEXT  --processor auto|cpu|gpu\n"
-          "          --mode dense|selected_rows  --profile NAME\n"
-          "       geistr decide-batch <model> --config FILE --shared-context --request-file FILE|-  (see --help)\n"
+          "       geistr decide <model> \"QUESTION\" OPTION OPTION…   one of the options, read from the model\n"
+          "decision: --option ID DESC  --question TEXT  --question-file FILE|-  --context TEXT\n"
+          "          --processor auto|cpu|gpu  --mode dense|selected_rows  --profile NAME  --config FILE\n"
+          "       geistr decide-batch <model> --shared-context --request-file FILE|-  (see --help)\n"
           "catalog: --decision-config FILE (permission only; does not load a model)\n"
           "options: --models DIR  --catalog FILE  --cpu  --gpu  --threads N  --new (chat)\n"
           "         --files DIR (chat, run: answers from your files, #91)\n"
@@ -735,17 +735,22 @@ int main(int argc, char **argv) {
     if (first < argc && (batch || !strcmp(argv[first], "decide"))) {
         if (first + 1 < argc && (!strcmp(argv[first + 1], "--help") || !strcmp(argv[first + 1], "-h"))) {
             if (!batch) {
-                fputs("usage: geistr decide <model> --config FILE --question TEXT --option ID DESC [--option ID DESC…]\n"
+                fputs("usage: geistr decide <model> \"QUESTION\" OPTION OPTION…\n"
+                      "       geistr decide <model> --question TEXT --option ID DESC [--option ID DESC…]\n"
                       "       --question-file FILE|-  --context TEXT  --processor auto|cpu|gpu\n"
-                      "       --mode dense|selected_rows  --profile NAME  --models DIR  --catalog FILE\n",
+                      "       --mode dense|selected_rows  --profile NAME  --config FILE  --models DIR  --catalog FILE\n"
+                      "Reads the model's choice among the options from one prefill; nothing is generated.\n"
+                      "Prints the chosen option's ID; on a terminal also each option's probability.\n"
+                      "Models with a verified profile are allowed by default; --config FILE replaces that list.\n"
+                      "EXPERIMENTAL (docs/DECISIONS.md).\n",
                       stdout);
                 return OK;
             }
-            printf("usage: geistr decide-batch <model> --config FILE --shared-context --request-file FILE|-\n"
+            printf("usage: geistr decide-batch <model> [--config FILE] --shared-context --request-file FILE|-\n"
                    "       --processor auto|cpu|gpu  --context-tokens N (512)  --snapshot-budget-mib N (256)\n"
                    "       --profile NAME  --models DIR  --catalog FILE\n"
-                   "EXPERIMENTAL, off by default: needs a build with DECISION=1 DECISION_CONTEXT=1 and the\n"
-                   "model's permission in --config. --shared-context is required (V1's only operation).\n"
+                   "EXPERIMENTAL, off by default: needs a build with DECISION_CONTEXT=1; models with a verified\n"
+                   "profile are allowed unless --config says otherwise. --shared-context is required (V1's only operation).\n"
                    "DENSE, FP32 KV, 1..32 questions, no fallback, no download. The request (at most 1 MiB):\n"
                    "  {\"context\":\"…\",\"questions\":[{\"id\":\"q1\",\"question\":\"…\",\n"
                    "   \"options\":[{\"id\":\"yes\",\"description\":\"Yes\"},…]},…]}\n"

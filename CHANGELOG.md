@@ -4,6 +4,20 @@
 
 ### Features
 
+- Decisions without setup: release binaries and wheels are built with the
+  decision engine (`DECISION=1` is now the Makefile default), and
+  `geistr decide` allows every model with a verified profile (today Gemma 4
+  E2B and Bonsai 2 27B) without a `--config` file; a `--config` file still
+  replaces that list. A short form takes the question and the option IDs as
+  plain arguments: `geistr decide gemma4-e2b "Which team?" billing technical
+  sales`. On a terminal it also prints each option's probability; piped,
+  stdout stays exactly the chosen ID, and the diagnostics JSON on stderr is
+  written only when stderr is not a terminal. In a chat, `/decide question |
+  option | option` gives the model's choice and each option's probability;
+  the first `/decide` reopens the model with its verified profile (the file
+  is hashed once, the conversation moves along). Still EXPERIMENTAL
+  (docs/DECISIONS.md).
+
 - Thinking can be switched off per model: `geistr config
   qwen3-0.6b.thinking off` (or `geistr config thinking off` for every
   thinking model without its own value), `/think off` and `/think on` in a
