@@ -4,7 +4,7 @@
  * loaded model.
  *
  *   bench_decision_context prepare   MODEL PROFILE cpu|gpu              prompts, IDs and cuts; no inference
- *   bench_decision_context cell      MODEL PROFILE cpu|gpu T Q N P0     controls A/B/C, 5 warm-up + N pairs
+ *   bench_decision_context cell      MODEL PROFILE cpu|gpu T Q N P0 [W] controls A/B/C, 5 warm-up (W questions) + N pairs
  *   bench_decision_context overhead  MODEL PROFILE cpu|gpu              context batch (wrapper) vs direct prefix
  *   bench_decision_context lifecycle MODEL PROFILE cpu|gpu CYCLES [N]   create-use-destroy, resources (N batches, 100)
  *
@@ -470,8 +470,8 @@ static void independent_side(geistr_decision *a, const struct workload *w, size_
            failed ? "true" : "false");
 }
 
-static int cell(const char *path, const char *profile, bool gpu, size_t t, size_t q, int n, int p0) {
-    REQUIRE(q >= 1 && q <= NQ && n >= 0 && p0 >= 0);
+static int cell(const char *path, const char *profile, bool gpu, size_t t, size_t q, int n, int p0, size_t qw) {
+    REQUIRE(q >= 1 && q <= NQ && n >= 0 && p0 >= 0 && qw >= 1 && qw <= q);
     double open_ms;
     geistr_model *m = open_model(path, profile, gpu, &open_ms);
     header("cell", profile, m, open_ms);
@@ -493,12 +493,13 @@ static int cell(const char *path, const char *profile, bool gpu, size_t t, size_
         const bool reuse_first = pair % 2 == 0;
         double l[3] = {};
         getloadavg(l, 3);
-        printf("{\"pair\":%d,\"warmup\":%s,\"order\":\"%s\",\"load1\":%.2f", pair, warm ? "true" : "false",
-               reuse_first ? "RI" : "IR", l[0]);
+        const size_t k = warm ? qw : q; /* warm-up pairs may ask fewer questions (plan amendment 3) */
+        printf("{\"pair\":%d,\"warmup\":%s,\"questions\":%zu,\"order\":\"%s\",\"load1\":%.2f", pair,
+               warm ? "true" : "false", k, reuse_first ? "RI" : "IR", l[0]);
         if (reuse_first)
-            reuse_side(m, &w, q), independent_side(a, &w, q);
+            reuse_side(m, &w, k), independent_side(a, &w, k);
         else
-            independent_side(a, &w, q), reuse_side(m, &w, q);
+            independent_side(a, &w, k), reuse_side(m, &w, k);
         printf(",\"rss_bytes\":%llu}\n", (unsigned long long)rss_bytes());
         fflush(stdout);
     }
@@ -751,8 +752,8 @@ int main(int argc, char **argv) {
         return overhead(argv[2], argv[3], gpu);
     if (!strcmp(argv[1], "lifecycle") && (argc == 6 || argc == 7))
         return lifecycle(argv[2], argv[3], gpu, atoi(argv[5]), argc == 7 ? atoi(argv[6]) : REQUESTS);
-    if (!strcmp(argv[1], "cell") && argc == 9)
+    if (!strcmp(argv[1], "cell") && (argc == 9 || argc == 10))
         return cell(argv[2], argv[3], gpu, (size_t)atoi(argv[5]), (size_t)atoi(argv[6]), atoi(argv[7]),
-                    atoi(argv[8]));
+                    atoi(argv[8]), (size_t)atoi(argv[argc == 10 ? 9 : 6]));
     return 2;
 }

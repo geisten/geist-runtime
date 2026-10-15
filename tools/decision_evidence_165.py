@@ -67,7 +67,8 @@ def prepared(profile, proc):
 
 def cost_ms(plan, profile, proc, n):
     c = plan['calibration']['cost_ms'][f'{profile}-{proc}']
-    return c['fixed'] + c['per_token'] * n if n else 0.0
+    factor = plan['calibration'].get('safety_factor', 1.0)  # amendment 3: measured sections ran up to 1.36 x
+    return factor * (c['fixed'] + c['per_token'] * n) if n else 0.0
 
 
 def pair_ms(plan, profile, proc, t, q):
@@ -92,13 +93,15 @@ def schedule(plan):
                 if cell in plan['matrix']['not_run']:
                     continue
                 p = pair_ms(plan, profile, proc, t, q) / 1e3
-                per = max(1, min(PAIRS, int((SECTION_S - 30) / p) - WARMUP))
+                qw = plan['latency'].get('warmup_questions', q)  # amendment 3: warm-up pairs ask 1 question
+                w = pair_ms(plan, profile, proc, t, min(q, qw)) / 1e3
+                per = max(1, min(PAIRS, int((SECTION_S - 30 - WARMUP * w) / p)))
                 first = 0
                 while first < PAIRS:
                     n = min(per, PAIRS - first)
-                    sections.append({'name': f'cell-{cell}-p{first:02d}', 'argv': ['cell', model, profile, proc, str(t),
-                                                                                  str(q), str(n), str(first)],
-                                     'estimate_s': round((WARMUP + n) * p + 30)})
+                    argv = ['cell', model, profile, proc, str(t), str(q), str(n), str(first)]
+                    sections.append({'name': f'cell-{cell}-p{first:02d}', 'argv': argv + [str(min(q, qw))] if qw != q else argv,
+                                     'estimate_s': round(WARMUP * w + n * p + 30)})
                     first += n
         overhead = 2 * (WARMUP + 30) * cost_ms(plan, profile, proc, 90) / 1e3
         sections.append({'name': f'overhead-{profile}-{proc}', 'argv': ['overhead', model, profile, proc],
@@ -108,8 +111,11 @@ def schedule(plan):
         cycle = lambda n: (3 * cost_ms(plan, profile, proc, prep[1024]['context']['cached_tokens']) +
                            (16 + 1 + n) * cost_ms(plan, profile, proc, suffix) + 10 * cost_ms(plan, profile, proc, 20)) / 1e3
         if 3 * cycle(100) + 30 > SECTION_S:  # one process per cycle; cross-cycle growth is then not observable
-            n = 100 if cycle(100) + 30 <= SECTION_S else -(-100 // 3)  # at least 100 measured batches in all
-            for c in range(3):
+            k = 3  # one-cycle processes: at least 3 cycles and 100 measured batches in all
+            while cycle(-(-100 // k)) + 30 > SECTION_S and k < 12:
+                k += 1
+            n = 100 if cycle(100) + 30 <= SECTION_S else -(-100 // k)
+            for c in range(k):
                 sections.append({'name': f'lifecycle-{profile}-{proc}-c{c}',
                                  'argv': ['lifecycle', model, profile, proc, '1', str(n)], 'estimate_s': round(cycle(n) + 30)})
         else:
@@ -150,7 +156,7 @@ def execute(plan, name):
     if "'AC Power'" not in before['pmset_batt']:
         raise SystemExit('on battery: the plan measures on mains power only')
     binary = sha(BENCH)
-    if binary != plan['freeze']['binary_sha256']['bench_decision_context']:
+    if binary != plan['freeze']['binary_sha256']['bench_decision_context']:  # the current harness
         raise SystemExit('the harness binary is not the frozen one')
     argv = list(s['argv'])
     if argv[0] == 'oracle':
@@ -200,13 +206,21 @@ def run(plan, only, gap):
                   f'(next: {s["name"]})', flush=True)
             time.sleep(max(0.0, end - time.time()))
             continue
+        if "'AC Power'" not in host_state()['pmset_batt']:  # wait for mains power, never measure on battery
+            print(f'on battery at {time.strftime("%H:%M")}: waiting for mains power (next: {s["name"]})', flush=True)
+            while "'AC Power'" not in host_state()['pmset_batt']:
+                time.sleep(300)
+            print(f'mains power again at {time.strftime("%H:%M")}', flush=True)
+            continue  # re-evaluated: the night pause
         status = subprocess.run([LOCK, 'status'], capture_output=True, text=True).stdout.strip()
         print(f'[{i + 1}/{len(todo)}] {s["name"]} (est. {s["estimate_s"]} s), lock: {status}', flush=True)
         # bounded wait for the lock: if it frees too late, the section waits for the morning instead
         r = subprocess.run([LOCK, sys.executable, __file__, 'exec', s['name']],
                            env={**os.environ, 'WAIT': str(max(1, int(latest - time.time())))})
         if r.returncode and not (OUT / f'{s["name"]}.jsonl').exists():
-            if time.time() < latest - 5:  # not the lock timeout: refused (battery, binary); stop
+            if "'AC Power'" not in host_state()['pmset_batt']:
+                continue  # refused on battery: wait for mains power above
+            if time.time() < latest - 5:  # not the lock timeout: refused (binary); stop
                 raise SystemExit(f'{s["name"]}: refused, runner stopped')
             print(f'{s["name"]}: lock not free before {time.strftime("%H:%M", time.localtime(latest))}', flush=True)
             continue  # re-evaluated: the night pause
@@ -408,7 +422,7 @@ def analyse_lifecycle(plan, v, profile, proc):
     per_cycle = int(argv[0][6]) if argv and len(argv[0]) > 6 else plan['lifecycle']['requests']
     cycles = sorted({r['cycle'] for r in records})
     check('at_least_100_measured_batches', per_cycle * len(cycles) >= 100, per_cycle * len(cycles))
-    check('three_cycles', cycles == [0, 1, 2], cycles)
+    check('three_cycles', len(cycles) >= 3 and cycles == list(range(len(cycles))), cycles)
     gpu = proc == 'gpu'
     for c in cycles:
         rs = [r for r in records if r['cycle'] == c]
@@ -543,7 +557,8 @@ def analyse(plan):
         if v.check(len(rec) == 1, f'{s["name"]}: {len(rec)} run records'):
             v.check(rec[0]['returncode'] == 0 or s['name'] in superseded or s['name'] == 'oracle-r2-bonsai2',
                     f'{s["name"]}: exit {rec[0]["returncode"]}')
-            v.check(rec[0]['binary_sha256'] == plan['freeze']['binary_sha256']['bench_decision_context'], f'{s["name"]}: binary')
+            v.check(rec[0]['binary_sha256'] in plan['freeze']['harness_sha256_accepted'] or s['name'].startswith('oracle'),
+                    f'{s["name"]}: binary')
     report = {'plan_sha256': sha(PLAN), 'cells': {}, 'overhead': {}, 'lifecycle': {}}
     for group in plan['matrix']['run_order']:
         profile, proc = group.split('-')
