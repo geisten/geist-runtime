@@ -32,6 +32,77 @@ with tempfile.TemporaryDirectory() as directory:
     assert pinned and d['engine_revision'] == pinned.group(1), (d['engine_revision'], pinned)  # the Makefile's pin
     assert d['backend'] == 'metal' if processor == 'gpu' else d['backend'].startswith('cpu'), d['backend']
     assert d['until_result_ms'] >= d['setup_ms'] and d['preparation_ms'] >= 0
+    # Short form without --config: the verified profile is allowed by default;
+    # piped, stdout is exactly the chosen ID.
+    short = subprocess.run([binary, 'decide', model, 'Which option equals 4?', 'four', 'five',
+                            '--processor', processor], capture_output=True, timeout=120)
+    assert short.returncode == 0 and short.stdout in [b'four\n', b'five\n'], short
+    # On a terminal: the ID, then each option's probability; no diagnostics JSON.
+    master, slave = os.openpty()
+    shown = subprocess.Popen([binary, 'decide', model, 'Which option equals 4?', 'four', 'five',
+                              '--processor', processor], stdout=slave, stderr=slave)
+    os.close(slave)
+    output = b''
+    while True:
+        try:
+            chunk = os.read(master, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        output += chunk
+    os.close(master)
+    assert shown.wait(timeout=120) == 0, output
+    lines = output.decode().replace('\r', '').splitlines()
+    assert lines[0] in ['four', 'five'] and b'"schema"' not in output, output
+    table = {line.split()[0]: float(line.split()[1]) for line in lines[1:]}
+    assert set(table) == {'four', 'five'} and abs(sum(table.values()) - 1) < 0.02, output
+    # In a chat: /decide reopens the model with its verified profile once,
+    # then answers with the chosen option and each option's probability.
+    import pty, select
+    def until(fd, text, seconds=180):
+        seen, end = b'', time.time() + seconds
+        while time.time() < end:
+            if select.select([fd], [], [], 1)[0]:
+                try:
+                    chunk = os.read(fd, 4096)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                seen += chunk
+                if text.encode() in seen.replace(b'\r', b''):
+                    return seen
+        raise AssertionError((text, seen[-600:]))
+    def send(fd, text):  # typed, then Enter on its own: a burst with Enter is taken as a paste
+        os.write(fd, text)
+        time.sleep(0.5)
+        os.write(fd, b'\r')
+    home = Path(directory) / 'home'
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execve(binary, [binary, 'chat', model, '--new', '--' + processor],
+                  {**os.environ, 'TERM': 'xterm', 'GEISTEN_HOME': str(home)})
+    until(fd, 'Ctrl-C twice exits')
+    send(fd, b'/decide Which option equals 4? | four | five')
+    shown = until(fd, '  five ').decode(errors='replace').replace('\r', '')
+    assert 'loading' in shown and ('\nfour\n' in shown or '\nfive\n' in shown), shown[-600:]  # reopened once
+    send(fd, b'/decide Is 4 even? | yes | no')  # the second one needs no reopen
+    second = until(fd, '  no ').decode(errors='replace')
+    assert 'loading' not in second, second[-600:]
+    send(fd, b'/decide only a question')
+    until(fd, '/decide question | option')
+    send(fd, b'/exit')
+    end = time.time() + 60  # keep reading: a full pty would block the child
+    while time.time() < end:
+        try:
+            if select.select([fd], [], [], 1)[0] and not os.read(fd, 4096):
+                break
+        except OSError:
+            break
+    _, status = os.waitpid(pid, 0)
+    os.close(fd)
+    assert os.WEXITSTATUS(status) == 0, status
     for args, status in [(['--option', 'röt', 'duplicate'], 2),
                          (['--profile', 'unknown'], 1),
                          (['--mode', 'auto'], 2)]:

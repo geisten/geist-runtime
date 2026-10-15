@@ -143,7 +143,7 @@ ifneq (,$(filter $(ENGINE_GOALS),$(MAKECMDGOALS)))
 GEIST_REPO ?= https://github.com/geisten/geistlib.git
 GEIST_REF  ?= 3841fa68e277b8ce33211aa84e4728dd61c133de
 GEISTLIB   ?= geistlib
-DECISION   ?= 0
+DECISION   ?= 1
 DECISION_CONTEXT ?= 0
 ifeq ($(DECISION)$(DECISION_CONTEXT),01)
 $(error DECISION_CONTEXT=1 requires DECISION=1)

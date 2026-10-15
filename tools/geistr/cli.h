@@ -1,6 +1,7 @@
 /* cli.h — what the parts of the geistr CLI share. */
 #pragma once
 #include "geistr_catalog.h"
+#include "geistr_decision.h"
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -117,6 +118,8 @@ struct session {
     geistr_reasoning reasoning; /* the catalog's, for each chat on the model */
     uint32_t         used;      /* context tokens after the last answer (0: unknown, or cleared) */
     bool             embedding; /* the catalog says so (#91): it serves, it does not chat */
+    bool             decisions; /* opened with a verified decision profile (/decide) */
+    geistr_decision *decision;  /* /decide's instance on model, opened at its first use */
 };
 extern bool serving; /* session_open for geistr serve: embedding models too */
 extern const char *files_option; /* --files DIR (#91) */
