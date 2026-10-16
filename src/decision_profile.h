@@ -12,6 +12,20 @@ struct decision_profile {
     const char *thinking_off;              /* after the assistant role */
 };
 const struct decision_profile *decision_profile_get(geistr_decision_profile profile); /* nullptr: unknown */
+/* An unverified profile from a chat template family (enum tpl_family): the
+ * markers tpl_render_send writes around a system and a user message, the
+ * generation prompt, and the thinking-off block when the model thinks. BOS is
+ * not textual here: the caller prepends the BOS token as the chat does. For
+ * Gemma 4 and ChatML this renders byte-identically to the verified profiles
+ * (tests/test_decision_profile.c). false for an unknown family. */
+struct decision_family_profile {
+    struct decision_profile profile;
+    char markers[1024];
+};
+[[nodiscard]] bool decision_profile_from_family(struct decision_family_profile *out, int family, bool thinks);
+/* decision_render with an explicit profile (verified or from a family). */
+[[nodiscard]] geistr_status decision_render_with(size_t *written, size_t capacity, const struct decision_profile *profile,
+                                                 const geistr_decision_request *request, char *out);
 const char *decision_pre_prompt(void);
 const char *decision_template_hash(geistr_decision_profile profile);
 /* Output empty on failure. BOS is textual only in the Gemma native render;

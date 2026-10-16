@@ -39,7 +39,9 @@ geistr_status geistr_decision_policy_validate(const geistr_decision_policy *p) {
     if (p->profile != GEISTR_DECISION_PROFILE_NONE &&
         strcmp(p->sha256, geistr_decision_profile_sha256(p->profile)))
         return GEISTR_FORMAT;
-    return p->enabled && p->profile == GEISTR_DECISION_PROFILE_NONE ? GEISTR_FORMAT : GEISTR_OK;
+    /* Enabled without a profile: unverified, rendered from the model's own
+     * chat template family at decision open (no artifact binding). */
+    return GEISTR_OK;
 }
 
 void geistr_decision_config_free(geistr_decision_config *c) { free(c); }

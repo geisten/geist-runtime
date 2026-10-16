@@ -741,7 +741,8 @@ int main(int argc, char **argv) {
                       "       --mode dense|selected_rows  --profile NAME  --config FILE  --models DIR  --catalog FILE\n"
                       "Reads the model's choice among the options from one prefill; nothing is generated.\n"
                       "Prints the chosen option's ID; on a terminal also each option's probability.\n"
-                      "Models with a verified profile are allowed by default; --config FILE replaces that list.\n"
+                      "Works with every chat model; models without a verified profile are marked unverified.\n"
+                      "--config FILE replaces these defaults.\n"
                       "EXPERIMENTAL (docs/DECISIONS.md).\n",
                       stdout);
                 return OK;
@@ -749,8 +750,8 @@ int main(int argc, char **argv) {
             printf("usage: geistr decide-batch <model> [--config FILE] --shared-context --request-file FILE|-\n"
                    "       --processor auto|cpu|gpu  --context-tokens N (512)  --snapshot-budget-mib N (256)\n"
                    "       --profile NAME  --models DIR  --catalog FILE\n"
-                   "EXPERIMENTAL, off by default: needs a build with DECISION_CONTEXT=1; models with a verified\n"
-                   "profile are allowed unless --config says otherwise. --shared-context is required (V1's only operation).\n"
+                   "EXPERIMENTAL, off by default: needs a build with DECISION_CONTEXT=1 and a model with a\n"
+                   "verified profile (unless --config says otherwise). --shared-context is required (V1's only operation).\n"
                    "DENSE, FP32 KV, 1..32 questions, no fallback, no download. The request (at most 1 MiB):\n"
                    "  {\"context\":\"…\",\"questions\":[{\"id\":\"q1\",\"question\":\"…\",\n"
                    "   \"options\":[{\"id\":\"yes\",\"description\":\"Yes\"},…]},…]}\n"

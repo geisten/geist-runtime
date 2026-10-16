@@ -191,8 +191,10 @@ billing
 
 Piped, it prints only the chosen option, for scripts. The probabilities are
 the model's own, read from the option keys; nothing else can come out. It
-works for models with a verified decision profile, today `gemma4-e2b` and
-`bonsai2-27b-pq2`; other models are refused. EXPERIMENTAL: details, limits
+works with every chat model: the prompt follows the model's own chat
+template. For `gemma4-e2b` and `bonsai2-27b-pq2` the decisions are also
+checked against an independent engine (llama.cpp); for other models geistr
+says "unverified". EXPERIMENTAL: details, limits
 and evidence in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Use it from other tools

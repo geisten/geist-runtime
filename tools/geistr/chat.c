@@ -680,9 +680,10 @@ static const char *clipboard(const char *text, size_t len) {
     return nullptr;
 }
 
-/* /decide: the verified decision profile for the running model's file, if
- * any (the registry in src/decision_profile.c). A catalog model has its hash
- * in the catalog; a .gguf path is hashed. */
+/* /decide: the verified decision profile for the running model's file (the
+ * registry in src/decision_profile.c), or else an unverified policy that
+ * renders from the model's own chat template. A catalog model has its hash in
+ * the catalog; a .gguf path is hashed. false: the file cannot be read. */
 static bool decision_policy_for(const char *name, geistr_decision_policy *out) {
     char            sha[65] = "";
     geistr_catalog *c       = strchr(name, '/') || strstr(name, ".gguf") ? nullptr : load_catalog();
@@ -707,7 +708,10 @@ static bool decision_policy_for(const char *name, geistr_decision_policy *out) {
             return true;
         }
     }
-    return false;
+    /* No verified profile: unverified, from the model's own chat template. */
+    *out = (geistr_decision_policy) {.enabled = true, .mode = GEISTR_DECISION_DENSE};
+    snprintf(out->sha256, sizeof out->sha256, "%s", sha);
+    return true;
 }
 
 static int command(struct session *x, struct conversation *said, char *line, const char *remote);
@@ -741,10 +745,11 @@ static int decide(struct session *x, struct conversation *said, char *arg, const
     if (!x->decisions) {
         static geistr_decision_policy policy;
         if (!decision_policy_for(x->name, &policy)) {
-            printf("%s has no verified decision profile\n", x->name);
-            usage("decisions: gemma4-e2b, bonsai2-27b-pq2 (geistr decide --help)");
+            printf("%s: its file cannot be read for decisions\n", x->name);
             return GO_ON;
         }
+        if (policy.profile == GEISTR_DECISION_PROFILE_NONE)
+            usage("unverified: no independently checked decision profile for this model");
         char again[300];
         snprintf(again, sizeof again, "/model %s", x->name);
         open_policy = &policy;

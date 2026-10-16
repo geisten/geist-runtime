@@ -1,4 +1,5 @@
 #include "decision_profile.h"
+#include "template.h"
 #include "native_cases.h"
 #include "fixtures/decisions/bonsai2_context.h"
 #include "fixtures/decisions/gemma4_context.h"
@@ -201,7 +202,44 @@ static void contexts(size_t n, geistr_decision_profile p, const struct native_co
     CHECK(decision_suffix(&cut, 0, nullptr, 4, ids) == GEISTR_OK && cut == 4);
     free(text);
 }
+/* An unverified profile from the chat template family renders exactly what
+ * the verified profile renders (Gemma's textual <bos> aside: unverified, the
+ * BOS is a token, as in the chat), for every native fixture's request shape. */
+static void families(void) {
+    const struct {
+        geistr_decision_profile verified;
+        enum tpl_family family;
+    } pairs[] = {{GEISTR_DECISION_GEMMA4_E2B_Q4, TPL_GEMMA4}, {GEISTR_DECISION_BONSAI2_27B_PQ2, TPL_CHATML}};
+    const geistr_decision_option options[3] = {{4, 1, "four", "4"}, {4, 1, "five", "5"}, {4, 8, "röt", "nicht 4 "}};
+    const geistr_decision_request requests[2] = {
+        {.size = sizeof requests[0], .operation = GEISTR_OPERATION_DECISION, .question_len = 22,
+         .n_options = 2, .question = "Which option equals 4?", .options = options},
+        {.size = sizeof requests[0], .operation = GEISTR_OPERATION_DECISION, .question_len = 3, .context_len = 18,
+         .n_options = 3, .question = "Q?\n", .context = "line one\nline two\n", .options = options}};
+    static char native[DECISION_PROMPT_CAP], generic[DECISION_PROMPT_CAP];
+    for (size_t i = 0; i < sizeof pairs / sizeof pairs[0]; ++i) {
+        const struct decision_profile *v = decision_profile_get(pairs[i].verified);
+        struct decision_family_profile f;
+        CHECK(decision_profile_from_family(&f, pairs[i].family, *v->thinking_off != 0));
+        for (size_t k = 0; k < 2; ++k) {
+            size_t n = 0, g = 0;
+            CHECK(decision_render(&n, sizeof native, pairs[i].verified, &requests[k], native) == GEISTR_OK);
+            CHECK(decision_render_with(&g, sizeof generic, &f.profile, &requests[k], generic) == GEISTR_OK);
+            CHECK(n == strlen(v->bos) + g && !strncmp(native, v->bos, strlen(v->bos)) &&
+                  !strcmp(native + strlen(v->bos), generic));
+        }
+    }
+    /* Every family the chat knows yields a profile; an unknown one does not. */
+    for (int family = TPL_UNKNOWN + 1; family <= TPL_BITNET; ++family) {
+        struct decision_family_profile f;
+        CHECK(decision_profile_from_family(&f, family, false) && *f.profile.assistant && !*f.profile.thinking_off);
+    }
+    struct decision_family_profile unknown;
+    CHECK(!decision_profile_from_family(&unknown, TPL_UNKNOWN, false));
+}
+
 int main(void) {
+    families();
     cases(sizeof bonsai2_cases / sizeof bonsai2_cases[0], GEISTR_DECISION_BONSAI2_27B_PQ2, bonsai2_cases);
     cases(sizeof gemma4_cases / sizeof gemma4_cases[0], GEISTR_DECISION_GEMMA4_E2B_Q4, gemma4_cases);
     contexts(sizeof bonsai2_contexts / sizeof bonsai2_contexts[0], GEISTR_DECISION_BONSAI2_27B_PQ2,

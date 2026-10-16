@@ -1,4 +1,6 @@
 #include "decision_profile.h"
+#include "template.h"
+#include <stdlib.h>
 #include <stdckdint.h>
 #include <string.h>
 
@@ -71,15 +73,55 @@ static void prefix(const struct decision_profile *e, size_t n, const char *conte
     }
 }
 
+bool decision_profile_from_family(struct decision_family_profile *out, int family, bool thinks) {
+    if (!out)
+        return false;
+    *out = (struct decision_family_profile){};
+    /* Two placeholder messages through the chat renderer; the text around them
+     * is the family's markers. */
+    const geistr_message msgs[2] = {{"system", "\x01"}, {"user", "\x02"}};
+    struct tpl_state state;
+    tpl_init(&state, (enum tpl_family)family);
+    char *text = tpl_render_send(&state, 2, msgs);
+    tpl_free(&state);
+    char *a = text ? strchr(text, '\x01') : nullptr, *b = a ? strchr(a, '\x02') : nullptr;
+    const char *off = thinks ? tpl_think_off((enum tpl_family)family) : nullptr;
+    size_t la = a ? (size_t)(a - text) : 0, lb = b ? (size_t)(b - a - 1) : 0, lc = b ? strlen(b + 1) : 0,
+           ld = off ? strlen(off) : 0;
+    if (!a || !b || la + lb + lc + ld + 5 > sizeof out->markers) {
+        free(text);
+        return false;
+    }
+    const char *parts[4] = {text, a + 1, b + 1, off ? off : ""};
+    const size_t lengths[4] = {la, lb, lc, ld};
+    const char *copies[4];
+    char *m = out->markers;
+    for (size_t i = 0; i < 4; ++i) {
+        memcpy(m, parts[i], lengths[i]);
+        m[lengths[i]] = 0;
+        copies[i] = m;
+        m += lengths[i] + 1;
+    }
+    out->profile = (struct decision_profile){.name = "none", .artifact_sha256 = "", .template_sha256 = "", .bos = "",
+                                             .system = copies[0], .user = copies[1], .assistant = copies[2],
+                                             .thinking_off = copies[3]};
+    free(text);
+    return true;
+}
+
 geistr_status decision_render(size_t *written, size_t cap, geistr_decision_profile p,
                               const geistr_decision_request *r, char *out) {
+    return decision_render_with(written, cap, decision_profile_get(p), r, out);
+}
+
+geistr_status decision_render_with(size_t *written, size_t cap, const struct decision_profile *e,
+                                   const geistr_decision_request *r, char *out) {
     if (written)
         *written = 0;
     if (out && cap)
         out[0] = 0;
     if (!written || !out || !cap || geistr_decision_request_validate(0, r, nullptr) != GEISTR_OK)
         return GEISTR_INVALID;
-    const struct decision_profile *e = decision_profile_get(p);
     if (!e)
         return GEISTR_FORMAT;
     if (controls(r->question_len, r->question) || controls(r->context_len, r->context))
