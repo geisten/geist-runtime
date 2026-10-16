@@ -4,6 +4,14 @@
 
 ### Features
 
+- `geistr decide --threshold P`: below probability P a decision is not
+  taken. Without more, it exits with 3 and prints nothing on stdout; with
+  `--escalate chat` the same model writes the answer in chat mode (thinking,
+  if the model thinks) and the answer is read as one of the options; with
+  `--escalate MODEL` the first model is closed and MODEL decides (below P
+  again: exit 3). The diagnostics JSON reports `top_probability`, `threshold`
+  and `escalation`.
+
 - Decisions without setup: release binaries and wheels are built with the
   decision engine (`DECISION=1` is now the Makefile default), and
   `geistr decide` works without a `--config` file for every chat model.

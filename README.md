@@ -190,12 +190,18 @@ billing
 ```
 
 Piped, it prints only the chosen option, for scripts. The probabilities are
-the model's own, read from the option keys; nothing else can come out. It
-works with every chat model: the prompt follows the model's own chat
+the model's own, read from the option keys; nothing else can come out.
+
+With `--threshold 0.9`, a decision below that probability is not taken:
+`geistr decide` exits with 3, or with `--escalate chat` the same model writes
+the answer (thinking, if it can), or with `--escalate bonsai2-27b-pq2` a larger
+model decides.
+
+It works with every chat model: the prompt follows the model's own chat
 template. For `gemma4-e2b` and `bonsai2-27b-pq2` the decisions are also
 checked against an independent engine (llama.cpp); for other models geistr
-says "unverified". EXPERIMENTAL: details, limits
-and evidence in [docs/DECISIONS.md](docs/DECISIONS.md).
+says "unverified". EXPERIMENTAL: details, limits and evidence in
+[docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Use it from other tools
 

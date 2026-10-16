@@ -349,6 +349,25 @@ match the configured exact artifact. This first CLI limits model context to
 512 tokens and refuses overflow. C/Python callers may choose a checked larger
 capacity within the loaded model context.
 
+**Threshold and escalation.** `--threshold P` (0 < P ≤ 1) compares the
+chosen option's probability with P. At or above P nothing changes. Below P:
+
+- without `--escalate`: exit 3, nothing on stdout, a message on stderr (the
+  caller decides what happens, e.g. a person looks at it);
+- `--escalate chat`: the same model answers in chat mode with the options as
+  allowed labels (thinking on for a model the catalog marks as thinking; the
+  model is opened with a context of 8192 tokens, the answer is limited to 4096
+  tokens). The answer is read exactly (the trimmed answer is an ID, any case)
+  or as the only ID that occurs as a whole word; otherwise exit 3. The
+  printed ID has no probability;
+- `--escalate MODEL`: the first model is closed, MODEL is loaded (same
+  `--config` rules, no profile override) and decides; below P again, exit 3.
+
+The diagnostics JSON gains `top_probability` (the first model's), `threshold`
+(0 without the flag) and `escalation` (`decided`, `unsure`, `chat` or
+`model`). There is no cap on the escalated share: a single command cannot see
+one; callers that run many decisions should cap it themselves.
+
 In `geistr chat`, `/decide question | option | option …` scores the options
 on the chat's model (each option ID is its own description; the conversation
 is not part of the request) and prints the chosen ID and each option's
