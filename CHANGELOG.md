@@ -129,6 +129,19 @@
 
 ### Engine
 
+- geistlib `e78f9ee` (from `3841fa6`): Metal runs the fast GEMMs and the
+  flash attention for any row count (geistlib#35). Before, a prompt whose
+  length was not a multiple of 32 (GEMM) or 8 (attention) took the bounded
+  GEMM and the scalar attention for the whole chunk. Bonsai 2 27B on an M1
+  Max, Metal: a 191-token decision 3.4 s before, 2.2 s now (192 tokens:
+  2.1 s both); 231 JevBench decisions 2240 s → 1929 s (prompts ≤ 300 tokens
+  p50 2.39 s → 1.39 s), Gemma 4 E2B 287 s → 202 s (p50 0.24 s → 0.12 s);
+  same choices as before for Bonsai (231/231) and as llama.cpp for Gemma
+  (231/231) (#230). Decisions keep their FP32 KV cache. The range also brings model families
+  as units of shared blocks (geistlib#37), a Q6_K prefill GEMM on Metal
+  (geistlib#17), SDOT prefill kernels for Q8_0 and Q4_K on cpu_neon
+  (geistlib#7, geistlib#16), tiled int8 GEMMs on x86 (geistlib#18) and a
+  parallel team capped at the cgroup CPU quota (geistlib#27).
 - geistlib `3841fa6` (from `d53560d`): snapshot-backed prefix scoring for
   decisions (geistlib#5, built only with `DECISION_CONTEXT=1`). The range
   also brings AVX2/FMA kernels for the native GEMM on x86 (geistlib#12) and
