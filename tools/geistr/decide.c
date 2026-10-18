@@ -4,8 +4,10 @@
 #include <stdckdint.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -102,6 +104,7 @@ struct loaded {
     geistr_model *model;
     const geistr_decision_policy *policy;
     char sha[65];
+    geistr_reasoning reasoning; /* the catalog's: a thinking model thinks when escalated to chat */
 };
 static void unload(struct loaded *l) {
     geistr_model_close(l->model);
@@ -145,6 +148,8 @@ static int load(struct loaded *l, const char *model, const char *config_file, co
             return failure(1, "model path too long");
         selected_path = path;
         memcpy(l->sha, entry->sha256, sizeof l->sha);
+        if (entry->reasoning_format && !strcmp(entry->reasoning_format, "think_tags"))
+            l->reasoning = GEISTR_REASONING_THINK_TAGS;
     } else if (geistr_sha256_file(selected_path, l->sha) != GEISTR_OK)
         return failure(1, "model artifact unreadable");
     l->policy = geistr_decision_config_find(l->sha, l->config);
@@ -168,6 +173,89 @@ static int load(struct loaded *l, const char *model, const char *config_file, co
     return 0;
 }
 
+/* --escalate chat: the chat answer's option, read exactly (the trimmed answer
+ * is an ID, any case) or else as the only ID that occurs as a whole word.
+ * nullptr when neither holds. */
+static bool word_char(char c) { return isalnum((unsigned char)c) || c == '_' || c == '-'; }
+static const char *find_ci(const char *hay, const char *needle, size_t n) { /* strcasestr is not POSIX */
+    for (; *hay; ++hay)
+        if (!strncasecmp(hay, needle, n))
+            return hay;
+    return nullptr;
+}
+static const char *answer_option(const char *answer, const geistr_decision_request *r) {
+    const char *a = answer;
+    while (*a && (isspace((unsigned char)*a) || strchr("`*\"'", *a)))
+        ++a;
+    size_t n = strlen(a);
+    while (n && (isspace((unsigned char)a[n - 1]) || strchr("`*\"'.", a[n - 1])))
+        --n;
+    for (size_t i = 0; i < r->n_options; ++i)
+        if (r->options[i].id_len == n && !strncasecmp(a, r->options[i].id, n))
+            return r->options[i].id;
+    const char *found = nullptr;
+    for (size_t i = 0; i < r->n_options; ++i) {
+        const geistr_decision_option *o = &r->options[i];
+        for (const char *p = answer; (p = find_ci(p, o->id, o->id_len)); p += o->id_len) {
+            if ((p == answer || !word_char(p[-1])) && !word_char(p[o->id_len])) {
+                if (found && found != o->id)
+                    return nullptr;
+                found = o->id;
+                break;
+            }
+        }
+    }
+    return found;
+}
+
+/* The same model answers in chat mode (thinking on for a thinking model) with
+ * the options as allowed labels. Returns the chosen ID or nullptr. */
+static const char *ask_in_chat(geistr_model *model, geistr_reasoning reasoning, const geistr_decision_request *r,
+                               char *answer, size_t cap) {
+    char *prompt = nullptr;
+    size_t len = 0;
+    FILE *f = open_memstream(&prompt, &len);
+    if (!f)
+        return nullptr;
+    if (r->context_len)
+        fprintf(f, "Context:\n%.*s\n\n", (int)r->context_len, r->context);
+    fprintf(f, "Question:\n%.*s\n\nAllowed labels:\n", (int)r->question_len, r->question);
+    for (size_t i = 0; i < r->n_options; ++i)
+        fprintf(f, "- %.*s: %.*s\n", (int)r->options[i].id_len, r->options[i].id, (int)r->options[i].description_len,
+                r->options[i].description);
+    fputs("\nAnswer with exactly one label.", f);
+    fclose(f);
+    geistr_chat_opts opts = GEISTR_CHAT_OPTS_INIT;
+    opts.reasoning = reasoning;
+    opts.max_tokens = 4096;
+    geistr_chat *chat = nullptr;
+    const geistr_message messages[2] = {
+        {"system", "You are a decision component. Answer with exactly one of the allowed labels and nothing else."},
+        {"user", prompt}};
+    size_t used = 0;
+    answer[0] = 0;
+    geistr_piece piece = {.size = sizeof piece};
+    bool ok = geistr_chat_open(model, &opts, &chat) == GEISTR_OK && geistr_chat_send(chat, 2, messages) == GEISTR_OK;
+    while (ok && geistr_chat_next(chat, &piece) == GEISTR_OK && piece.part != GEISTR_PART_END)
+        if (piece.part == GEISTR_PART_ANSWER && used + piece.len < cap) {
+            memcpy(answer + used, piece.text, piece.len);
+            used += piece.len;
+            answer[used] = 0;
+        }
+    geistr_chat_close(chat);
+    free(prompt);
+    return ok ? answer_option(answer, r) : nullptr;
+}
+
+static void show_table(const geistr_decision_request *r, const double *probabilities) {
+    int width = 0;
+    for (size_t i = 0; i < r->n_options; ++i)
+        if ((int)r->options[i].id_len > width)
+            width = (int)r->options[i].id_len;
+    for (size_t i = 0; i < r->n_options; ++i)
+        printf("  %-*.*s  %.2f\n", width, (int)r->options[i].id_len, r->options[i].id, probabilities[i]);
+}
+
 int geistr_decide_command(size_t argc, const char *const *argv, const geistr_decide_host *host) {
     if (!argc || argc > 128 || !argv || !argv[0])
         return failure(2, "model and options required; see geistr help");
@@ -178,6 +266,8 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
     geistr_processor processor = GEISTR_PROCESSOR_AUTO;
     geistr_decision_mode mode = GEISTR_DECISION_DEFAULT;
     geistr_decision_option options[GEISTR_DECISION_MAX_OPTIONS];
+    double threshold = 0;          /* --threshold: below it the decision is escalated or left open */
+    const char *escalate = nullptr; /* --escalate chat | <model> */
     size_t count = 0, serialized = 0;
     unsigned seen = 0;
     for (size_t i = 0; i < argc; ++i) {
@@ -248,6 +338,15 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
                 processor = GEISTR_PROCESSOR_AUTO;
             else
                 return failure(2, "unknown processor");
+        } else if (!strcmp(flag, "--threshold")) {
+            bit = 256;
+            char *end = nullptr;
+            threshold = strtod(value, &end);
+            if (!*value || *end || !(threshold > 0 && threshold <= 1))
+                return failure(2, "--threshold must be a probability in (0, 1]");
+        } else if (!strcmp(flag, "--escalate")) {
+            bit = 512;
+            escalate = value;
         } else if (!strcmp(flag, "--mode")) {
             bit = 128;
             if (!strcmp(value, "dense"))
@@ -266,6 +365,8 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
         return failure(2, "--question TEXT (or --question-file) required");
     if (!count)
         return failure(2, "at least one --option ID DESC required");
+    if (escalate && threshold <= 0)
+        return failure(2, "--escalate needs --threshold");
     char *owned_question = nullptr;
     size_t question_len = question ? strnlen(question, GEISTR_DECISION_MAX_QUESTION + 1) : 0;
     if (question_file && read_bounded(&question_len, GEISTR_DECISION_MAX_QUESTION, question_file,
@@ -295,7 +396,9 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
         code = failure(1, "linked decision engine is disabled; no fallback");
         goto done;
     }
-    code = load(&loaded, argv[0], config_file, profile, models_dir, catalog_file, host, processor, 512);
+    const bool to_chat = escalate && !strcmp(escalate, "chat");
+    /* A chat escalation writes, and a thinking model thinks: room for it. */
+    code = load(&loaded, argv[0], config_file, profile, models_dir, catalog_file, host, processor, to_chat ? 8192 : 512);
     if (code)
         goto done;
     code = 1;
@@ -325,6 +428,13 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
         code = failure(1, "diagnostics unavailable");
         goto done;
     }
+    const double top = result.selection_probabilities[result.best_index];
+    const bool unsure = threshold > 0 && top < threshold;
+    double first[GEISTR_DECISION_MAX_OPTIONS];
+    memcpy(first, result.selection_probabilities, result.n_options * sizeof *first);
+    char chosen[GEISTR_DECISION_MAX_ID + 1];
+    snprintf(chosen, sizeof chosen, "%s", result.external_id);
+    const char *outcome = !unsure ? "decided" : !escalate ? "unsure" : to_chat ? "chat" : "model";
     if (!isatty(STDERR_FILENO)) /* the diagnostics are for programs, not for a terminal */
         fprintf(stderr,
             "{\"schema\":1,\"profile\":\"%s\",\"artifact_sha256\":\"%s\",\"template_sha256\":\"%s\","
@@ -332,26 +442,82 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
             "\"engine_revision\":\"%s\",\"engine\":\"%s\",\"operation\":\"decision\",\"backend\":\"%s\","
             "\"requested_mode\":%d,\"resolved_mode\":%d,\"prompt_tokens\":%zu,\"model_"
             "calls\":%zu,\"setup_ms\":%.3f,\"preparation_ms\":%.3f,\"scoring_ms\":%.3f,\"until_result_ms\":%."
-            "3f}\n",
+            "3f,\"top_probability\":%.6f,\"threshold\":%.6f,\"escalation\":\"%s\"}\n",
             geistr_decision_profile_name(policy->profile), sha, plan.template_sha256, geistr_version(),
             capability.engine_revision, capability.engine_version, capability.backend, mode, result.mode,
             result.prompt_tokens, result.model_calls, ready - start, result.preparation_ms, result.scoring_ms,
-            milliseconds() - start);
-    if (printf("%s\n", result.external_id) < 0) {
+            milliseconds() - start, top, threshold, outcome);
+    if (policy->profile == GEISTR_DECISION_PROFILE_NONE && isatty(STDERR_FILENO))
+        fputs("unverified: no independently checked decision profile for this model (docs/DECISIONS.md)\n", stderr);
+    const bool shown = isatty(STDOUT_FILENO); /* a person reads it: probabilities and what happened */
+    if (unsure) {
+        if (shown) {
+            printf("unsure: %.2f < %.2f\n", top, threshold);
+            show_table(&request, first);
+        }
+        if (host && host->active)
+            host->active(nullptr, host->context);
+        geistr_decision_close(decision);
+        decision = nullptr;
+        if (!escalate) {
+            code = failure(3, "below the threshold; no --escalate: left undecided");
+            goto done;
+        }
+        if (to_chat) {
+            if (shown)
+                printf("asking %s in chat%s\n", argv[0],
+                       loaded.reasoning == GEISTR_REASONING_THINK_TAGS ? ", thinking" : "");
+            static char answer[16384];
+            const char *id = ask_in_chat(model, loaded.reasoning, &request, answer, sizeof answer);
+            if (!id) {
+                code = failure(3, "the chat answer names no single option: left undecided");
+                goto done;
+            }
+            snprintf(chosen, sizeof chosen, "%s", id);
+        } else {
+            /* One model in memory at a time: the first goes before the second loads. */
+            unload(&loaded);
+            code = load(&loaded, escalate, config_file, nullptr, models_dir, catalog_file, host, processor, 512);
+            if (code)
+                goto done;
+            code = 1;
+            status = geistr_decision_open(loaded.model, sizeof error, &opts, &decision, error);
+            if (status != GEISTR_OK) {
+                code = failure(1, error);
+                goto done;
+            }
+            if (host && host->active)
+                host->active(decision, host->context);
+            result = (geistr_decision_result){.size = sizeof result};
+            status = geistr_decision_score(decision, &request, &result);
+            if (status != GEISTR_OK) {
+                code = failure(status == GEISTR_CANCELLED ? 130 : 1, geistr_decision_error(decision));
+                goto done;
+            }
+            const double second = result.selection_probabilities[result.best_index];
+            if (shown) {
+                printf("asked %s: %.2f\n", escalate, second);
+                show_table(&request, result.selection_probabilities);
+            }
+            if (second < threshold) {
+                code = failure(3, "the escalation model is below the threshold too: left undecided");
+                goto done;
+            }
+            snprintf(chosen, sizeof chosen, "%s", result.external_id);
+        }
+        if (printf("%s\n", chosen) < 0 || fflush(stdout)) {
+            code = failure(1, "selection output failed");
+            goto done;
+        }
+        code = 0;
+        goto done;
+    }
+    if (printf("%s\n", chosen) < 0) {
         code = failure(1, "selection output failed");
         goto done;
     }
-    if (policy->profile == GEISTR_DECISION_PROFILE_NONE && isatty(STDERR_FILENO))
-        fputs("unverified: no independently checked decision profile for this model (docs/DECISIONS.md)\n", stderr);
-    if (isatty(STDOUT_FILENO)) { /* a person reads it: each option's probability too */
-        int width = 0;
-        for (size_t i = 0; i < result.n_options; ++i)
-            if ((int)options[i].id_len > width)
-                width = (int)options[i].id_len;
-        for (size_t i = 0; i < result.n_options; ++i)
-            printf("  %-*.*s  %.2f\n", width, (int)options[i].id_len, options[i].id,
-                   result.selection_probabilities[i]);
-    }
+    if (shown)
+        show_table(&request, first);
     if (fflush(stdout)) {
         code = failure(1, "selection output failed");
         goto done;

@@ -141,6 +141,14 @@ def main():
     call(binary, ['stub:echo', '--question', 'Q?', 'second?', 'yes'], 1)  # positional after --question: options
     call(binary, ['stub:echo', 'Q?', '--question', 'again'], 2)  # two questions
     call(binary, ['stub:echo', 'Q?'] + [chr(65 + i) for i in range(27)], 2)  # 27 options
+    # --threshold and --escalate: checked before any model work.
+    for value in ['0', '-0.1', '1.5', 'abc', '', '0.5x']:
+        call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--threshold', value], 2)
+    call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--escalate', 'chat'], 2)  # escalate needs a threshold
+    call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--threshold', '0.9', '--threshold', '0.8'], 2)
+    call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--threshold', '1'], 1)
+    call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--threshold', '0.9', '--escalate', 'chat'], 1)
+    call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--threshold', '0.9', '--escalate', 'other.gguf'], 1)
     for bad in ['bad\nID', 'bad\rID', '\x1b[31m', '\x7f', '\u0085', '\u2028', '\u2029', 'x' * 129]:
         call(binary, base + ['--option', bad, 'invalid'], 2)
     with tempfile.TemporaryDirectory() as directory:

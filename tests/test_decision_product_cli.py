@@ -37,6 +37,26 @@ with tempfile.TemporaryDirectory() as directory:
     short = subprocess.run([binary, 'decide', model, 'Which option equals 4?', 'four', 'five',
                             '--processor', processor], capture_output=True, timeout=120)
     assert short.returncode == 0 and short.stdout in [b'four\n', b'five\n'], short
+    # --threshold: a question without a right answer and a threshold no
+    # readout reaches. Without --escalate: exit 3, nothing on stdout, the
+    # diagnostics say "unsure". --escalate chat: the same model writes the
+    # answer, which must be one of the options. --escalate MODEL: the second
+    # model is asked, and below the threshold too, exit 3 again.
+    vague = [binary, 'decide', model, 'Pick one of the two words.', 'left', 'right', '--processor', processor,
+             '--threshold', '1']
+    unsure = subprocess.run(vague, capture_output=True, timeout=120)
+    records = [json.loads(line) for line in unsure.stderr.splitlines() if line.startswith(b'{')]
+    assert unsure.returncode == 3 and not unsure.stdout, unsure
+    assert records and records[0]['escalation'] == 'unsure' and records[0]['top_probability'] < 1, records
+    chat = subprocess.run(vague + ['--escalate', 'chat'], capture_output=True, timeout=300)
+    assert chat.returncode == 0 and chat.stdout in [b'left\n', b'right\n'], chat
+    assert [json.loads(line) for line in chat.stderr.splitlines() if line.startswith(b'{')][0]['escalation'] == 'chat'
+    second = subprocess.run(vague + ['--escalate', model], capture_output=True, timeout=300)
+    assert second.returncode == 3 and not second.stdout and b'below the threshold too' in second.stderr, second
+    sure = subprocess.run([binary, 'decide', model, 'Which option equals 4?', 'four', 'five', '--processor', processor,
+                           '--threshold', '0.5', '--escalate', 'chat'], capture_output=True, timeout=120)
+    assert sure.returncode == 0 and sure.stdout in [b'four\n', b'five\n'], sure
+    assert [json.loads(line) for line in sure.stderr.splitlines() if line.startswith(b'{')][0]['escalation'] == 'decided'
     # On a terminal: the ID, then each option's probability; no diagnostics JSON.
     master, slave = os.openpty()
     shown = subprocess.Popen([binary, 'decide', model, 'Which option equals 4?', 'four', 'five',
