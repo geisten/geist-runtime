@@ -6,16 +6,22 @@
 
 - Decisions without setup: release binaries and wheels are built with the
   decision engine (`DECISION=1` is now the Makefile default), and
-  `geistr decide` allows every model with a verified profile (today Gemma 4
-  E2B and Bonsai 2 27B) without a `--config` file; a `--config` file still
-  replaces that list. A short form takes the question and the option IDs as
+  `geistr decide` works without a `--config` file for every chat model.
+  Gemma 4 E2B and Bonsai 2 27B keep their verified profiles (bound to the
+  artifact's SHA-256, checked against llama.cpp); any other model is decided
+  *unverified*: the prompt is rendered from its own chat template family
+  (the renderer the chat uses, thinking off where the template thinks), with
+  no hashing at open. For Gemma 4 and ChatML that rendering is
+  byte-identical to the verified profiles. A `--config` file still replaces
+  the defaults. In the C API, an enabled policy without a profile now means
+  unverified instead of an error. A short form takes the question and the option IDs as
   plain arguments: `geistr decide gemma4-e2b "Which team?" billing technical
   sales`. On a terminal it also prints each option's probability; piped,
   stdout stays exactly the chosen ID, and the diagnostics JSON on stderr is
   written only when stderr is not a terminal. In a chat, `/decide question |
   option | option` gives the model's choice and each option's probability;
   the first `/decide` reopens the model with its verified profile (the file
-  is hashed once, the conversation moves along). Still EXPERIMENTAL
+  is hashed once) or unverified (no hashing); the conversation moves along. Still EXPERIMENTAL
   (docs/DECISIONS.md).
 
 - Thinking can be switched off per model: `geistr config

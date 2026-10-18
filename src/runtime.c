@@ -110,6 +110,7 @@ struct geistr_model {
     size_t                n_stops;
     geist_token_t         bos;
     bool                  add_bos;
+    bool                  thinks; /* the chat template has <think>: decisions render thinking off */
     uint32_t              context;
     geistr_decision_policy decision;
     atomic_size_t decision_allocations, decision_bytes;
@@ -223,6 +224,8 @@ static geistr_status model_describe(geistr_model *m, struct geist_model *gm, str
                           ? forced
                           : tpl_family_detect(geist_model_metadata_str(gm, "tokenizer.chat_template", nullptr),
                                               geist_model_arch(gm));
+    const char *chat_template = geist_model_metadata_str(gm, "tokenizer.chat_template", nullptr);
+    m->thinks    = chat_template && strstr(chat_template, "<think>");
     m->vision    = m->family == TPL_GEMMA4 && (geist_model_modalities(gm) & GEIST_MOD_VISION);
     m->n_stops   = tpl_stop_ids(token_lookup, gm, geist_model_eos_token(gm), MAX_STOPS, m->stops);
     m->bos       = geist_model_bos_token(gm);
@@ -287,7 +290,9 @@ static geistr_status model_open(const char              *path,
     struct file_identity identity = {};
     if (o.decision) {
         decision = *o.decision;
-        if (decision.enabled) {
+        /* Only a verified profile is bound to its artifact; an unverified
+         * decision (no profile) renders from the model's own template. */
+        if (decision.enabled && decision.profile != GEISTR_DECISION_PROFILE_NONE) {
             if (path && !file_identity_read(path, &identity)) {
                 put_error(error, cap, "enabled decision model must be a readable regular file");
                 return GEISTR_IO;
@@ -351,7 +356,7 @@ static geistr_status model_open(const char              *path,
         geist_backend_destroy(be);
         return from_engine(s);
     }
-    if (decision.enabled && path) {
+    if (decision.enabled && decision.profile != GEISTR_DECISION_PROFILE_NONE && path) { /* verified only */
         struct file_identity after = {};
         if (!file_identity_read(path, &after) || !file_identity_same(&identity, &after)) {
             put_error(error, cap, "decision artifact changed during verification/loading");
@@ -1500,6 +1505,9 @@ const char *geistr_chat_error(const geistr_chat *c) {
 /* Fixed-option decisions: owned state, shared immutable model weights. */
 struct geistr_decision {
     geistr_model *model;
+    const struct decision_profile *profile; /* verified, or &family.profile */
+    struct decision_family_profile family;
+    bool prepend_bos; /* unverified: the BOS token as the chat adds it */
     struct geist_decision *scorer;
     struct geist_session *tokenizer;
     atomic_bool cancel;
@@ -1622,6 +1630,16 @@ geistr_status geistr_decision_open(geistr_model *m, size_t error_cap, const geis
     if (!d)
         return GEISTR_NO_MEMORY;
     d->model = m;
+    if (m->decision.profile == GEISTR_DECISION_PROFILE_NONE) {
+        if (!decision_profile_from_family(&d->family, m->family, m->thinks)) {
+            free(d);
+            put_error(error, error_cap, "the model's chat template is unknown: no decision prompt for it");
+            return GEISTR_FORMAT;
+        }
+        d->profile = &d->family.profile;
+        d->prepend_bos = m->add_bos && m->bos >= 0;
+    } else
+        d->profile = decision_profile_get(m->decision.profile);
     d->mode = mode;
     d->token_capacity = token_cap;
     atomic_init(&d->cancel, false);
@@ -1664,8 +1682,15 @@ static geistr_status decision_tokenize(size_t *written, size_t cap, const char *
     geistr_decision *d = context;
     if (atomic_load(&d->cancel))
         return GEISTR_CANCELLED;
+    if (d->prepend_bos && cap < 1)
+        return GEISTR_CONTEXT;
     engine_lock(d->model);
-    const enum geist_status es = geist_session_tokenize(d->tokenizer, text, cap, ids, written);
+    const size_t skip = d->prepend_bos ? 1 : 0;
+    const enum geist_status es = geist_session_tokenize(d->tokenizer, text, cap - skip, ids + skip, written);
+    if (es == GEIST_OK && skip) {
+        ids[0] = d->model->bos;
+        ++*written;
+    }
     if (es != GEIST_OK)
         snprintf(d->error, sizeof d->error, "decision tokenize: %s", geist_session_errmsg(d->tokenizer));
     engine_unlock(d->model);
@@ -1693,7 +1718,7 @@ geistr_status geistr_decision_score(geistr_decision *d, const geistr_decision_re
     }
     const double start = now_ms();
     size_t written = 0, n_prompt = 0;
-    geistr_status s = decision_render(&written, DECISION_PROMPT_CAP, d->model->decision.profile, r, d->text);
+    geistr_status s = decision_render_with(&written, DECISION_PROMPT_CAP, d->profile, r, d->text);
     if (s == GEISTR_OK)
         s = decision_map(&n_prompt, d->token_capacity, r->n_options, DECISION_PROMPT_CAP, decision_tokenize,
                          d->text, d->prompt, d->scratch, d->candidates, d);

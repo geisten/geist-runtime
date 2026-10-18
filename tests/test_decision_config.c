@@ -66,7 +66,6 @@ static void configuration(void) {
     for (size_t i = 0; i < sizeof bad / sizeof bad[0]; ++i)
         geistr_decision_config_free(parse(bad[i], GEISTR_FORMAT));
     const char *variants[] = {",\"profile\":\"gemma4-e2b-q4-v1\",\"enabled\":true",
-                              ",\"enabled\":true",
                               ",\"enabled\":truefalse",
                               ",\"enabled\":1",
                               ",\"mode\":\"auto\"",
@@ -78,6 +77,15 @@ static void configuration(void) {
         CHECK(n > 0 && (size_t)n < sizeof json);
         geistr_decision_config_free(parse(json, GEISTR_FORMAT));
     }
+    /* Enabled without a profile: unverified, rendered from the model's own
+     * chat template; valid for any artifact hash. */
+    n = snprintf(json, sizeof json, "{\"schema\":1,\"models\":[{\"sha256\":\"%s\",\"enabled\":true}]}",
+                 geistr_decision_profile_sha256(GEISTR_DECISION_BONSAI2_27B_PQ2));
+    CHECK(n > 0 && (size_t)n < sizeof json);
+    c = parse(json, GEISTR_OK);
+    CHECK(c && geistr_decision_config_get(0, c)->enabled &&
+          geistr_decision_config_get(0, c)->profile == GEISTR_DECISION_PROFILE_NONE);
+    geistr_decision_config_free(c);
     n = snprintf(json, sizeof json, "{\"schema\":1,\"models\":[{\"sha256\":\"%s\"},{\"sha256\":\"%s\"}]}",
                  geistr_decision_profile_sha256(GEISTR_DECISION_BONSAI2_27B_PQ2),
                  geistr_decision_profile_sha256(GEISTR_DECISION_BONSAI2_27B_PQ2));
@@ -236,7 +244,8 @@ static void abi_and_hash(void) {
     CHECK(result.best_index == SIZE_MAX && !result.n_options && !result.logits && !result.external_id[0]);
     geistr_model_close(model);
     char error[128];
-    CHECK(geistr_model_open("stub:echo", &opts, &model, error, sizeof error) == GEISTR_INVALID && !model);
+    /* Enabled and unverified: valid, but the stub has no engine to run it. */
+    CHECK(geistr_model_open("stub:echo", &opts, &model, error, sizeof error) == GEISTR_FORMAT && !model);
     policy.profile = GEISTR_DECISION_BONSAI2_27B_PQ2;
     CHECK(geistr_model_open("stub:echo", &opts, &model, error, sizeof error) == GEISTR_FORMAT && !model);
 }

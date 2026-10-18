@@ -8,13 +8,26 @@ JSON, a continuous rating or calibrated correctness/truth confidence.
 ## Permission and identity
 
 In the C API, decision permission is absent/disabled by default. The `geistr`
-CLI enables every verified profile for its exact artifact when no `--config`
-is given (see CLI below); a `--config` file replaces that list. A model's options can point
+CLI enables decisions for every model when no `--config` is given (see CLI
+below); a `--config` file replaces that. A model's options can point
 at a policy returned by the immutable configuration parser. Model open copies
 that value: later edits or freeing the config cannot change a loaded model.
-An enabled policy requires a known profile bound to the exact model SHA-256.
-The runtime hashes file or borrowed-memory contents before loading an enabled
-model. A mismatch is an error; filename and family are not an identity.
+
+An enabled policy is either **verified** or **unverified**:
+
+- **Verified** (a known profile): bound to the exact model SHA-256. The
+  runtime hashes file or borrowed-memory contents before loading the model; a
+  mismatch is an error. The profile's rendering is checked against native
+  fixtures and its scores against an independent llama.cpp reference. This is
+  what makes the label "verified" true, not what makes the method work.
+- **Unverified** (enabled, no profile): the decision prompt is rendered from
+  the model's own chat template family (`src/template.c`, the renderer the
+  chat uses), with thinking off when the template has `<think>`, and the BOS
+  token prepended as the chat does. No hashing at open. For Gemma 4 and
+  ChatML the family rendering is byte-identical to the verified profiles
+  (`tests/test_decision_profile.c`), and on the real models it gives the same
+  prompt tokens. A model whose template family is unknown is refused at
+  decision open. Nothing here establishes quality for a model.
 Borrowed model bytes must remain unchanged for the model's lifetime.
 
 Configuration is a **separate schema-1 JSON file**, leaving the schema-2 model
@@ -321,8 +334,9 @@ geistr decide model.gguf --config decisions.json --question-file - \
 geistr catalog --decision-config decisions.json --json
 ```
 
-Without `--config`, every verified profile is enabled for its exact artifact
-(the registry in `src/decision_profile.c`); other models are refused. With
+Without `--config`, a model with a verified profile (the registry in
+`src/decision_profile.c`) uses it; every other model is decided unverified,
+and on a terminal the command says so. With
 `--config FILE`, only that file's policies apply, so a file can disable a
 model; set a policy's enabled field to true explicitly. The short form takes
 the question as the first argument that is not a flag and every further one as

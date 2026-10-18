@@ -148,6 +148,12 @@ static int load(struct loaded *l, const char *model, const char *config_file, co
     } else if (geistr_sha256_file(selected_path, l->sha) != GEISTR_OK)
         return failure(1, "model artifact unreadable");
     l->policy = geistr_decision_config_find(l->sha, l->config);
+    static geistr_decision_policy unverified;
+    if (!l->policy && !config_file) { /* no verified profile: the model's own chat template, unverified */
+        unverified = (geistr_decision_policy){.enabled = true, .mode = GEISTR_DECISION_DENSE};
+        memcpy(unverified.sha256, l->sha, sizeof unverified.sha256);
+        l->policy = &unverified;
+    }
     if (!l->policy || !l->policy->enabled)
         return failure(1, "decision permission absent or disabled for this artifact");
     if (profile && strcmp(profile, geistr_decision_profile_name(l->policy->profile)))
@@ -335,6 +341,8 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
         code = failure(1, "selection output failed");
         goto done;
     }
+    if (policy->profile == GEISTR_DECISION_PROFILE_NONE && isatty(STDERR_FILENO))
+        fputs("unverified: no independently checked decision profile for this model (docs/DECISIONS.md)\n", stderr);
     if (isatty(STDOUT_FILENO)) { /* a person reads it: each option's probability too */
         int width = 0;
         for (size_t i = 0; i < result.n_options; ++i)
