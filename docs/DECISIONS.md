@@ -154,7 +154,7 @@ new version and new fixtures; old manifests are then marked `historical`.
 EXPERIMENTAL, default-off. It needs the build flag (`make runtime DECISION=1
 DECISION_CONTEXT=1`; `DECISION=0 DECISION_CONTEXT=1` is refused), the model's
 decision permission and an explicit `geistr_decision_context_open`. The engine
-is geistlib with geistlib#5 (`3841fa6` or later; pinned: `e78f9ee`). Off builds and the stub keep every
+is geistlib with geistlib#5 (`3841fa6` or later; pinned: `1f61d75`). Off builds and the stub keep every
 symbol: `geistr_decision_context_available()` is false and open returns
 `GEISTR_FORMAT`.
 

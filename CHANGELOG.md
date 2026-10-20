@@ -143,6 +143,21 @@
 
 ### Engine
 
+- geistlib `1f61d75` (from `e78f9ee`): Metal prefill for Bonsai 2 27B is
+  faster — flash attention after llama.cpp's tiling (geistlib#91), PQ2_0
+  GEMM on 64x64 tiles with f16 staging (geistlib#77, geistlib#103),
+  DeltaNet prefill on simdgroup matrices (geistlib#99), shorter prefill
+  command buffers. Bonsai 2 27B on an M1 Max, Metal, FP32 KV, one
+  decision with filler contexts: 328 / 664 / 1245 / 2406 tokens 3.64 /
+  7.09 / 13.70 / 27.37 s → 2.96 / 5.43 / 9.89 / 19.48 s (88-94 → 111-126
+  tok/s); an 80-token decision stays at 0.8-1.0 s; 231 JevBench decisions
+  1824 s → 1258 s, same choices as before and as Prism's llama.cpp fork
+  (231/231, largest probability difference 0.0012 vs Prism). Decisions
+  keep their FP32 KV cache. The range also brings a layer split across two
+  backends (geistlib#49, #78), Qwen3-MoE on the CPU backends (geistlib#48),
+  sampler repetition control (geistlib#695, all off by default), PQ2_0
+  prefill on int8 SDOT / AVX-512 VNNI on the CPUs (geistlib#82, #85), and
+  `GEIST_KV_F16=1` (geistlib#113). No runtime source change was needed.
 - geistlib `e78f9ee` (from `3841fa6`): Metal runs the fast GEMMs and the
   flash attention for any row count (geistlib#35). Before, a prompt whose
   length was not a multiple of 32 (GEMM) or 8 (attention) took the bounded

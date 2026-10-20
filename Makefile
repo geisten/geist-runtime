@@ -141,7 +141,7 @@ test: all $(BUILD)/test_decide_driver
 ENGINE_GOALS := runtime test-clients test-upgrade test-real test-embed fetch-embed-model fetch-rerank-model chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python $(BUILD)/test_decision_real $(BUILD)/bench_decision
 ifneq (,$(filter $(ENGINE_GOALS),$(MAKECMDGOALS)))
 GEIST_REPO ?= https://github.com/geisten/geistlib.git
-GEIST_REF  ?= e78f9ee6fd8336694ff3e5d6eb88637ef977525a
+GEIST_REF  ?= 1f61d75d1ddd9adc1d38f0696904d2d39f65e596
 GEISTLIB   ?= geistlib
 DECISION   ?= 1
 DECISION_CONTEXT ?= 0
