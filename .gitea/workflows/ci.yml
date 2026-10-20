@@ -2,7 +2,9 @@
 # git.geisten.net; github.com/geisten/geist-runtime is the public mirror).
 # Runners of the geisten org: ubuntu-24.04 = desktop (docker, 4 parallel),
 # ubuntu-24.04-arm = Pi 5 (docker, one job at a time under the board lock),
-# macos-15 = the M1 Max (host). geist-vulkan = the desktop host (RTX 2080 Ti, the gpu job).
+# macos-15 = the M1 Max's light runner (host, no lock: build + unit),
+# macos-15-heavy = the M1 Max under its benchmark lock (real models, timing).
+# geist-vulkan = the desktop host (RTX 2080 Ti, the gpu job).
 name: ci
 
 on:
@@ -82,8 +84,10 @@ jobs:
           - runner: ubuntu-24.04
             cc: gcc-14
           # no ubuntu-24.04-arm: the Pi has 4 GB and test_real needs 3.2 GB of
-          # its own; macos-15 runs the real model on arm64
-          - runner: macos-15
+          # its own; the M1 Max runs the real model on arm64, on its heavy
+          # runner (holds the Mac's benchmark lock; macos-15 = mac-light,
+          # which takes no lock, is for build + unit jobs)
+          - runner: macos-15-heavy
             cc: clang
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
