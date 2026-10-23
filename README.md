@@ -195,7 +195,11 @@ the model's own, read from the option keys; nothing else can come out.
 With `--threshold 0.9`, a decision below that probability is not taken:
 `geistr decide` exits with 3, or with `--escalate chat` the same model writes
 the answer (thinking, if it can), or with `--escalate bonsai2-27b-pq2` a larger
-model decides.
+model decides. `--max-tokens N` caps the chat answer and `--temperature T`
+applies your calibration. Where to set the threshold and the cap is your
+application's trade between speed and quality, and it depends on the task and
+the model. [docs/DECISIONS.md](docs/DECISIONS.md) shows how to measure it, with
+one measured curve.
 
 It works with every chat model: the prompt follows the model's own chat
 template. For `gemma4-e2b` and `bonsai2-27b-pq2` the decisions are also
