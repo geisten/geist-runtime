@@ -1,5 +1,6 @@
 """Single product binary E2E on one exact profile. No network or downloads."""
 import json
+import math
 import os
 import re
 from pathlib import Path
@@ -48,15 +49,48 @@ with tempfile.TemporaryDirectory() as directory:
     records = [json.loads(line) for line in unsure.stderr.splitlines() if line.startswith(b'{')]
     assert unsure.returncode == 3 and not unsure.stdout, unsure
     assert records and records[0]['escalation'] == 'unsure' and records[0]['top_probability'] < 1, records
+    def record(run):
+        lines = [json.loads(line) for line in run.stderr.splitlines() if line.startswith(b'{')]
+        assert len(lines) == 1, run.stderr
+        return lines[0]
+    u = records[0]  # the first stage's options and probabilities; which stage answered (#210)
+    assert u['answered_by'] == 'none' and u['answer_index'] is None and 'chat' not in u, u
+    assert len(u['direct_probabilities']) == 2 and abs(sum(u['direct_probabilities']) - 1) < 1e-5, u
+    assert abs(u['direct_probabilities'][u['direct_index']] - u['top_probability']) < 1e-6 and u['temperature'] == 1, u
     chat = subprocess.run(vague + ['--escalate', 'chat'], capture_output=True, timeout=300)
     assert chat.returncode == 0 and chat.stdout in [b'left\n', b'right\n'], chat
-    assert [json.loads(line) for line in chat.stderr.splitlines() if line.startswith(b'{')][0]['escalation'] == 'chat'
+    c = record(chat)
+    assert c['escalation'] == 'chat' and c['answered_by'] == 'chat', c
+    assert c['answer_index'] == [b'left\n', b'right\n'].index(chat.stdout), c
+    assert c['chat']['max_tokens'] == 4096 and c['chat']['output_tokens'] > 0 and c['chat']['input_tokens'] > 0, c
+    assert c['chat']['finish'] == 'stop' and c['escalation_ms'] >= c['chat']['total_ms'] > 0, c
+    # --max-tokens: the caller's cap on the chat answer, thinking included. One
+    # token either names an option or the answer is cut there (exit 3).
+    capped = subprocess.run(vague + ['--escalate', 'chat', '--max-tokens', '1'], capture_output=True, timeout=300)
+    c = record(capped)
+    assert c['chat']['max_tokens'] == 1 and c['chat']['output_tokens'] <= 1, c
+    if capped.returncode == 3:
+        assert not capped.stdout and c['answered_by'] == 'none' and c['answer_index'] is None, c
+        assert c['chat']['finish'] in ['length', 'stop'], c
+        assert c['chat']['finish'] != 'length' or b'--max-tokens' in capped.stderr, capped.stderr
+    else:
+        assert capped.returncode == 0 and c['answered_by'] == 'chat', capped
     second = subprocess.run(vague + ['--escalate', model], capture_output=True, timeout=300)
     assert second.returncode == 3 and not second.stdout and b'below the threshold too' in second.stderr, second
     sure = subprocess.run([binary, 'decide', model, 'Which option equals 4?', 'four', 'five', '--processor', processor,
                            '--threshold', '0.5', '--escalate', 'chat'], capture_output=True, timeout=120)
     assert sure.returncode == 0 and sure.stdout in [b'four\n', b'five\n'], sure
-    assert [json.loads(line) for line in sure.stderr.splitlines() if line.startswith(b'{')][0]['escalation'] == 'decided'
+    d = record(sure)
+    assert d['escalation'] == 'decided' and d['answered_by'] == 'direct' and d['answer_index'] == d['direct_index']
+    # --temperature: the threshold sees softmax(logits / T); the choice never changes.
+    warm = subprocess.run([binary, 'decide', model, 'Which option equals 4?', 'four', 'five', '--processor', processor,
+                           '--temperature', '2'], capture_output=True, timeout=120)
+    assert warm.returncode == 0 and warm.stdout == sure.stdout, warm
+    w = record(warm)
+    logs = [math.log(max(p, 1e-300)) / 2 for p in d['direct_probabilities']]
+    expected = [math.exp(x - max(logs)) / sum(math.exp(y - max(logs)) for y in logs) for x in logs]
+    assert w['temperature'] == 2 and w['direct_index'] == d['direct_index'], w
+    assert all(abs(a - b) < 1e-4 for a, b in zip(w['direct_probabilities'], expected)), (w, expected)
     # On a terminal: the ID, then each option's probability; no diagnostics JSON.
     master, slave = os.openpty()
     shown = subprocess.Popen([binary, 'decide', model, 'Which option equals 4?', 'four', 'five',

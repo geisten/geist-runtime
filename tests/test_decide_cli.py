@@ -149,6 +149,21 @@ def main():
     call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--threshold', '1'], 1)
     call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--threshold', '0.9', '--escalate', 'chat'], 1)
     call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--threshold', '0.9', '--escalate', 'other.gguf'], 1)
+    # --temperature (calibration) and --max-tokens (the chat escalation's cap, #210).
+    for value in ['0', '0.001', '101', '-1', 'abc', '', '1x', 'nan', 'inf']:
+        call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--temperature', value], 2)
+    call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--temperature', '1.0546'], 1)
+    call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--temperature', '2', '--temperature', '3'], 2)
+    chat = ['stub:echo', 'Q?', 'yes', 'no', '--threshold', '0.9', '--escalate', 'chat']
+    for value in ['0', '-1', '+5', ' 5', '28673', '1e3', '12x', '', '99999999999999999999999']:
+        call(binary, chat + ['--max-tokens', value], 2)
+    call(binary, chat + ['--max-tokens', '1536'], 1)
+    call(binary, chat + ['--max-tokens', '1', '--temperature', '1.0546'], 1)
+    call(binary, chat + ['--max-tokens', '28672'], 1)
+    call(binary, chat + ['--max-tokens', '512', '--max-tokens', '256'], 2)
+    call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--max-tokens', '512'], 2)  # needs --escalate chat
+    call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--threshold', '0.9', '--escalate', 'other.gguf',
+                  '--max-tokens', '512'], 2)
     for bad in ['bad\nID', 'bad\rID', '\x1b[31m', '\x7f', '\u0085', '\u2028', '\u2029', 'x' * 129]:
         call(binary, base + ['--option', bad, 'invalid'], 2)
     with tempfile.TemporaryDirectory() as directory:

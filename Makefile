@@ -316,7 +316,7 @@ test-decision-real: $(BUILD)/test_decision_real
 	$(BUILD)/test_decision_real "$(DECISION_MODEL)" "$(DECISION_PROFILE)" "$(DECISION_PROCESSOR)"
 
 $(BUILD)/test_decide_driver: tests/geistr_decide_driver.c tools/geistr/decide.c tools/geistr/decide.h $(LIB)
-	$(CC) $(CFLAGS) tests/geistr_decide_driver.c tools/geistr/decide.c $(LIB) $(LDFLAGS) $(LDLIBS) -o $@
+	$(CC) $(CFLAGS) tests/geistr_decide_driver.c tools/geistr/decide.c $(LIB) $(LDFLAGS) $(LDLIBS) -lm -o $@
 
 test-decision-cli: $(BUILD)/geistr
 	python3 tests/test_decision_product_cli.py $(BUILD)/geistr "$(DECISION_MODEL)" "$(DECISION_PROFILE)" "$(DECISION_PROCESSOR)"

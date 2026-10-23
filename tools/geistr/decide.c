@@ -1,10 +1,12 @@
 #include "decide.h"
 #include "geistr_catalog.h"
 #include "geistr_decision.h"
+#include <inttypes.h>
 #include <stdckdint.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -16,6 +18,7 @@ static double milliseconds(void) {
     clock_gettime(CLOCK_MONOTONIC, &t);
     return (double)t.tv_sec * 1000.0 + (double)t.tv_nsec / 1000000.0;
 }
+enum { GEISTR_DECIDE_MAX_ESCALATION_TOKENS = 28672 }; /* --max-tokens; the chat context is 4096 + this */
 static const char *command = "decide"; /* decide or decide-batch, for the messages */
 static int failure(int code, const char *message) {
     fprintf(stderr, "geistr %s: %s\n", command, message);
@@ -209,9 +212,11 @@ static const char *answer_option(const char *answer, const geistr_decision_reque
 }
 
 /* The same model answers in chat mode (thinking on for a thinking model) with
- * the options as allowed labels. Returns the chosen ID or nullptr. */
+ * the options as allowed labels, in at most max_tokens generated tokens
+ * (thinking included). Returns the chosen ID or nullptr; *stats describes the
+ * answer (finish reason, tokens, timing) when the chat got that far. */
 static const char *ask_in_chat(geistr_model *model, geistr_reasoning reasoning, const geistr_decision_request *r,
-                               char *answer, size_t cap) {
+                               uint32_t max_tokens, geistr_stats *stats, char *answer, size_t cap) {
     char *prompt = nullptr;
     size_t len = 0;
     FILE *f = open_memstream(&prompt, &len);
@@ -227,7 +232,7 @@ static const char *ask_in_chat(geistr_model *model, geistr_reasoning reasoning, 
     fclose(f);
     geistr_chat_opts opts = GEISTR_CHAT_OPTS_INIT;
     opts.reasoning = reasoning;
-    opts.max_tokens = 4096;
+    opts.max_tokens = max_tokens;
     geistr_chat *chat = nullptr;
     const geistr_message messages[2] = {
         {"system", "You are a decision component. Answer with exactly one of the allowed labels and nothing else."},
@@ -242,9 +247,35 @@ static const char *ask_in_chat(geistr_model *model, geistr_reasoning reasoning, 
             used += piece.len;
             answer[used] = 0;
         }
+    if (ok && geistr_chat_stats(chat, stats) != GEISTR_OK)
+        stats->finish = GEISTR_FINISH_NONE;
     geistr_chat_close(chat);
     free(prompt);
     return ok ? answer_option(answer, r) : nullptr;
+}
+
+/* softmax over the options of logits / temperature, in double precision. */
+static void calibrated(size_t n, double temperature, const float *logits, double *out) {
+    double max = logits[0];
+    for (size_t i = 1; i < n; ++i)
+        if (logits[i] > max)
+            max = logits[i];
+    double sum = 0;
+    for (size_t i = 0; i < n; ++i)
+        sum += out[i] = exp(((double)logits[i] - max) / temperature);
+    for (size_t i = 0; i < n; ++i)
+        out[i] /= sum;
+}
+static const char *finish_name(geistr_finish finish) {
+    switch (finish) {
+    case GEISTR_FINISH_STOP: return "stop";
+    case GEISTR_FINISH_LENGTH: return "length";
+    case GEISTR_FINISH_CONTEXT: return "context";
+    case GEISTR_FINISH_CANCELLED: return "cancelled";
+    case GEISTR_FINISH_ERROR: return "error";
+    case GEISTR_FINISH_REPETITION: return "repetition";
+    default: return "none";
+    }
 }
 
 static void show_table(const geistr_decision_request *r, const double *probabilities) {
@@ -268,6 +299,8 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
     geistr_decision_option options[GEISTR_DECISION_MAX_OPTIONS];
     double threshold = 0;          /* --threshold: below it the decision is escalated or left open */
     const char *escalate = nullptr; /* --escalate chat | <model> */
+    double temperature = 1;         /* --temperature: the probabilities the threshold compares (calibration) */
+    unsigned long max_tokens = 4096; /* --max-tokens: the chat escalation's answer cap, thinking included */
     size_t count = 0, serialized = 0;
     unsigned seen = 0;
     for (size_t i = 0; i < argc; ++i) {
@@ -347,6 +380,18 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
         } else if (!strcmp(flag, "--escalate")) {
             bit = 512;
             escalate = value;
+        } else if (!strcmp(flag, "--temperature")) {
+            bit = 1024;
+            char *end = nullptr;
+            temperature = strtod(value, &end);
+            if (!*value || *end || !(temperature >= 0.01 && temperature <= 100))
+                return failure(2, "--temperature must be a number in [0.01, 100]");
+        } else if (!strcmp(flag, "--max-tokens")) {
+            bit = 2048;
+            char *end = nullptr;
+            max_tokens = isdigit((unsigned char)*value) ? strtoul(value, &end, 10) : 0;
+            if (!end || *end || max_tokens < 1 || max_tokens > GEISTR_DECIDE_MAX_ESCALATION_TOKENS)
+                return failure(2, "--max-tokens must be an integer in [1, 28672]");
         } else if (!strcmp(flag, "--mode")) {
             bit = 128;
             if (!strcmp(value, "dense"))
@@ -367,6 +412,8 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
         return failure(2, "at least one --option ID DESC required");
     if (escalate && threshold <= 0)
         return failure(2, "--escalate needs --threshold");
+    if ((seen & 2048) && !(escalate && !strcmp(escalate, "chat")))
+        return failure(2, "--max-tokens needs --escalate chat");
     char *owned_question = nullptr;
     size_t question_len = question ? strnlen(question, GEISTR_DECISION_MAX_QUESTION + 1) : 0;
     if (question_file && read_bounded(&question_len, GEISTR_DECISION_MAX_QUESTION, question_file,
@@ -387,6 +434,15 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
     int code = 1;
     struct loaded loaded = {};
     geistr_decision *decision = nullptr;
+    /* Diagnostics: the first stage's fields are kept in diag and written with
+     * the escalation's at done, as one JSON line. */
+    char *diag = nullptr;
+    size_t diag_len = 0;
+    const char *answered_by = "none";
+    size_t answer_index = SIZE_MAX;
+    bool asked_chat = false;
+    geistr_stats chat_stats = {.size = sizeof chat_stats};
+    double second_top = -1, escalation_start = -1;
     geistr_status status = geistr_decision_request_validate(sizeof error, &request, error);
     if (status != GEISTR_OK) {
         code = failure(2, error);
@@ -397,8 +453,10 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
         goto done;
     }
     const bool to_chat = escalate && !strcmp(escalate, "chat");
-    /* A chat escalation writes, and a thinking model thinks: room for it. */
-    code = load(&loaded, argv[0], config_file, profile, models_dir, catalog_file, host, processor, to_chat ? 8192 : 512);
+    /* A chat escalation writes, and a thinking model thinks: room for the
+     * prompt (4096 tokens) and the answer cap. */
+    code = load(&loaded, argv[0], config_file, profile, models_dir, catalog_file, host, processor,
+                to_chat ? 4096 + (uint32_t)max_tokens : 512);
     if (code)
         goto done;
     code = 1;
@@ -428,25 +486,44 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
         code = failure(1, "diagnostics unavailable");
         goto done;
     }
-    const double top = result.selection_probabilities[result.best_index];
-    const bool unsure = threshold > 0 && top < threshold;
+    /* The probabilities the threshold compares: softmax over the options of
+     * logits / T. T = 1 is the engine's own selection probabilities; the argmax
+     * never changes. */
     double first[GEISTR_DECISION_MAX_OPTIONS];
-    memcpy(first, result.selection_probabilities, result.n_options * sizeof *first);
+    if (temperature == 1)
+        memcpy(first, result.selection_probabilities, result.n_options * sizeof *first);
+    else
+        calibrated(result.n_options, temperature, result.logits, first);
+    const size_t direct_index = result.best_index;
+    const double top = first[direct_index];
+    const bool unsure = threshold > 0 && top < threshold;
     char chosen[GEISTR_DECISION_MAX_ID + 1];
     snprintf(chosen, sizeof chosen, "%s", result.external_id);
     const char *outcome = !unsure ? "decided" : !escalate ? "unsure" : to_chat ? "chat" : "model";
-    if (!isatty(STDERR_FILENO)) /* the diagnostics are for programs, not for a terminal */
-        fprintf(stderr,
-            "{\"schema\":1,\"profile\":\"%s\",\"artifact_sha256\":\"%s\",\"template_sha256\":\"%s\","
-            "\"runtime\":\"%s\","
-            "\"engine_revision\":\"%s\",\"engine\":\"%s\",\"operation\":\"decision\",\"backend\":\"%s\","
-            "\"requested_mode\":%d,\"resolved_mode\":%d,\"prompt_tokens\":%zu,\"model_"
-            "calls\":%zu,\"setup_ms\":%.3f,\"preparation_ms\":%.3f,\"scoring_ms\":%.3f,\"until_result_ms\":%."
-            "3f,\"top_probability\":%.6f,\"threshold\":%.6f,\"escalation\":\"%s\"}\n",
-            geistr_decision_profile_name(policy->profile), sha, plan.template_sha256, geistr_version(),
-            capability.engine_revision, capability.engine_version, capability.backend, mode, result.mode,
-            result.prompt_tokens, result.model_calls, ready - start, result.preparation_ms, result.scoring_ms,
-            milliseconds() - start, top, threshold, outcome);
+    if (!isatty(STDERR_FILENO)) { /* the diagnostics are for programs, not for a terminal */
+        FILE *f = open_memstream(&diag, &diag_len);
+        if (f) {
+            fprintf(f,
+                "{\"schema\":1,\"profile\":\"%s\",\"artifact_sha256\":\"%s\",\"template_sha256\":\"%s\","
+                "\"runtime\":\"%s\","
+                "\"engine_revision\":\"%s\",\"engine\":\"%s\",\"operation\":\"decision\",\"backend\":\"%s\","
+                "\"requested_mode\":%d,\"resolved_mode\":%d,\"prompt_tokens\":%zu,\"model_"
+                "calls\":%zu,\"setup_ms\":%.3f,\"preparation_ms\":%.3f,\"scoring_ms\":%.3f,\"until_result_ms\":%."
+                "3f,\"top_probability\":%.6f,\"threshold\":%.6f,\"escalation\":\"%s\",\"temperature\":%.6f,"
+                "\"direct_index\":%zu,\"direct_probabilities\":[",
+                geistr_decision_profile_name(policy->profile), sha, plan.template_sha256, geistr_version(),
+                capability.engine_revision, capability.engine_version, capability.backend, mode, result.mode,
+                result.prompt_tokens, result.model_calls, ready - start, result.preparation_ms, result.scoring_ms,
+                milliseconds() - start, top, threshold, outcome, temperature, direct_index);
+            for (size_t i = 0; i < result.n_options; ++i)
+                fprintf(f, "%s%.9g", i ? "," : "", first[i]);
+            fputc(']', f);
+            if (fclose(f)) {
+                free(diag);
+                diag = nullptr;
+            }
+        }
+    }
     if (policy->profile == GEISTR_DECISION_PROFILE_NONE && isatty(STDERR_FILENO))
         fputs("unverified: no independently checked decision profile for this model (docs/DECISIONS.md)\n", stderr);
     const bool shown = isatty(STDOUT_FILENO); /* a person reads it: probabilities and what happened */
@@ -463,16 +540,25 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
             code = failure(3, "below the threshold; no --escalate: left undecided");
             goto done;
         }
+        escalation_start = milliseconds();
         if (to_chat) {
             if (shown)
                 printf("asking %s in chat%s\n", argv[0],
                        loaded.reasoning == GEISTR_REASONING_THINK_TAGS ? ", thinking" : "");
             static char answer[16384];
-            const char *id = ask_in_chat(model, loaded.reasoning, &request, answer, sizeof answer);
+            asked_chat = true;
+            const char *id = ask_in_chat(model, loaded.reasoning, &request, (uint32_t)max_tokens, &chat_stats,
+                                         answer, sizeof answer);
             if (!id) {
-                code = failure(3, "the chat answer names no single option: left undecided");
+                code = failure(3, chat_stats.finish == GEISTR_FINISH_LENGTH
+                                      ? "the chat answer reached --max-tokens before naming an option: left undecided"
+                                      : "the chat answer names no single option: left undecided");
                 goto done;
             }
+            for (size_t i = 0; i < request.n_options; ++i)
+                if (request.options[i].id == id)
+                    answer_index = i;
+            answered_by = "chat";
             snprintf(chosen, sizeof chosen, "%s", id);
         } else {
             /* One model in memory at a time: the first goes before the second loads. */
@@ -494,15 +580,23 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
                 code = failure(status == GEISTR_CANCELLED ? 130 : 1, geistr_decision_error(decision));
                 goto done;
             }
-            const double second = result.selection_probabilities[result.best_index];
+            double second_probabilities[GEISTR_DECISION_MAX_OPTIONS];
+            if (temperature == 1)
+                memcpy(second_probabilities, result.selection_probabilities,
+                       result.n_options * sizeof *second_probabilities);
+            else
+                calibrated(result.n_options, temperature, result.logits, second_probabilities);
+            second_top = second_probabilities[result.best_index];
             if (shown) {
-                printf("asked %s: %.2f\n", escalate, second);
-                show_table(&request, result.selection_probabilities);
+                printf("asked %s: %.2f\n", escalate, second_top);
+                show_table(&request, second_probabilities);
             }
-            if (second < threshold) {
+            if (second_top < threshold) {
                 code = failure(3, "the escalation model is below the threshold too: left undecided");
                 goto done;
             }
+            answered_by = "model";
+            answer_index = result.best_index;
             snprintf(chosen, sizeof chosen, "%s", result.external_id);
         }
         if (printf("%s\n", chosen) < 0 || fflush(stdout)) {
@@ -512,6 +606,8 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
         code = 0;
         goto done;
     }
+    answered_by = "direct";
+    answer_index = direct_index;
     if (printf("%s\n", chosen) < 0) {
         code = failure(1, "selection output failed");
         goto done;
@@ -524,6 +620,26 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
     }
     code = 0;
 done:
+    if (diag) { /* the stage that answered (none: exit 3 or an error) and the escalation's cost */
+        fwrite(diag, 1, diag_len, stderr);
+        fprintf(stderr, ",\"answered_by\":\"%s\",\"answer_index\":", answered_by);
+        if (answer_index == SIZE_MAX)
+            fputs("null", stderr);
+        else
+            fprintf(stderr, "%zu", answer_index);
+        if (escalation_start >= 0)
+            fprintf(stderr, ",\"escalation_ms\":%.3f", milliseconds() - escalation_start);
+        if (asked_chat)
+            fprintf(stderr,
+                    ",\"chat\":{\"max_tokens\":%lu,\"finish\":\"%s\",\"input_tokens\":%" PRIu32
+                    ",\"output_tokens\":%" PRIu32 ",\"prefill_ms\":%.3f,\"generation_ms\":%.3f,\"total_ms\":%.3f}",
+                    max_tokens, finish_name(chat_stats.finish), chat_stats.input_tokens, chat_stats.output_tokens,
+                    chat_stats.prefill_ms, chat_stats.generation_ms, chat_stats.total_ms);
+        if (second_top >= 0)
+            fprintf(stderr, ",\"second_top_probability\":%.6f", second_top);
+        fputs("}\n", stderr);
+        free(diag);
+    }
     if (host && host->active && decision)
         host->active(nullptr, host->context);
     geistr_decision_close(decision);

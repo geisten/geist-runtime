@@ -4,6 +4,20 @@
 
 ### Features
 
+- `geistr decide` as a selectable two-stage policy (geistlib#210):
+  `--max-tokens N` caps the `--escalate chat` answer (thinking included;
+  default 4096 as before, at most 28672). An answer cut there before it names
+  an option exits with 3. `--temperature T` makes `--threshold` compare
+  softmax(logits / T) over the options, a calibration the caller fitted
+  (default 1, unchanged). The diagnostics JSON is now written once, after any
+  escalation. It adds `temperature`, `direct_index` and `direct_probabilities`
+  (the first stage), `answered_by` (`direct`, `chat`, `model` or `none`),
+  `answer_index`, `escalation_ms`, a `chat` object (cap, finish reason,
+  input/output tokens, prefill/generation/total ms) and
+  `second_top_probability` for `--escalate MODEL`. docs/DECISIONS.md gives
+  the measured accuracy/cost curve on Bonsai 2 27B / MMLU and explains how to
+  pick a threshold and cap for your own task.
+
 - `geistr decide --threshold P`: below probability P a decision is not
   taken. Without more, it exits with 3 and prints nothing on stdout; with
   `--escalate chat` the same model writes the answer in chat mode (thinking,

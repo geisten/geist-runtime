@@ -349,24 +349,103 @@ match the configured exact artifact. This first CLI limits model context to
 512 tokens and refuses overflow. C/Python callers may choose a checked larger
 capacity within the loaded model context.
 
-**Threshold and escalation.** `--threshold P` (0 < P ≤ 1) compares the
+**Threshold and escalation (a two-stage policy).** `--threshold P` (0 < P ≤ 1) compares the
 chosen option's probability with P. At or above P nothing changes. Below P:
 
 - without `--escalate`: exit 3, nothing on stdout, a message on stderr (the
   caller decides what happens, e.g. a person looks at it);
 - `--escalate chat`: the same model answers in chat mode with the options as
-  allowed labels (thinking on for a model the catalog marks as thinking; the
-  model is opened with a context of 8192 tokens, the answer is limited to 4096
-  tokens). The answer is read exactly (the trimmed answer is an ID, any case)
-  or as the only ID that occurs as a whole word; otherwise exit 3. The
-  printed ID has no probability;
+  allowed labels (thinking on for a model the catalog marks as thinking). The
+  answer, thinking included, is limited to `--max-tokens N` tokens (default
+  4096, 1–28672); the model is opened with a context of 4096 + N tokens. The
+  answer is read exactly (the trimmed answer is an ID, any case) or as the
+  only ID that occurs as a whole word; otherwise exit 3, also when the answer
+  was cut at N before naming an option. The printed ID has no probability;
 - `--escalate MODEL`: the first model is closed, MODEL is loaded (same
   `--config` rules, no profile override) and decides; below P again, exit 3.
 
-The diagnostics JSON gains `top_probability` (the first model's), `threshold`
-(0 without the flag) and `escalation` (`decided`, `unsure`, `chat` or
-`model`). There is no cap on the escalated share: a single command cannot see
+`--temperature T` (0.01–100, default 1) makes the comparison use
+softmax(logits / T) over the options instead of the engine's
+temperature-1 selection probabilities. T is a calibration the caller fits on
+its own labelled calibration data (temperature scaling: the T that minimizes
+log-loss); the chosen option never changes. `--max-tokens` requires
+`--escalate chat`.
+
+The diagnostics JSON (one line, written after any escalation) gains
+`top_probability` (the first model's, after T), `threshold` (0 without the
+flag), `escalation` (`decided`, `unsure`, `chat` or `model`), `temperature`,
+`direct_index` and `direct_probabilities` (the first stage's choice and every
+option's probability after T, in option order), `answered_by` (`direct`,
+`chat`, `model`, or `none` when nothing was printed) and `answer_index`
+(null for none). After an escalation it adds `escalation_ms`; after a chat
+escalation a `chat` object with `max_tokens`, `finish` (`stop`, `length`,
+`context`, `repetition`, `cancelled`, `error` or `none`), `input_tokens`,
+`output_tokens` (thinking included), `prefill_ms`, `generation_ms` and
+`total_ms`; after `--escalate MODEL`, `second_top_probability`. A caller can
+add up the cost of both stages from these fields: one decision call
+(`scoring_ms`, `prompt_tokens`), plus, when escalated, the chat's tokens and
+time. There is no cap on the escalated share: a single command cannot see
 one; callers that run many decisions should cap it themselves.
+
+**Choosing the threshold and the cap.** These two settings trade speed
+against quality, and the trade-off belongs to the application, not to the
+engine. Measure it for your task and model:
+
+1. Take labelled calibration questions that represent the task and are kept
+   apart from any test data. Run `geistr decide` on each one and keep
+   `direct_probabilities` and `direct_index`. If you want calibrated
+   probabilities, fit T on these.
+2. To route a share q of questions to reasoning, use the threshold
+   `sorted(top probabilities)[round(q * n)]`. To aim for a direct-answer
+   precision instead, use the smallest threshold whose accepted set keeps that
+   precision on calibration. That is the rule geistlib#204 declared, with a
+   minimum of 10 % of the questions accepted.
+3. Pick the cap from how long the model's reasoning runs on the task. A cap
+   that cuts many answers loses those questions entirely, because a cut
+   answer names no option.
+4. Check the chosen (threshold, cap) pair once on held-out questions,
+   reporting accuracy and time with a paired interval against always-reasoning.
+
+The measured curve for one task and model shows what this trade looks like
+(Bonsai 2 27B PQ2_0, Metal on the M1 Max, five-shot classic MMLU, 500
+held-out questions, measured in geistlib with its own MMLU prompts, not
+through this command). The paired difference is against always-reasoning at
+a cap of 2048 tokens (79.0 %), with a conservative 95 % interval; times are
+relative to that reference.
+
+| Routed to reasoning | Cap | Accuracy | Difference, pp [95 %] | Time |
+| --- | --- | --- | --- | --- |
+| 0 % (direct only) | — | 67.8 % | −11.2 [−18.2, −4.0] | 0.11× |
+| 26 % | 1024 | 72.2 % | −6.8 [−12.6, −0.9] | 0.36× |
+| 41 % | 1536 | 75.4 % | −3.6 [−8.4, +1.3] | 0.59× |
+| 49 % | 2048 | 76.4 % | −2.6 [−6.7, +1.6] | 0.75× |
+| 67 % | 1536 | 77.8 % | −1.2 [−3.9, +1.5] | 0.82× |
+| 76 % | 1536 | 78.2 % | −0.8 [−3.0, +1.4] | 0.88× |
+| 69 % (precision 0.95) | 2048 | 78.8 % | −0.2 [−2.4, +2.0] | 0.97× |
+| 100 % (reasoning only) | 1536 | 77.8 % | −1.2 [−2.8, +0.5] | 0.86× |
+| 100 % (reasoning only) | 512 | 65.4 % | −13.6 [−17.4, −9.5] | 0.46× |
+
+Sources: geistlib `benchmark/results/DECISION_TWO_STAGE_2026-10-23.md`
+(#204; the precision-0.95 row was declared before the test) and
+`DECISION_CAP_CURVE_2026-10-23.md` (#210; exploratory, since the points were
+chosen on the test set). Times at caps 768–1536 are interpolated between
+measured calls.
+
+What the curve shows:
+
+- **No large saving at reasoning-level accuracy.** The confident questions
+  are the ones reasoning answers quickly anyway, and the extra direct call
+  costs something on every question.
+- **Every point at 0.76× the time or less loses at least 2.2 pp,** and its
+  interval reaches −5.6 pp or lower.
+- **A moderate cap combined with routing beats either one alone.**
+- **A short cap is worse than no reasoning.** Reasoning cut at 512 tokens
+  scores below direct scoring.
+- **The curve is specific to the task and the model.** On JevBench, direct
+  scoring alone reaches 85.3 % (geistlib#171). Where reasoning is long even
+  for easy items, or where the direct probabilities separate easy from hard
+  questions better, the curve sits elsewhere. Do not reuse these thresholds;
+  derive your own as above.
 
 In `geistr chat`, `/decide question | option | option …` scores the options
 on the chat's model (each option ID is its own description; the conversation
