@@ -4,6 +4,14 @@
 
 ### Features
 
+- Experimental: speculative decoding with a draft model (geistlib#192).
+  `geistr_model_opts.draft_model` (CLI: the `GEISTR_DRAFT_MODEL` environment
+  variable) loads a small model with the same vocabulary, such as Qwen3.5
+  0.8B for Bonsai 2 27B. Greedy chats then draft tokens with it and verify
+  them in one pass of the model; the answers stay token for token the same.
+  The chat measures ms per token of both ways and decodes plainly while
+  speculation loses. On an M1 Max (Bonsai 2 27B, Metal, three alternating
+  runs) the gain is small: median +3 % on code, -2 % on prose. Off by default.
 - `geistr decide` as a selectable two-stage policy (geistlib#210):
   `--max-tokens N` caps the `--escalate chat` answer (thinking included;
   default 4096 as before, at most 28672). An answer cut there before it names

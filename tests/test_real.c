@@ -17,7 +17,10 @@
  *   - cancellation from another thread, during generation and during a long
  *     prefill, within a bounded time, the chat usable afterwards;
  *   - two chats on one model in parallel answer as one alone;
- *   - stop strings, a model outliving its handle.
+ *   - stop strings, a model outliving its handle;
+ *   - a draft model (geistlib#192): the recurrent model as its own draft
+ *     answers as without one, across turns, a cut answer and a rewind; a
+ *     draft with another vocabulary is refused.
  */
 #include "geistr.h"
 #include "geistr_engine.h"
@@ -180,6 +183,51 @@ static void recurrent(const char *path) {
     printf("  recurrent model: rewind by re-prefill, context %u tokens before the answer\n", before);
     geistr_chat_close(c);
     geistr_model_close(m);
+}
+
+/* Two turns, the second cut at 20 tokens (likely inside a verified batch),
+ * a rewind and the second turn again; the answers joined into out. */
+static void draft_turns(geistr_model *m, char *out, size_t cap) {
+    char           a[512];
+    geistr_chat   *c    = chat(m, 20, GEISTR_OVERFLOW_REFUSE);
+    geistr_message t1[] = {SYSTEM, {"user", "Count from one to twenty in words."}};
+    geistr_message t2   = {"user", "Now backwards."};
+    out[0]              = 0;
+    if (!c)
+        return;
+    CHECK(ask(c, 2, t1, a, sizeof a) == GEISTR_OK, "draft: first turn");
+    strncat(out, a, cap - strlen(out) - 1);
+    CHECK(ask(c, 1, &t2, a, sizeof a) == GEISTR_OK, "draft: second turn");
+    strncat(out, a, cap - strlen(out) - 1);
+    CHECK(geistr_chat_rewind(c, 3) == GEISTR_OK && ask(c, 1, &t2, a, sizeof a) == GEISTR_OK, "draft: after rewind");
+    strncat(out, a, cap - strlen(out) - 1);
+    geistr_chat_close(c);
+}
+
+/* Speculative decoding with a draft model (geistlib#192): greedy answers
+ * stay the same; other is a model with another vocabulary. */
+static void draft(const char *path, const char *other) {
+    geistr_model     *m = nullptr, *d = nullptr;
+    geistr_model_opts o = *test_opts();
+    char              error[256], plain[2048], spec[2048];
+    CHECK(geistr_model_open(path, &o, &m, error, sizeof error) == GEISTR_OK, error);
+    o.draft_model = path;
+    CHECK(geistr_model_open(path, &o, &d, error, sizeof error) == GEISTR_OK, error);
+    if (m && d) {
+        draft_turns(m, plain, sizeof plain);
+        draft_turns(d, spec, sizeof spec);
+        CHECK(plain[0] && !strcmp(plain, spec), "draft: the answers as without a draft");
+    }
+    geistr_model_close(d);
+    d             = nullptr;
+    o.draft_model = other;
+    geistr_chat     *c  = nullptr;
+    geistr_chat_opts co = GEISTR_CHAT_OPTS_INIT;
+    CHECK(geistr_model_open(path, &o, &d, error, sizeof error) == GEISTR_OK, error);
+    CHECK(d && geistr_chat_open(d, &co, &c) == GEISTR_FORMAT && !c, "draft: another vocabulary refused");
+    geistr_model_close(d);
+    geistr_model_close(m);
+    printf("  draft model: the same answers, another vocabulary refused\n");
 }
 
 /* A thinking model (Qwen3): earlier reasoning leaves the history, as its
@@ -459,8 +507,10 @@ int main(void) {
     /* ---- window choice: this model, and a large one if given ---- */
     window(path, "test model");
     const char *rec = getenv("GEIST_TEST_MODEL_RECURRENT");
-    if (rec && access(rec, R_OK) == 0)
+    if (rec && access(rec, R_OK) == 0) {
         recurrent(rec);
+        draft(rec, path);
+    }
     const char *thinker = getenv("GEIST_TEST_MODEL_THINKING");
     if (thinker && access(thinker, R_OK) == 0)
         thinking(thinker);
