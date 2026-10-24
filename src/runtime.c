@@ -125,6 +125,8 @@ struct geistr_model {
     pthread_mutex_t embed_lock; /* geistr_embed's session, made on its first call (#91) */
     struct geist_session *embed;
     geist_token_t        *scored; /* geistr_logits: the last prompt's tokens, in embed's cache */
+    struct geist_model   *draft;    /* opts.draft_model, on be; nullptr = no speculative decoding */
+    uint32_t              draft_k;  /* guesses per speculative step */
     size_t                n_scored;
     char            error[256];
 };
@@ -254,8 +256,13 @@ static geistr_status model_describe(geistr_model *m, struct geist_model *gm, str
 /* The caller's options over the defaults, and the chat format they force. */
 static bool model_opts(const geistr_model_opts *opts, geistr_model_opts *o, enum tpl_family *forced, char *error,
                        size_t cap) {
+    /* Accepted sizes end at a field group: up to decision (before the draft
+     * fields existed) or the whole struct. */
+    const size_t sz = opts ? opts->size : 0;
     if (!opts_copy(o, opts, sizeof *o) ||
-        (opts && opts->size > offsetof(geistr_model_opts, decision) && opts->size < sizeof *o)) {
+        (sz > offsetof(geistr_model_opts, decision) && sz < offsetof(geistr_model_opts, draft_model)) ||
+        (sz > offsetof(geistr_model_opts, draft_model) && sz < sizeof *o) ||
+        o->draft_tokens > 15) {
         put_error(error, cap, "model options: unknown size");
         return false;
     }
@@ -274,6 +281,8 @@ static bool model_opts(const geistr_model_opts *opts, geistr_model_opts *o, enum
     }
     return true;
 }
+
+static void model_release(geistr_model *m);
 
 static geistr_status model_open(const char              *path,
                                 const void              *data,
@@ -378,6 +387,15 @@ static geistr_status model_open(const char              *path,
         free(m);
         return ds;
     }
+    if (o.draft_model) { /* the draft model, same backend and window (geistlib#192) */
+        s = geist_model_load_with_opts(o.draft_model, be, &so, &m->draft);
+        if (s != GEIST_OK) {
+            put_error(error, cap, "draft model: %s", geist_last_create_error());
+            model_release(m);
+            return from_engine(s);
+        }
+        m->draft_k = o.draft_tokens ? o.draft_tokens : 6;
+    }
     *out = m;
     return GEISTR_OK;
 }
@@ -460,6 +478,7 @@ static void model_release(geistr_model *m) {
         geist_session_destroy(m->embed);
         free(m->scored);
         pthread_mutex_destroy(&m->embed_lock);
+        geist_model_destroy(m->draft);
         if (!m->borrowed) {
             geist_model_destroy(m->m);
             geist_backend_destroy(m->be);
@@ -675,6 +694,21 @@ struct geistr_chat {
     double            started;
     uint8_t          *image; /* geistr_chat_image: decoded RGB for the next send */
     int               image_w, image_h;
+    /* Speculative decoding (geistlib#192): the draft model's session, the
+     * tokens in s (its history; hist_ok false once an image put non-token
+     * positions in), and a verified batch handed out one token at a time;
+     * q_base is s's length before it, a checkpoint to return to. */
+    struct geist_session *draft;
+    geist_token_t        *hist;
+    size_t                n_hist, cap_hist;
+    bool                  hist_ok;
+    geist_token_t         q[24];
+    size_t                q_n, q_i, q_base;
+    /* Whether speculation pays depends on the text and the hardware: the
+     * measured ms per token of both ways decide, plain runs back off. */
+    double                spec_ms, plain_ms; /* moving averages; 0 = not measured */
+    uint32_t              plain_left, plain_run;
+    bool                  owed; /* the last token came from decode_step: the next one runs its forward */
     char              error[256];
 };
 
@@ -762,6 +796,25 @@ geistr_status geistr_chat_open(geistr_model *m, const geistr_chat_opts *opts, ge
         snprintf(m->error, sizeof m->error, "session: %s", geist_backend_errmsg(m->be));
         return from_engine(es);
     }
+    if (m->draft && o.temperature == 0.0f) { /* greedy only: the stream stays the same */
+        struct geist_session_opts dso = {.max_seq_len = m->context, .top_p = 1.0f};
+        engine_setup_lock(m);
+        es = geist_session_create(m->draft, m->be, &dso, &c->draft);
+        if (es == GEIST_OK && geist_session_set_draft(c->s, c->draft) != GEIST_OK)
+            es = GEIST_E_INVALID_ARG;
+        engine_setup_unlock(m);
+        if (es != GEIST_OK) {
+            engine_setup_lock(m);
+            geist_session_destroy(c->draft);
+            geist_session_destroy(c->s);
+            engine_setup_unlock(m);
+            stops_free(stops, o.n_stop);
+            free(c);
+            snprintf(m->error, sizeof m->error, "draft model: its vocabulary differs, or no session");
+            return es == GEIST_E_INVALID_ARG ? GEISTR_FORMAT : from_engine(es);
+        }
+    }
+    c->hist_ok = true;
     atomic_fetch_add(&m->refs, 1);
     c->model     = m;
     c->opts      = o;
@@ -789,7 +842,9 @@ void geistr_chat_close(geistr_chat *c) {
     geistr_model *m = c->model;
     engine_setup_lock(m);
     geist_session_destroy(c->s);
+    geist_session_destroy(c->draft);
     engine_setup_unlock(m);
+    free(c->hist);
     turns_drop(c, 0);
     free(c->turns);
     tpl_free(&c->tpl);
@@ -844,6 +899,33 @@ static bool ids_push(struct ids *t, size_t n, const geist_token_t *v) {
     return true;
 }
 
+/* The history of s for speculative decoding (geistlib#192). */
+static void hist_push(geistr_chat *c, size_t n, const geist_token_t *v) {
+    if (!c->draft || !c->hist_ok)
+        return;
+    if (c->n_hist + n > c->cap_hist) {
+        const size_t   cap  = (c->n_hist + n) * 2 + 64;
+        geist_token_t *grow = realloc(c->hist, cap * sizeof *grow);
+        if (!grow) { /* without a history, no speculation: plain decode */
+            c->hist_ok = false;
+            return;
+        }
+        c->hist     = grow;
+        c->cap_hist = cap;
+    }
+    memcpy(c->hist + c->n_hist, v, n * sizeof *v);
+    c->n_hist += n;
+}
+
+static void hist_cut(geistr_chat *c, size_t n) {
+    if (n == 0)
+        c->hist_ok = true; /* an empty context has no image in it */
+    if (n <= c->n_hist)
+        c->n_hist = n;
+    else
+        c->hist_ok = false;
+}
+
 /* Tokenize text onto t (content tokens; the chat adds BOS itself). */
 static geistr_status tokenize(geistr_chat *c, const char *text, struct ids *t) {
     if (!*text)
@@ -879,6 +961,8 @@ static geistr_status prefill(geistr_chat *c, size_t n, const geist_token_t *v) {
         engine_unlock(c->model);
         if (s != GEIST_OK)
             return fail(c, from_engine(s), "prefill: %s", geist_session_errmsg(c->s));
+        hist_push(c, k, v + at);
+        c->owed = false;
         at += k;
         const double took = now_ms() - t0;
         if (took > 0) { /* towards the slice, growing at most fourfold per step */
@@ -954,6 +1038,8 @@ static geistr_status refill(geistr_chat *c, const char *text, size_t *out_tokens
         engine_lock(c->model);
         enum geist_status es = geist_session_truncate(c->s, 0);
         engine_unlock(c->model);
+        if (es == GEIST_OK)
+            hist_cut(c, 0);
         s = es == GEIST_OK ? prefill(c, t.n, t.v) : fail(c, from_engine(es), "reset failed");
     }
     if (out_tokens)
@@ -1241,6 +1327,7 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
             const enum geist_status is =
                     geist_session_attach_image(c->s, (size_t) c->image_h, (size_t) c->image_w, c->image);
             engine_unlock(c->model);
+            c->hist_ok = false; /* image positions are no tokens: plain decode from here */
             if (is != GEIST_OK)
                 s = fail(c, from_engine(is), "image: %s", geist_session_errmsg(c->s));
         }
@@ -1253,6 +1340,8 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
             engine_lock(c->model);
             const enum geist_status ts = geist_session_truncate(c->s, len0);
             engine_unlock(c->model);
+            if (ts == GEIST_OK)
+                hist_cut(c, len0);
             if (ts != GEIST_OK) {
                 struct tpl_state fresh = {};
                 char *all = render_all(c, &fresh, false, 0, 0, nullptr, false);
@@ -1354,6 +1443,72 @@ static bool is_stop_token(const geistr_chat *c, geist_token_t t) {
     return false;
 }
 
+/* The next answer token: from the verified batch, a new speculative step, or
+ * one decode step. The engine lock is held. */
+static enum geist_status next_token(geistr_chat *c, geist_token_t *t) {
+    if (c->q_i < c->q_n) {
+        *t = c->q[c->q_i++];
+        return GEIST_OK;
+    }
+    const size_t k   = c->model->draft_k;
+    const size_t len = geist_session_length(c->s);
+    const double t0  = now_ms();
+    if (c->draft && c->hist_ok && c->n_hist == len && len + k + 2 < c->model->context && c->plain_ms > 0 &&
+        c->plain_left == 0 && geist_session_checkpoint(c->s) == GEIST_OK) {
+        size_t                  n  = 0;
+        const enum geist_status es = geist_session_decode_speculative(
+                c->s, k + 1, c->n_hist, c->hist, sizeof c->q / sizeof c->q[0], c->q, &n);
+        if (es != GEIST_OK || n == 0)
+            return es != GEIST_OK ? es : GEIST_E_INVALID_STATE;
+        const double ms = (now_ms() - t0) / (double) n;
+        c->spec_ms      = c->spec_ms > 0 ? 0.5 * (c->spec_ms + ms) : ms;
+        if (c->spec_ms > c->plain_ms) { /* losing: decode plainly, longer each time */
+            c->plain_run  = c->plain_run ? (c->plain_run < 256 ? 2 * c->plain_run : 256) : 16;
+            c->plain_left = c->plain_run;
+        } else
+            c->plain_run = 0;
+        c->owed   = false;
+        c->q_base = len;
+        c->q_n    = n;
+        c->q_i    = 1;
+        hist_push(c, n, c->q);
+        *t = c->q[0];
+        return GEIST_OK;
+    }
+    const enum geist_status es = geist_session_decode_step(c->s, t);
+    if (es == GEIST_OK && c->draft) {
+        hist_push(c, 1, t);
+        const double ms = now_ms() - t0;
+        /* a step's time is the forward of the token before; after a prefill
+         * or a speculative call there is none (geistlib's deferred advance) */
+        if (c->owed)
+            c->plain_ms = c->plain_ms > 0 ? 0.5 * (c->plain_ms + ms) : ms;
+        c->owed = true;
+        if (c->plain_left)
+            c->plain_left--;
+    }
+    return es;
+}
+
+/* The answer ended inside a verified batch: its unused tokens are in s, so
+ * s returns to the batch's start (a checkpoint) and takes the used ones.
+ * False only if the engine failed to (the context then holds extra tokens). */
+static bool spec_discard(geistr_chat *c) {
+    if (c->q_i >= c->q_n) {
+        c->q_n = c->q_i = 0;
+        return true;
+    }
+    engine_lock(c->model);
+    bool ok = geist_session_truncate(c->s, c->q_base) == GEIST_OK &&
+              geist_session_prefill_tokens(c->s, c->q_i, c->q) == GEIST_OK;
+    engine_unlock(c->model);
+    c->n_hist  = c->q_base + c->q_i;
+    c->hist_ok = c->hist_ok && ok;
+    c->owed    = false;
+    c->q_n = c->q_i = 0;
+    return ok;
+}
+
 geistr_status geistr_chat_next(geistr_chat *c, geistr_piece *piece) {
     if (!c || !piece || piece->size < sizeof(geistr_piece))
         return GEISTR_INVALID;
@@ -1365,6 +1520,8 @@ geistr_status geistr_chat_next(geistr_chat *c, geistr_piece *piece) {
             return GEISTR_CANCELLED;
         }
         if (c->answering && atomic_load(&c->cancel)) {
+            if (!spec_discard(c))
+                return fail(c, GEISTR_BACKEND, "speculative rollback: %s", geist_session_errmsg(c->s));
             str_pieces_clear(&c->pieces);
             end(c, piece, GEISTR_FINISH_CANCELLED);
             snprintf(c->error, sizeof c->error, "cancelled");
@@ -1389,7 +1546,7 @@ geistr_status geistr_chat_next(geistr_chat *c, geistr_piece *piece) {
         if (!why) {
             geist_token_t t = -1;
             engine_lock(c->model);
-            enum geist_status es = geist_session_decode_step(c->s, &t);
+            enum geist_status es = next_token(c, &t);
             p                    = es == GEIST_OK ? geist_session_token_to_str(c->s, t) : nullptr;
             engine_unlock(c->model);
             if (es != GEIST_OK) {
@@ -1403,6 +1560,8 @@ geistr_status geistr_chat_next(geistr_chat *c, geistr_piece *piece) {
             why = stop ? GEISTR_FINISH_STOP : looping(c, t) ? GEISTR_FINISH_REPETITION : GEISTR_FINISH_NONE;
         }
         if (why) {
+            if (!spec_discard(c))
+                return fail(c, GEISTR_BACKEND, "speculative rollback: %s", geist_session_errmsg(c->s));
             if (!finish_stages(c))
                 return fail(c, GEISTR_NO_MEMORY, "out of memory");
             end(c, piece, why);
@@ -1445,6 +1604,8 @@ geistr_status geistr_chat_rewind(geistr_chat *c, size_t keep) {
     if (!answer_commit(c))
         return fail(c, GEISTR_NO_MEMORY, "out of memory");
     if (keep == c->n_turns) { /* nothing dropped; an unfinished answer ends */
+        if (c->answering && !spec_discard(c))
+            return fail(c, GEISTR_BACKEND, "speculative rollback: %s", geist_session_errmsg(c->s));
         if (c->answering) {
             geistr_piece unused = {.size = sizeof unused};
             finish_stages(c);
@@ -1459,6 +1620,9 @@ geistr_status geistr_chat_rewind(geistr_chat *c, size_t keep) {
         engine_lock(c->model);
         ok = geist_session_truncate(c->s, cut) == GEIST_OK;
         engine_unlock(c->model);
+        if (ok)
+            hist_cut(c, cut);
+        c->q_n = c->q_i = 0; /* a verified batch past the cut is gone with it */
     }
     turns_drop(c, keep);
     answer_reset(c);

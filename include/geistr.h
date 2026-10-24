@@ -93,9 +93,15 @@ typedef struct geistr_model_opts {
     const geistr_decision_policy *decision; /* optional immutable policy from geistr_decision.h;
                                               copied at open; nullptr = decision disabled.
                                               Enabling requires the exact verified artifact. */
+    /* EXPERIMENTAL (geistlib#192): speculative decoding. A small model with the
+       same vocabulary (e.g. Qwen3.5 0.8B for Bonsai 2 27B) drafts tokens that the
+       model verifies in one pass; greedy answers (temperature 0) stay token for
+       token the same, only faster. Loaded on the model's processor; nullptr = off. */
+    const char *draft_model;
+    uint32_t    draft_tokens; /* guesses per step; 0 = 6 (Metal keeps a verify of up to 8 rows fast) */
 } geistr_model_opts;
 
-#define GEISTR_MODEL_OPTS_INIT {sizeof(geistr_model_opts), GEISTR_PROCESSOR_AUTO, 0, 0, nullptr, nullptr}
+#define GEISTR_MODEL_OPTS_INIT {sizeof(geistr_model_opts), GEISTR_PROCESSOR_AUTO, 0, 0, nullptr, nullptr, nullptr, 0}
 
 typedef struct geistr_model geistr_model;
 
