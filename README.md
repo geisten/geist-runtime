@@ -32,6 +32,15 @@ Both work on Linux (x86_64, arm64) and macOS (Apple Silicon). The script
 downloads the latest release, checks it against `SHA256SUMS` and puts
 `geistr` in `/usr/local/bin`.
 
+On Ubuntu or Debian, the `.deb` of the
+[latest release](https://www.geisten.net/download/geistr/latest/) also brings
+a **geistr** launcher for GNOME (it opens `geistr chat` in a terminal) and
+the [service](#as-a-service):
+
+```sh
+sudo apt install ./geistr_*_amd64.deb      # arm64: geistr_*_arm64.deb
+```
+
 Without sudo, or a specific release (the server keeps the last 5, from 0.3.2
 on; another one is reported as "no release …"):
 
@@ -48,6 +57,24 @@ needs x86-64-v3 (AVX2: Intel since 2013, AMD since 2015) or ARMv8.2 with
 dotprod (Raspberry Pi 5, AWS Graviton 2 and newer); on an older CPU geistr
 says so and exits. To build from source instead, see
 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#build-geistr-from-source).
+</details>
+
+<details>
+<summary>Windows</summary>
+
+There is no Windows release yet ([roadmap](ROADMAP.md)). geistr runs in
+[WSL 2](https://learn.microsoft.com/windows/wsl/install) with the install
+command above, on the CPU: WSL passes NVIDIA cards through for CUDA only, and
+geistr uses Vulkan, so `/gpu` is not available there. Two things matter:
+
+- WSL gets half of the computer's RAM by default. For models from 8 GB RAM
+  up, raise it in `%UserProfile%\.wslconfig` (`[wsl2]`, `memory=24GB`) and
+  run `wsl --shutdown` once.
+- Keep the models in the Linux file system (the default, `~/.local/share`),
+  not under `/mnt/c`: loading a model from there is many times slower.
+
+`geistr serve --http` in WSL is reachable from Windows at
+`http://localhost:11434`.
 </details>
 
 ## Quick start
@@ -242,6 +269,25 @@ while the loaded one is unloaded completely and the requested one is loaded
 a Raspberry Pi 5); its conversations are then processed anew, which takes
 longer, but the answers are the same.
 
+### As a service
+
+On Linux with systemd, `geistr serve --http` can run in the background,
+started at login (the `.deb` installs the unit; with `install.sh`, copy
+[`packaging/linux/geistr.service`](packaging/linux/geistr.service) to
+`~/.config/systemd/user/`):
+
+```sh
+systemctl --user enable --now geistr     # http://127.0.0.1:11434, also after a reboot
+journalctl --user -u geistr -f           # what it does
+systemctl --user disable --now geistr
+```
+
+It offers every installed model and loads the one a request names, as above.
+Port 11434 is also Ollama's: stop Ollama, or set another port with
+`systemctl --user edit geistr`, as the unit file shows. It runs as you, with
+your models and settings; on a server without a login, `loginctl
+enable-linger` keeps it running.
+
 <details>
 <summary>Endpoints, the socket, and security</summary>
 
@@ -346,7 +392,8 @@ the last ten answers before the first).
 
 ## Update
 
-`brew upgrade geistr`, or run the install command again. The model list
+`brew upgrade geistr`, the new `.deb` (`sudo apt install ./geistr_*.deb`),
+or run the install command again. The model list
 ships inside geistr, so new models come with a new geistr. Afterwards `geistr catalog` marks installed
 models whose file changed with ⟳ and a file of the right size with another
 checksum (damaged?) with ✗, and `geistr pull` fetches them (the old file stays

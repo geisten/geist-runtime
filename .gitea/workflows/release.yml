@@ -1,7 +1,8 @@
 name: release
 
 # geistr binaries for install.sh: a fully static Linux build per architecture
-# (musl, scripts/build-static.sh) and macOS arm64 (system libraries only).
+# (musl, scripts/build-static.sh) and macOS arm64 (system libraries only);
+# for Ubuntu and Debian also a .deb of the same binary (scripts/build-deb.sh).
 #
 # Run by hand (Actions → release → Run workflow): builds and tests the
 # archives and keeps them as workflow artifacts; nothing is published.
@@ -42,8 +43,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {runner: ubuntu-24.04, target: linux-amd64, qemu: qemu-x86_64, old_cpu: Nehalem}
-          - {runner: ubuntu-24.04-arm, target: linux-arm64, qemu: qemu-aarch64, old_cpu: cortex-a72}
+          - {runner: ubuntu-24.04, target: linux-amd64, deb: amd64, qemu: qemu-x86_64, old_cpu: Nehalem}
+          - {runner: ubuntu-24.04-arm, target: linux-arm64, deb: arm64, qemu: qemu-aarch64, old_cpu: cortex-a72}
     name: ${{ matrix.target }} (musl, static)
     runs-on: ${{ matrix.runner }}
     steps:
@@ -72,10 +73,22 @@ jobs:
         run: |
           mkdir -p dist && cp build/static/geistr LICENSE THIRD_PARTY_LICENSES dist/
           tar -C dist -czf geistr-${{ matrix.target }}.tar.gz geistr LICENSE THIRD_PARTY_LICENSES
+      - name: .deb, installed here, with its launcher and user service
+        run: |
+          sh scripts/apt-need.sh dpkg-deb:dpkg desktop-file-validate:desktop-file-utils systemd-analyze:systemd
+          version=$(sed -n 's/.*return "\([0-9.]*\)";.*/\1/p' src/runtime.c | head -1)
+          sh scripts/build-deb.sh build/static/geistr "$version" ${{ matrix.deb }} .
+          sudo dpkg -i geistr_*.deb
+          /usr/bin/geistr --version
+          desktop-file-validate /usr/share/applications/net.geisten.geistr.desktop
+          systemd-analyze verify --user /usr/lib/systemd/user/geistr.service
+          sudo dpkg -r geistr
       - uses: actions/upload-artifact@v3
         with:
           name: geistr-${{ matrix.target }}
-          path: geistr-${{ matrix.target }}.tar.gz
+          path: |
+            geistr-${{ matrix.target }}.tar.gz
+            geistr_*.deb
 
   macos:
     name: macos-arm64
@@ -192,7 +205,7 @@ jobs:
           path: dist
           merge-multiple: true
       - name: one directory per artifact (download-artifact v3) -> dist/*.tar.gz
-        run: find dist -mindepth 2 \( -name 'geistr-*.tar.gz' -o -name 'geistr-*.whl' \) -exec mv {} dist/ \; && find dist -mindepth 1 -type d -empty -delete && ls dist
+        run: find dist -mindepth 2 \( -name 'geistr-*.tar.gz' -o -name 'geistr-*.whl' -o -name 'geistr_*.deb' \) -exec mv {} dist/ \; && find dist -mindepth 1 -type d -empty -delete && ls dist
       - name: the tag is the version geistr reports
         run: |
           version=$(sed -n 's/.*return "\([0-9.]*\)";.*/\1/p' src/runtime.c | head -1)
@@ -205,7 +218,7 @@ jobs:
         run: |
           set -eu
           command -v rsync >/dev/null || { sudo apt-get -qq update && sudo apt-get -qq install -y rsync >/dev/null; }
-          cd dist && sha256sum geistr-*.tar.gz geistr-*.whl > SHA256SUMS && cat SHA256SUMS && cd ..
+          cd dist && sha256sum geistr-*.tar.gz geistr-*.whl geistr_*.deb > SHA256SUMS && cat SHA256SUMS && cd ..
           mkdir -p ~/.ssh && umask 077
           printf '%s\n' "$DOWNLOAD_SSH_KEY" > ~/.ssh/download_key
           echo "www.geisten.net ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO66CjOfnd/GIiCFyqhGxLudBXi/mCD0IA8DBbbZ2O2i" > ~/.ssh/known_hosts_download
@@ -215,7 +228,7 @@ jobs:
           chmod -R u=rwX,go=rX stage
           rsync -rlt --chmod=Du=rwx,Dgo=rx -e "$ssh_cmd" stage/ germar@www.geisten.net:
           base=https://www.geisten.net/download/geistr/$TAG
-          for f in SHA256SUMS $(cd dist && ls geistr-*.tar.gz geistr-*.whl); do
+          for f in SHA256SUMS $(cd dist && ls geistr-*.tar.gz geistr-*.whl geistr_*.deb); do
             curl -fsS -o "/tmp/$f" "$base/$f"
           done
           (cd /tmp && sha256sum -c --ignore-missing SHA256SUMS) && cmp /tmp/SHA256SUMS dist/SHA256SUMS

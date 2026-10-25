@@ -1,0 +1,22 @@
+# geistr serve --http as a systemd user service: every installed model over
+# the OpenAI and Ollama API, the one a request names loaded (one at a time).
+#   systemctl --user enable --now geistr
+#   journalctl --user -u geistr -f
+# It listens on 127.0.0.1:11434, Ollama's port: stop Ollama first, or
+#   systemctl --user edit geistr
+#   [Service]
+#   ExecStart=
+#   ExecStart=geistr serve --http=127.0.0.1:8080
+# Without being logged in (a server): loginctl enable-linger
+[Unit]
+Description=geistr: local models over the OpenAI and Ollama API
+Documentation=https://github.com/geisten/geist-runtime#use-it-from-other-tools
+
+[Service]
+# No path: systemd finds /usr/bin (the .deb) and /usr/local/bin (install.sh).
+ExecStart=geistr serve --http
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

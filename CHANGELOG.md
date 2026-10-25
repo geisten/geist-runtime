@@ -14,6 +14,10 @@
     differ slightly from the chat alone (batched rounding).
   - Models the engine does not batch fall back to one chat at a time,
     identical to `geistr_chat_next`.
+- Ubuntu and Debian: a `.deb` per architecture with a GNOME launcher
+  (`geistr chat` in a terminal, and "New conversation") and the systemd user
+  service `geistr` (`geistr serve --http`, every installed model). Windows:
+  how to run geistr in WSL 2 (README).
 - Experimental: speculative decoding with a draft model (geistlib#192).
   `geistr_model_opts.draft_model` (CLI: the `GEISTR_DRAFT_MODEL` environment
   variable) loads a small model with the same vocabulary, such as Qwen3.5
@@ -85,6 +89,10 @@
   downloaded. `geistr serve <model>` is unchanged (#195).
 
 ### Fixes
+
+- `install.sh` runs only once it has been downloaded completely (a `curl | sh`
+  that breaks off installs nothing), retries downloads and works with `wget`
+  when there is no `curl`.
 
 - `scripts/retrieval-bench.py --rerank-gguf` (through llama-server) takes
   the exact log-probs of "yes" and "no": when one was not among the top 50

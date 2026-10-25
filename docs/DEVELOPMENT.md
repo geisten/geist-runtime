@@ -69,7 +69,11 @@ binaries are fully static (musl, with a minimal libcurl, OpenSSL and libgomp);
 the macOS binary needs macOS 15 or later (`MACOSX_DEPLOYMENT_TARGET`, checked).
 The archives carry `THIRD_PARTY_LICENSES`. `install.sh` downloads the archive
 for this computer, checks it against `SHA256SUMS` and installs to
-`$PREFIX/bin`.
+`$PREFIX/bin`. For Ubuntu and Debian, `scripts/build-deb.sh` packs the same
+static binary with the GNOME launcher, its icon and the systemd user unit
+`geistr.service` (`packaging/linux/`) into `geistr_<version>_<arch>.deb`,
+next to the archives and in `SHA256SUMS`; the `linux` job installs each one
+on its runner and checks the launcher and the unit before it keeps it.
 
 After the upload the `smoke` job installs what users get: the archive through
 `install.sh` on Debian 12, Ubuntu 22.04 and 24.04, the wheel from PyPI on
