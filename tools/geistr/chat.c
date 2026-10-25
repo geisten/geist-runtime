@@ -365,6 +365,9 @@ int session_open(struct session *x, const char *name, const char *processor, dou
         mo.context = (uint32_t) strtoul(getenv("GEISTR_TEST_CONTEXT"), nullptr, 10);
 #endif
     mo.decision = policy; /* enabled: the runtime hashes the whole file once, here */
+    /* ponytail: experimental (geistlib#192), an environment variable until it earns a flag */
+    if (!embedding)
+        mo.draft_model = getenv("GEISTR_DRAFT_MODEL");
     char error[256];
     *x = (struct session) {.temperature = temperature, .reasoning = reasoning, .embedding = embedding == 1,
                            .decisions = policy != nullptr};

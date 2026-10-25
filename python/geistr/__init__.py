@@ -40,7 +40,7 @@ _status = C.c_int
 
 class _ModelOpts(C.Structure):
     _fields_ = [("size", C.c_size_t), ("processor", C.c_int), ("threads", C.c_uint32), ("context", C.c_uint32),
-                ("chat_format", _str), ("decision", _p)]
+                ("chat_format", _str), ("decision", _p), ("draft_model", _str), ("draft_tokens", C.c_uint32)]
 
 
 class _ModelInfo(C.Structure):
@@ -273,14 +273,14 @@ class Model:
 
     def __init__(self, model: str, *, processor: str = "auto", context: int = 0, threads: int = 0,
                  chat_format: str | None = None, folder: str | None = None, catalog_file: str | None = None,
-                 decision_config: "DecisionConfig | None" = None):
+                 decision_config: "DecisionConfig | None" = None, draft_model: str | None = None):
         self._h = _p()
         self._guard = threading.RLock()
         path, self._reasoning = _resolve(model, folder, catalog_file)
         policy = decision_config._policy(path) if decision_config is not None else None
         opts_size = C.sizeof(_ModelOpts) if hasattr(_lib, "geistr_decision_open") else _ModelOpts.decision.offset
         opts = _ModelOpts(opts_size, ["auto", "cpu", "gpu"].index(processor), threads, context,
-                          _b(chat_format), C.cast(C.pointer(policy), _p) if policy else None)
+                          _b(chat_format), C.cast(C.pointer(policy), _p) if policy else None, _b(draft_model))
         self._h, error = _p(), C.create_string_buffer(256)
         _check(_model_open(path.encode(), C.byref(opts), C.byref(self._h), error, len(error)), error.value.decode())
         self.path = path
