@@ -303,7 +303,7 @@ fetch-rerank-model:
 # An explicit target never skips: a missing model is an error, not a pass.
 test-real: $(BUILD)/test_real
 	@test -f "$(GEIST_TEST_MODEL)" || { echo "no reference model at $(GEIST_TEST_MODEL): make fetch-model"; exit 1; }
-	GEIST_TEST_MODEL="$(GEIST_TEST_MODEL)" $(BUILD)/test_real
+	GEIST_TEST_MODEL="$(GEIST_TEST_MODEL)" GEISTR_TEST_BATCH_MODEL="$(GEISTR_TEST_BATCH_MODEL)" $(BUILD)/test_real
 
 $(BUILD)/test_decision_real: tests/test_decision_real.c tests/native_cases.h tests/fixtures/decisions/*.h $(RUNTIME) $(ENGINE_LIB)
 	$(CC) $(CFLAGS) $(ENGINE_CFLAGS) -Isrc -isystem $(GEISTLIB)/include $< $(BUILD)/common.o $(TEXT) $(ENGINE_LINK) $(LDFLAGS) $(LDLIBS) -o $@

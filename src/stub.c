@@ -486,6 +486,22 @@ geistr_status geistr_chat_next(geistr_chat *c, geistr_piece *piece) {
     }
 }
 
+geistr_status geistr_chats_next(size_t n, geistr_chat *const chats[], geistr_piece pieces[],
+                                geistr_status statuses[]) {
+    if (n == 0 || !chats || !pieces || !statuses || n > GEISTR_CHATS_MAX)
+        return GEISTR_INVALID;
+    for (size_t i = 0; i < n; i++) {
+        if (!chats[i] || pieces[i].size < sizeof(geistr_piece) || chats[i]->model != chats[0]->model)
+            return GEISTR_INVALID;
+        for (size_t j = 0; j < i; j++)
+            if (chats[j] == chats[i])
+                return GEISTR_INVALID;
+    }
+    for (size_t i = 0; i < n; i++)
+        statuses[i] = geistr_chat_next(chats[i], &pieces[i]);
+    return GEISTR_OK;
+}
+
 geistr_status geistr_chat_cancel(geistr_chat *c) {
     if (!c)
         return GEISTR_INVALID;
