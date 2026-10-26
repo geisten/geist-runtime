@@ -9,9 +9,10 @@ permissions:
 env:
   GEIST_REPO: ${{ vars.GEIST_REPO || 'https://git.geisten.net/geisten/geistlib.git' }}  # the engine from Gitea; the Makefile default is GitHub
   # geistlib is private on Gitea: git rewrites only its URL to carry the token (secret GEISTLIB_TOKEN, read:repository), nothing is written to disk
-  GIT_CONFIG_COUNT: 1
-  GIT_CONFIG_KEY_0: url.https://oauth2:${{ secrets.GEISTLIB_TOKEN }}@git.geisten.net/geisten/geistlib.insteadOf
-  GIT_CONFIG_VALUE_0: https://git.geisten.net/geisten/geistlib
+  # GIT_CONFIG_PARAMETERS, not GIT_CONFIG_COUNT/KEY_0: the runners set the numbered keys themselves
+  # (Linux: git cache; Mac: include.path) and theirs win, so the token rule was dropped and the Mac
+  # jobs fell back to a personal credential in the login keychain (2026-10-26, release.yml #252).
+  GIT_CONFIG_PARAMETERS: "'url.https://oauth2:${{ secrets.GEISTLIB_TOKEN }}@git.geisten.net/geisten/geistlib.insteadOf'='https://git.geisten.net/geisten/geistlib'"
 jobs:
   x86:
     runs-on: geist-vulkan
