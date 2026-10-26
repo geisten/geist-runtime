@@ -32,6 +32,8 @@ env:
   GIT_CONFIG_COUNT: 1
   GIT_CONFIG_KEY_0: url.https://oauth2:${{ secrets.GEISTLIB_TOKEN }}@git.geisten.net/geisten/geistlib.insteadOf
   GIT_CONFIG_VALUE_0: https://git.geisten.net/geisten/geistlib
+  # A runner may set its own GIT_CONFIG_COUNT=2 (the CI runner's git cache: KEY_0 insteadOf, KEY_1 pushInsteadOf);
+  # the docker run steps pass KEY_1/VALUE_1 too, else git in the container fails on a COUNT without them.
 
 defaults:
   run:
@@ -52,7 +54,7 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
       - name: build in Alpine
-        run: docker run --rm -e GEIST_REPO -e GIT_CONFIG_COUNT -e GIT_CONFIG_KEY_0 -e GIT_CONFIG_VALUE_0 -v "$PWD:/src" -w /src alpine:3.21 sh scripts/build-static.sh
+        run: docker run --rm -e GEIST_REPO -e GIT_CONFIG_COUNT -e GIT_CONFIG_KEY_0 -e GIT_CONFIG_VALUE_0 -e GIT_CONFIG_KEY_1 -e GIT_CONFIG_VALUE_1 -v "$PWD:/src" -w /src alpine:3.21 sh scripts/build-static.sh
       - name: no dynamic dependencies; it downloads (HTTPS, SHA-256) and answers
         run: |
           info=$(file build/static/geistr) && echo "$info"
@@ -164,7 +166,7 @@ jobs:
       - name: manylinux_2_28 wheel (linux)
         if: runner.os == 'Linux'
         run: |
-          docker run --rm -e GEIST_REPO -e GIT_CONFIG_COUNT -e GIT_CONFIG_KEY_0 -e GIT_CONFIG_VALUE_0 \
+          docker run --rm -e GEIST_REPO -e GIT_CONFIG_COUNT -e GIT_CONFIG_KEY_0 -e GIT_CONFIG_VALUE_0 -e GIT_CONFIG_KEY_1 -e GIT_CONFIG_VALUE_1 \
             -v "$PWD:/src" -w /src "quay.io/pypa/manylinux_2_28_$(uname -m)" bash -c \
             'git config --global --add safe.directory "*" && rm -rf geistlib/build geistlib/lib && make BUILD=build/m228 wheel && auditwheel repair build/m228/wheel/geistr-*.whl -w build/wheelhouse'
           ls build/wheelhouse/geistr-*manylinux_2_28_*.whl
