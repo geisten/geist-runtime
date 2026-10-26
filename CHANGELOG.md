@@ -165,6 +165,22 @@
 
 ### Engine
 
+- geistlib `eedaae6` (from `36e335d`) brings
+  `geist_session_decode_batch` / `geist_model_decode_batch_max`
+  (geistlib#26, experimental): one decode step for several sessions of one
+  model in a single pass. On Bonsai 2 27B on an M1 Max, 8 sessions decode at
+  3.47x the aggregate tokens/s of one, and reasoning accuracy over 500 MMLU
+  questions stays 78.8 % vs 79.0 % unbatched.
+  - The runtime does not use the new call yet; batched chats follow
+    separately.
+  - The range also brings:
+    - Vulkan logits read from cached host memory (geistlib#219: sampled
+      decode 17.8 -> 75 tok/s on the RTX 2080 Ti);
+    - device-routed MoE decode on Vulkan (geistlib#162);
+    - a fused Q4_K gate/up made bit-identical to the separate ops
+      (geistlib#196);
+    - forward/cpu_neon cleanups (geistlib#253).
+  - No runtime source change was needed.
 - geistlib `1f61d75` (from `e78f9ee`): Metal prefill for Bonsai 2 27B is
   faster — flash attention after llama.cpp's tiling (geistlib#91), PQ2_0
   GEMM on 64x64 tiles with f16 staging (geistlib#77, geistlib#103),
