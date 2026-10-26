@@ -83,7 +83,9 @@ jobs:
           sudo dpkg -i geistr_*.deb
           /usr/bin/geistr --version
           desktop-file-validate /usr/share/applications/net.geisten.geistr.desktop
-          systemd-analyze verify --user /usr/lib/systemd/user/geistr.service
+          # without --user: a job container has no user manager; any line about the unit is a problem
+          systemd-analyze verify /usr/lib/systemd/user/geistr.service 2>&1 | tee verify.log
+          ! grep -q 'geistr.service' verify.log
           sudo dpkg -r geistr
       - uses: actions/upload-artifact@v3
         with:
