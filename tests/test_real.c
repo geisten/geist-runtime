@@ -292,6 +292,72 @@ static void *parallel_ask(void *arg) {
     return nullptr;
 }
 
+/* geistr_chats_next (geistlib#26): n chats asked q[i] each, driven in lock
+ * step until every answer ends; answers into out[i]. */
+static void batch_ask(geistr_model *m, size_t n, const char *const q[], char out[][256]) {
+    geistr_chat *c[8] = {};
+    bool         ended[8] = {};
+    for (size_t i = 0; i < n; i++) {
+        out[i][0]           = 0;
+        c[i]                = chat(m, 24, GEISTR_OVERFLOW_REFUSE);
+        geistr_message msg[] = {SYSTEM, {"user", q[i]}};
+        CHECK(c[i] && geistr_chat_send(c[i], 2, msg) == GEISTR_OK, "batched send");
+    }
+    for (int calls = 0; calls < 4096; calls++) {
+        geistr_chat  *live[8];
+        geistr_piece  pieces[8];
+        geistr_status st[8];
+        size_t        idx[8], k = 0;
+        for (size_t i = 0; i < n; i++)
+            if (!ended[i])
+                live[k] = c[i], pieces[k] = (geistr_piece) {.size = sizeof pieces[k]}, idx[k++] = i;
+        if (k == 0)
+            break;
+        CHECK(geistr_chats_next(k, live, pieces, st) == GEISTR_OK, "chats_next");
+        for (size_t j = 0; j < k; j++) {
+            CHECK(st[j] == GEISTR_OK, "batched piece");
+            if (st[j] != GEISTR_OK || pieces[j].part == GEISTR_PART_END)
+                ended[idx[j]] = true;
+            else
+                strncat(out[idx[j]], pieces[j].text, 255 - strlen(out[idx[j]]));
+        }
+    }
+    for (size_t i = 0; i < n; i++)
+        geistr_chat_close(c[i]);
+}
+
+static const char *const BATCH_Q[] = {"Name three colours.", "What is 2 + 2?", "Name a planet.",
+                                      "Say hello in French.", "Name a fruit.", "What is the capital of Italy?",
+                                      "Name an animal."};
+
+/* With a model that batches (GEISTR_TEST_BATCH_MODEL, e.g. Qwen3.5 0.8B on
+ * Metal): a chat's answer is the same in two different batches of the same
+ * size; against the chat alone it is reported (batched rows round
+ * differently). */
+static void batched_engine(const char *path) {
+    geistr_model *m = nullptr;
+    char          err[256];
+    geistr_model_opts o = *test_opts();
+    o.processor         = GEISTR_PROCESSOR_GPU; /* the engine batches on GPU backends */
+    if (geistr_model_open(path, &o, &m, err, sizeof err) != GEISTR_OK) {
+        CHECK(false, "open the batch model");
+        return;
+    }
+    char a[4][256], b[4][256], alone[256];
+    const char *const qa[4] = {BATCH_Q[0], BATCH_Q[1], BATCH_Q[2], BATCH_Q[3]};
+    const char *const qb[4] = {BATCH_Q[4], BATCH_Q[5], BATCH_Q[0], BATCH_Q[6]};
+    batch_ask(m, 4, qa, a);
+    batch_ask(m, 4, qb, b);
+    CHECK(a[0][0] && !strcmp(a[0], b[2]), "a batched chat answers the same among other chats");
+    geistr_chat   *one = chat(m, 24, GEISTR_OVERFLOW_REFUSE);
+    geistr_message msg[] = {SYSTEM, {"user", BATCH_Q[0]}};
+    CHECK(ask(one, 2, msg, alone, sizeof alone) == GEISTR_OK, "alone");
+    printf("test_real: batched chats on %s: %s the chat alone\n", path,
+           strcmp(a[0], alone) ? "differs in its text from" : "equals");
+    geistr_chat_close(one);
+    geistr_model_close(m);
+}
+
 int main(void) {
     const char *path = getenv("GEIST_TEST_MODEL");
     if (!path || access(path, R_OK) != 0) {
@@ -463,6 +529,24 @@ int main(void) {
               "parallel chats on one model answer as one alone");
     }
 
+    /* ---- batched chats (geistlib#26): where the engine does not batch this
+     * model, geistr_chats_next is exactly geistr_chat_next per chat ---- */
+    {
+        char         got[3][256], alone[256];
+        const char  *q[3] = {BATCH_Q[0], BATCH_Q[1], BATCH_Q[2]};
+        batch_ask(m, 3, q, got);
+        for (size_t i = 0; i < 3; i++) {
+            geistr_chat   *one   = chat(m, 24, GEISTR_OVERFLOW_REFUSE);
+            geistr_message msg[] = {SYSTEM, {"user", q[i]}};
+            CHECK(ask(one, 2, msg, alone, sizeof alone) == GEISTR_OK && !strcmp(alone, got[i]),
+                  "batched chats answer as each alone (no engine batching here)");
+            geistr_chat_close(one);
+        }
+    }
+    const char *batch_model = getenv("GEISTR_TEST_BATCH_MODEL");
+    if (batch_model && *batch_model)
+        batched_engine(batch_model);
+
     /* ---- the chat outlives the caller's model handle ---- */
     geistr_chat *last = chat(m, 8, GEISTR_OVERFLOW_REFUSE);
     geistr_model_close(m);
@@ -526,7 +610,7 @@ int main(void) {
         return 1;
     }
     printf("test_real: window, only-new-tokens, rewind (truncate and re-prefill), stop strings, cancel "
-           "(generation, prefill), overflow, parallel chats, lifetime, wrapped engine model passed (%s, %s, context %u)\n",
+           "(generation, prefill), overflow, parallel chats, batched chats, lifetime, wrapped engine model passed (%s, %s, context %u)\n",
            arch, backend, info.context);
     return 0;
 }

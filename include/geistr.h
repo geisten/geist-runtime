@@ -277,6 +277,26 @@ typedef struct geistr_piece {
  * GEISTR_INVALID before the first send. */
 GEISTR_NODISCARD geistr_status geistr_chat_next(geistr_chat *chat, geistr_piece *piece);
 
+/* EXPERIMENTAL (geistlib#26): one piece from each of n chats of the same
+ * model -- geistr_chat_next on each, except that the chats which need a
+ * decode step at the same time take it together, from one
+ * geist_session_decode_batch call (up to the engine's
+ * geist_model_decode_batch_max sessions per call; where that is 0, or for a
+ * chat with a draft model, one by one). pieces[i] and statuses[i] are what
+ * geistr_chat_next would give chats[i]: each chat gets exactly one piece (or
+ * its END, or its error) per call, so a caller drives many answers in lock
+ * step and drops a chat from the array once it ends. The text of a chat does
+ * not depend on which chats share the call; batched decode rounds differently
+ * from a lone step, so it can differ from decoding the chat alone (on Bonsai
+ * 2 27B, 471 of 500 long reasoning answers were token-identical). Same
+ * threading rules as geistr_chat_next, for every chat in the array.
+ * GEISTR_INVALID (nothing changed) for n == 0 or above GEISTR_CHATS_MAX, a
+ * nullptr, a repeated chat, chats of different models or a piece whose size
+ * is too small; otherwise GEISTR_OK and the per-chat results in statuses. */
+#define GEISTR_CHATS_MAX 64
+GEISTR_NODISCARD geistr_status geistr_chats_next(size_t n, geistr_chat *const chats[], geistr_piece pieces[],
+                                                 geistr_status statuses[]);
+
 /* Ask the running send/next to stop as soon as possible.
  * Thread safety: the one call that may run on any thread, at any time,
  * concurrently with send/next on the same chat. Idempotent. */

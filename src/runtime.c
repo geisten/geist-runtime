@@ -1509,19 +1509,25 @@ static bool spec_discard(geistr_chat *c) {
     return ok;
 }
 
-geistr_status geistr_chat_next(geistr_chat *c, geistr_piece *piece) {
-    if (!c || !piece || piece->size < sizeof(geistr_piece))
-        return GEISTR_INVALID;
-    if (!c->open && !c->answering && c->stats.finish == GEISTR_FINISH_NONE)
-        return fail(c, GEISTR_INVALID, "send first");
+/* geistr_chat_next in two halves, so that several chats can share the
+ * engine step between them (geistr_chats_next). chat_poll runs the loop up to
+ * the point where a token is needed (STEP_TOKEN) or a result is ready
+ * (STEP_DONE, *status set); chat_take feeds the token the engine produced for
+ * the chat and says whether a result is ready. */
+enum chat_step { STEP_DONE, STEP_TOKEN };
+
+static enum chat_step chat_poll(geistr_chat *c, geistr_piece *piece, geistr_status *status) {
     for (;;) {
         if (!c->answering && c->stats.finish == GEISTR_FINISH_CANCELLED && !c->cancel_reported) {
             c->cancel_reported = true;
-            return GEISTR_CANCELLED;
+            *status            = GEISTR_CANCELLED;
+            return STEP_DONE;
         }
         if (c->answering && atomic_load(&c->cancel)) {
-            if (!spec_discard(c))
-                return fail(c, GEISTR_BACKEND, "speculative rollback: %s", geist_session_errmsg(c->s));
+            if (!spec_discard(c)) {
+                *status = fail(c, GEISTR_BACKEND, "speculative rollback: %s", geist_session_errmsg(c->s));
+                return STEP_DONE;
+            }
             str_pieces_clear(&c->pieces);
             end(c, piece, GEISTR_FINISH_CANCELLED);
             snprintf(c->error, sizeof c->error, "cancelled");
@@ -1534,51 +1540,168 @@ geistr_status geistr_chat_next(geistr_chat *c, geistr_piece *piece) {
             piece->part = (geistr_part) q.part;
             piece->text = q.text;
             piece->len  = q.len;
-            return GEISTR_OK;
+            *status     = GEISTR_OK;
+            return STEP_DONE;
         }
-        if (!c->answering)
-            return end(c, piece, c->stats.finish);
+        if (!c->answering) {
+            *status = end(c, piece, c->stats.finish);
+            return STEP_DONE;
+        }
         geistr_finish why = c->stop.stopped ? GEISTR_FINISH_STOP : GEISTR_FINISH_NONE;
         if (!why && (c->stats.output_tokens >= c->limit || session_length(c) + 1 >= c->model->context))
             why = c->opts.max_tokens && c->stats.output_tokens >= c->opts.max_tokens ? GEISTR_FINISH_LENGTH
                                                                                      : GEISTR_FINISH_CONTEXT;
-        const char *p = nullptr;
-        if (!why) {
-            geist_token_t t = -1;
-            engine_lock(c->model);
-            enum geist_status es = next_token(c, &t);
-            p                    = es == GEIST_OK ? geist_session_token_to_str(c->s, t) : nullptr;
-            engine_unlock(c->model);
-            if (es != GEIST_OK) {
-                end(c, piece, GEISTR_FINISH_ERROR);
-                return fail(c, GEISTR_BACKEND, "decode: %s", geist_session_errmsg(c->s));
+        if (!why)
+            return STEP_TOKEN;
+        if (!spec_discard(c)) {
+            *status = fail(c, GEISTR_BACKEND, "speculative rollback: %s", geist_session_errmsg(c->s));
+            return STEP_DONE;
+        }
+        if (!finish_stages(c)) {
+            *status = fail(c, GEISTR_NO_MEMORY, "out of memory");
+            return STEP_DONE;
+        }
+        end(c, piece, why);
+    }
+}
+
+/* es and t: the engine's result for this chat; p: the token's text (nullptr
+ * when es failed). True when chat_next would return (*status set). */
+static bool chat_take(geistr_chat *c, geistr_piece *piece, geistr_status *status, enum geist_status es,
+                      geist_token_t t, const char *p) {
+    if (es != GEIST_OK) {
+        end(c, piece, GEISTR_FINISH_ERROR);
+        *status = fail(c, GEISTR_BACKEND, "decode: %s", geist_session_errmsg(c->s));
+        return true;
+    }
+    c->stats.output_tokens++;
+    const bool stop = is_stop_token(c, t);
+    if (stop) /* the model ended its turn; its marker is in the context now */
+        c->end_marker = p;
+    const geistr_finish why = stop ? GEISTR_FINISH_STOP : looping(c, t) ? GEISTR_FINISH_REPETITION : GEISTR_FINISH_NONE;
+    if (why) {
+        if (!spec_discard(c)) {
+            *status = fail(c, GEISTR_BACKEND, "speculative rollback: %s", geist_session_errmsg(c->s));
+            return true;
+        }
+        if (!finish_stages(c)) {
+            *status = fail(c, GEISTR_NO_MEMORY, "out of memory");
+            return true;
+        }
+        end(c, piece, why);
+        return false;
+    }
+    if (p == nullptr)
+        return false;
+    char text[256];
+    if (!raw_append(c, p)) {
+        *status = fail(c, GEISTR_NO_MEMORY, "out of memory");
+        return true;
+    }
+    if (!str_utf8_feed(&c->utf8, p, text, sizeof text)) {
+        end(c, piece, GEISTR_FINISH_ERROR);
+        *status = fail(c, c->utf8.failed ? GEISTR_BACKEND : GEISTR_NO_MEMORY,
+                       c->utf8.failed ? "the model produced invalid UTF-8" : "a token piece is too long");
+        return true;
+    }
+    if (!str_output_feed(&c->output, text, to_stops, c)) {
+        *status = fail(c, GEISTR_NO_MEMORY, "out of memory");
+        return true;
+    }
+    return false;
+}
+
+static bool chat_started(const geistr_chat *c) {
+    return c->open || c->answering || c->stats.finish != GEISTR_FINISH_NONE;
+}
+
+geistr_status geistr_chat_next(geistr_chat *c, geistr_piece *piece) {
+    if (!c || !piece || piece->size < sizeof(geistr_piece))
+        return GEISTR_INVALID;
+    if (!chat_started(c))
+        return fail(c, GEISTR_INVALID, "send first");
+    for (;;) {
+        geistr_status status = GEISTR_OK;
+        if (chat_poll(c, piece, &status) == STEP_DONE)
+            return status;
+        geist_token_t t = -1;
+        engine_lock(c->model);
+        const enum geist_status es = next_token(c, &t);
+        const char             *p  = es == GEIST_OK ? geist_session_token_to_str(c->s, t) : nullptr;
+        engine_unlock(c->model);
+        if (chat_take(c, piece, &status, es, t, p))
+            return status;
+    }
+}
+
+/* Several chats, one piece each; the chats that need a token at the same time
+ * get it from one geist_session_decode_batch call (geistlib#26). */
+geistr_status geistr_chats_next(size_t n, geistr_chat *const chats[], geistr_piece pieces[],
+                                geistr_status statuses[]) {
+    if (n == 0 || !chats || !pieces || !statuses || n > GEISTR_CHATS_MAX)
+        return GEISTR_INVALID;
+    for (size_t i = 0; i < n; i++) {
+        if (!chats[i] || pieces[i].size < sizeof(geistr_piece) || chats[i]->model != chats[0]->model)
+            return GEISTR_INVALID;
+        for (size_t j = 0; j < i; j++)
+            if (chats[j] == chats[i])
+                return GEISTR_INVALID;
+    }
+    geistr_model *m = chats[0]->model;
+    bool          done[GEISTR_CHATS_MAX];
+    for (size_t i = 0; i < n; i++) {
+        statuses[i] = GEISTR_OK;
+        done[i]     = !chat_started(chats[i]);
+        if (done[i])
+            statuses[i] = fail(chats[i], GEISTR_INVALID, "send first");
+    }
+    const size_t width = geist_model_decode_batch_max(m->m);
+    for (;;) {
+        size_t need[GEISTR_CHATS_MAX], n_need = 0;
+        for (size_t i = 0; i < n; i++) {
+            if (done[i])
+                continue;
+            if (chat_poll(chats[i], &pieces[i], &statuses[i]) == STEP_DONE)
+                done[i] = true;
+            else
+                need[n_need++] = i;
+        }
+        if (n_need == 0)
+            return GEISTR_OK;
+        /* Draft chats (speculative) and chats replaying a verified batch take
+         * their own path; the rest decode together, width at a time. */
+        size_t group[GEISTR_CHATS_MAX], n_group = 0;
+        for (size_t k = 0; k < n_need; k++) {
+            geistr_chat *c = chats[need[k]];
+            if (width >= 2 && !c->draft && c->q_i >= c->q_n) {
+                group[n_group++] = need[k];
+                continue;
             }
-            c->stats.output_tokens++;
-            const bool stop = is_stop_token(c, t);
-            if (stop) /* the model ended its turn; its marker is in the context now */
-                c->end_marker = p;
-            why = stop ? GEISTR_FINISH_STOP : looping(c, t) ? GEISTR_FINISH_REPETITION : GEISTR_FINISH_NONE;
+            geist_token_t t = -1;
+            engine_lock(m);
+            const enum geist_status es = next_token(c, &t);
+            const char             *p  = es == GEIST_OK ? geist_session_token_to_str(c->s, t) : nullptr;
+            engine_unlock(m);
+            done[need[k]] = chat_take(c, &pieces[need[k]], &statuses[need[k]], es, t, p);
         }
-        if (why) {
-            if (!spec_discard(c))
-                return fail(c, GEISTR_BACKEND, "speculative rollback: %s", geist_session_errmsg(c->s));
-            if (!finish_stages(c))
-                return fail(c, GEISTR_NO_MEMORY, "out of memory");
-            end(c, piece, why);
-            continue;
+        for (size_t at = 0; at < n_group;) {
+            const size_t          k = n_group - at < width ? n_group - at : width;
+            struct geist_session *sessions[GEISTR_CHATS_MAX];
+            geist_token_t         toks[GEISTR_CHATS_MAX];
+            const char           *texts[GEISTR_CHATS_MAX];
+            for (size_t j = 0; j < k; j++)
+                sessions[j] = chats[group[at + j]]->s;
+            engine_lock(m);
+            const enum geist_status es = geist_session_decode_batch(k, sessions, toks);
+            for (size_t j = 0; j < k; j++)
+                texts[j] = es == GEIST_OK ? geist_session_token_to_str(sessions[j], toks[j]) : nullptr;
+            engine_unlock(m);
+            for (size_t j = 0; j < k; j++) {
+                const size_t i = group[at + j];
+                done[i]        = chat_take(chats[i], &pieces[i], &statuses[i], es, toks[j], texts[j]);
+            }
+            at += k;
         }
-        if (p == nullptr)
-            continue;
-        char text[256];
-        if (!raw_append(c, p))
-            return fail(c, GEISTR_NO_MEMORY, "out of memory");
-        if (!str_utf8_feed(&c->utf8, p, text, sizeof text)) {
-            end(c, piece, GEISTR_FINISH_ERROR);
-            return fail(c, c->utf8.failed ? GEISTR_BACKEND : GEISTR_NO_MEMORY,
-                        c->utf8.failed ? "the model produced invalid UTF-8" : "a token piece is too long");
-        }
-        if (!str_output_feed(&c->output, text, to_stops, c))
-            return fail(c, GEISTR_NO_MEMORY, "out of memory");
     }
 }
 

@@ -401,6 +401,72 @@ static void test_cancel(void) {
     geistr_model_close(model);
 }
 
+/* geistr_chats_next (geistlib#26): every chat gets one piece per call; the
+ * answers are those of the chats alone. */
+static void test_batched(void) {
+    geistr_model *model = open_model("stub:echo", 0), *other = open_model("stub:echo", 0);
+    enum { N = 3 };
+    const char  *ask[N] = {"one", "zwei – drei 🌍", "a longer question than the others"};
+    geistr_chat *chats[N];
+    for (size_t i = 0; i < N; i++) {
+        chats[i]           = open_chat(model, (geistr_chat_opts) GEISTR_CHAT_OPTS_INIT);
+        geistr_message msg = {"user", ask[i]};
+        CHECK(geistr_chat_send(chats[i], 1, &msg) == GEISTR_OK, "send");
+    }
+    geistr_piece  pieces[N];
+    geistr_status st[N];
+    char          answer[N][256] = {};
+    bool          ended[N]       = {};
+    size_t        calls          = 0;
+    for (;;) {
+        geistr_chat *live[N];
+        size_t       idx[N], n = 0;
+        for (size_t i = 0; i < N; i++)
+            if (!ended[i])
+                live[n] = chats[i], idx[n++] = i;
+        if (n == 0)
+            break;
+        for (size_t k = 0; k < n; k++)
+            pieces[k] = (geistr_piece) {.size = sizeof pieces[k]};
+        CHECK(geistr_chats_next(n, live, pieces, st) == GEISTR_OK, "chats_next");
+        calls++;
+        for (size_t k = 0; k < n; k++) {
+            CHECK(st[k] == GEISTR_OK, "per-chat status");
+            if (pieces[k].part == GEISTR_PART_END)
+                ended[idx[k]] = true;
+            else
+                strncat(answer[idx[k]], pieces[k].text, sizeof answer[0] - strlen(answer[idx[k]]) - 1);
+        }
+        if (calls > 1000)
+            break;
+    }
+    for (size_t i = 0; i < N; i++) {
+        char want[256];
+        snprintf(want, sizeof want, "Echo: %s", ask[i]);
+        CHECK(!strcmp(answer[i], want), "each batched answer is the chat's own");
+    }
+    geistr_piece small = {.size = 1};
+    geistr_chat *other_chat = open_chat(other, (geistr_chat_opts) GEISTR_CHAT_OPTS_INIT);
+    geistr_chat *twice[2] = {chats[0], chats[0]}, *mixed[2] = {chats[0], other_chat};
+    geistr_piece two[2] = {{.size = sizeof(geistr_piece)}, {.size = sizeof(geistr_piece)}};
+    CHECK(geistr_chats_next(0, chats, pieces, st) == GEISTR_INVALID, "n = 0 is invalid");
+    CHECK(geistr_chats_next(2, twice, two, st) == GEISTR_INVALID, "a repeated chat is invalid");
+    CHECK(geistr_chats_next(2, mixed, two, st) == GEISTR_INVALID, "chats of two models are invalid");
+    CHECK(geistr_chats_next(1, chats, &small, st) == GEISTR_INVALID, "a piece struct too small is invalid");
+    CHECK(geistr_chats_next(GEISTR_CHATS_MAX + 1, chats, pieces, st) == GEISTR_INVALID, "too many chats");
+    geistr_chat *fresh = open_chat(model, (geistr_chat_opts) GEISTR_CHAT_OPTS_INIT);
+    geistr_chat *pair[2] = {chats[0], fresh};
+    CHECK(geistr_chats_next(2, pair, two, st) == GEISTR_OK && st[0] == GEISTR_OK && two[0].part == GEISTR_PART_END &&
+              st[1] == GEISTR_INVALID,
+          "a chat without a send gets INVALID, the others their piece");
+    geistr_chat_close(fresh);
+    geistr_chat_close(other_chat);
+    for (size_t i = 0; i < N; i++)
+        geistr_chat_close(chats[i]);
+    geistr_model_close(model);
+    geistr_model_close(other);
+}
+
 static void test_lifetime(void) {
     geistr_model *model = open_model("stub:echo", 0);
     geistr_chat  *chat  = open_chat(model, (geistr_chat_opts) GEISTR_CHAT_OPTS_INIT);
@@ -423,11 +489,12 @@ int main(void) {
     test_stop_strings();
     test_conversation();
     test_cancel();
+    test_batched();
     test_lifetime();
     if (failures) {
         fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;
     }
-    puts("geistr API: basics, ABI sizes, answer, thinking, reasoning protocol, limits, stop strings, conversation, rewind, cancellation, lifetime passed");
+    puts("geistr API: basics, ABI sizes, answer, thinking, reasoning protocol, limits, stop strings, conversation, rewind, cancellation, batched chats, lifetime passed");
     return 0;
 }

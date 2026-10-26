@@ -4,6 +4,16 @@
 
 ### Features
 
+- Experimental: batched chats (geistlib#26).
+  `geistr_chats_next(n, chats, pieces, statuses)` gives each of n chats of
+  one model its next piece in one call.
+  - Chats that need a decode step at the same time share one
+    `geist_session_decode_batch` pass. On Bonsai 2 27B on an M1 Max, 8 chats
+    decode at about 3.5x the aggregate tokens/s of one.
+  - A chat's answer does not depend on which chats share the call. It can
+    differ slightly from the chat alone (batched rounding).
+  - Models the engine does not batch fall back to one chat at a time,
+    identical to `geistr_chat_next`.
 - Experimental: speculative decoding with a draft model (geistlib#192).
   `geistr_model_opts.draft_model` (CLI: the `GEISTR_DRAFT_MODEL` environment
   variable) loads a small model with the same vocabulary, such as Qwen3.5

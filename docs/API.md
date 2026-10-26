@@ -202,6 +202,36 @@ slicing unnecessary (geistlib#628).
 chats answer as one alone). On GPU backends the runtime serialises the engine
 calls of a model's chats (geistlib#576).
 
+## Batched chats (geistlib#26)
+
+`geistr_chats_next(n, chats, pieces, statuses)` is `geistr_chat_next` for
+each of n chats of one model, in lock step: every chat gets exactly one piece
+(or its END, or its error) per call.
+- **Batched decoding.** The chats that need a decode step at the same time
+  take it together, from one `geist_session_decode_batch` call. That call
+  holds at most `geist_model_decode_batch_max` sessions.
+- **Fallback.** Where that maximum is 0, and for chats with a draft model or
+  chats replaying a verified batch, each chat decodes on its own, exactly as
+  `geistr_chat_next` does.
+- **Driving it.** A server drives its open answers with one call per round
+  and drops a chat from the array once it reaches END.
+- **Implementation.** `geistr_chat_next` is now `chat_poll` (run the text
+  stages until a token is needed or a piece is ready) plus one engine step
+  plus `chat_take` (feed the token through the stages).
+  `geistr_chats_next` reuses both halves, so the answers go through the same
+  stages, stop strings and limits.
+
+**What the answer of a batched chat depends on:**
+- Not on the other chats in the call. The engine's isolation guarantee holds
+  for a given batch size.
+- It can differ from the chat decoded alone, because batched rows round
+  differently. On Bonsai 2 27B, 471 of 500 long reasoning answers were
+  token-identical, and accuracy was unchanged (geistlib#264).
+
+The engine batches Qwen3.5-family models (Qwen3.5, Bonsai 2) on Metal and
+Vulkan, up to 8 sessions per pass; there 8 chats decode at about 3.5x the
+tokens/s of one.
+
 ## Catalog and verification (#5)
 
 [`include/geistr_catalog.h`](../include/geistr_catalog.h), no engine and no
