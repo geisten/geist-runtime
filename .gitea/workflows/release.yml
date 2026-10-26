@@ -27,10 +27,11 @@ permissions:
 env:
   TAG: ${{ inputs.tag || github.ref_name }}  # the tag pushed, or the one dispatched
   GEIST_REPO: ${{ vars.GEIST_REPO || 'https://git.geisten.net/geisten/geistlib.git' }}  # the engine from Gitea; the Makefile default is GitHub
-  # geistlib is private on Gitea: git rewrites only its URL to carry the token (secret GEISTLIB_TOKEN, read:repository), nothing is written to disk
-  GIT_CONFIG_COUNT: 1
-  GIT_CONFIG_KEY_0: url.https://oauth2:${{ secrets.GEISTLIB_TOKEN }}@git.geisten.net/geisten/geistlib.insteadOf
-  GIT_CONFIG_VALUE_0: https://git.geisten.net/geisten/geistlib
+  # geistlib is private on Gitea: git rewrites only its URL to carry the token (secret GEISTLIB_TOKEN, read:repository), nothing is written to disk.
+  # GIT_CONFIG_PARAMETERS (the channel of `git -c`), not GIT_CONFIG_COUNT/KEY_n: the Linux runners set
+  # those for their git cache (COUNT=2), and the two collided (release v0.4.0, 2026-10-26: "missing config
+  # key GIT_CONFIG_KEY_1" in every Linux job). git reads both; the longer geistlib rule wins over the cache's.
+  GIT_CONFIG_PARAMETERS: "'url.https://oauth2:${{ secrets.GEISTLIB_TOKEN }}@git.geisten.net/geisten/geistlib.insteadOf'='https://git.geisten.net/geisten/geistlib'"
 
 defaults:
   run:
@@ -51,7 +52,7 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
       - name: build in Alpine
-        run: docker run --rm -e GEIST_REPO -e GIT_CONFIG_COUNT -e GIT_CONFIG_KEY_0 -e GIT_CONFIG_VALUE_0 -v "$PWD:/src" -w /src alpine:3.21 sh scripts/build-static.sh
+        run: docker run --rm -e GEIST_REPO -e GIT_CONFIG_PARAMETERS -v "$PWD:/src" -w /src alpine:3.21 sh scripts/build-static.sh
       - name: no dynamic dependencies; it downloads (HTTPS, SHA-256) and answers
         run: |
           info=$(file build/static/geistr) && echo "$info"
@@ -151,7 +152,7 @@ jobs:
       - name: manylinux_2_28 wheel (linux)
         if: runner.os == 'Linux'
         run: |
-          docker run --rm -e GEIST_REPO -e GIT_CONFIG_COUNT -e GIT_CONFIG_KEY_0 -e GIT_CONFIG_VALUE_0 \
+          docker run --rm -e GEIST_REPO -e GIT_CONFIG_PARAMETERS \
             -v "$PWD:/src" -w /src "quay.io/pypa/manylinux_2_28_$(uname -m)" bash -c \
             'git config --global --add safe.directory "*" && rm -rf geistlib/build geistlib/lib && make BUILD=build/m228 wheel && auditwheel repair build/m228/wheel/geistr-*.whl -w build/wheelhouse'
           ls build/wheelhouse/geistr-*manylinux_2_28_*.whl
