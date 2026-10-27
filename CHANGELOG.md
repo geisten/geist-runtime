@@ -86,6 +86,12 @@
 
 ### Fixes
 
+- The Linux release binary checks a pulled model at disk speed: SHA-256
+  through OpenSSL (SHA-NI, ARMv8 SHA), which the static build links for
+  libcurl anyway, instead of the portable code at ~20 MB/s. Verifying
+  bonsai2-27b-pq2 (7.2 GB) took about 6 minutes, now 19 s from a cold disk
+  (2.8 s of CPU). A build without OpenSSL keeps the portable code (#254).
+
 - `scripts/retrieval-bench.py --rerank-gguf` (through llama-server) takes
   the exact log-probs of "yes" and "no": when one was not among the top 50
   tokens, the 50th one's stood in, which raised P(yes) of unrelated passages
