@@ -4,6 +4,20 @@
 
 ### Features
 
+- Experimental: early exit from reasoning (geistlib#236).
+  - `geistr decide ... --escalate chat --early-exit [--probe-interval N]
+    [--exit-threshold P]` probes the thinking model's answer every N tokens
+    (default 128): save the state, prefill the thinking close, read the
+    options, restore.
+  - The answer stops at the first probe whose top probability reaches P
+    (default 0.8). Probes that do not exit leave the generation unchanged.
+  - Library: `geistr_chat_probe_set` / `geistr_chat_probe_result`, also with
+    `geistr_chats_next`, and the new finish reason
+    `GEISTR_FINISH_EARLY_EXIT`.
+  - Measured on Bonsai 2 27B, 500 held-out MMLU questions at cap 8192: the
+    same accuracy as full reasoning (85.6 %) at 0.23x the generated tokens.
+    The paired interval is +/-4.74 pp, so a 2 pp non-inferiority margin is
+    not established.
 - Experimental: batched chats (geistlib#26).
   `geistr_chats_next(n, chats, pieces, statuses)` gives each of n chats of
   one model its next piece in one call.
