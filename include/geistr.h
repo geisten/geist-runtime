@@ -297,6 +297,68 @@ GEISTR_NODISCARD geistr_status geistr_chat_next(geistr_chat *chat, geistr_piece 
 GEISTR_NODISCARD geistr_status geistr_chats_next(size_t n, geistr_chat *const chats[], geistr_piece pieces[],
                                                  geistr_status statuses[]);
 
+/* EXPERIMENTAL (geistlib#236): answer probes and early exit while a thinking
+ * model reasons.
+ *
+ * A thinking chat (opts.reasoning = GEISTR_REASONING_THINK_TAGS) probes its
+ * answer every `interval` generated tokens while it is still thinking. A probe
+ * does four things:
+ *   1. it saves the session's complete state;
+ *   2. it prefills the thinking close ("\n</think>\n\n");
+ *   3. it reads the logits of each option's first token;
+ *   4. it restores the state.
+ * The generation then continues exactly as without the probe, token for
+ * token; probes are transparent.
+ *
+ * With threshold > 0, the answer ends (finish GEISTR_FINISH_EARLY_EXIT) at
+ * the first probe whose top probability, softmax(logits / temperature) over
+ * the options, is at least threshold. geistr_chat_probe_result names the
+ * option. With threshold 0 the probes are only recorded.
+ *
+ * Probing works with geistr_chats_next (refilled batching): a probe runs on
+ * its chat alone, between batched steps.
+ *
+ * Measured on Bonsai 2 27B, 500 held-out MMLU questions, cap 8192
+ * (geistlib#236), with probes every 128 tokens and threshold 0.8 (the
+ * defaults):
+ *   - accuracy equal to full reasoning (85.6 % each);
+ *   - 0.23x the generated tokens;
+ *   - paired 95 % interval [-4.74, +4.74] pp, so a 2 pp non-inferiority
+ *     margin is not established.
+ *
+ * Set between answers (not while one runs; GEISTR_INVALID then); nullptr turns
+ * probing off. Refusals:
+ *   - GEISTR_FORMAT: a chat that does not think with tags, or options whose
+ *     first tokens are not distinct;
+ *   - GEISTR_INVALID: a chat with a draft model, interval 0, threshold
+ *     outside [0, 1), fewer than 2 or more than GEISTR_PROBE_MAX_OPTIONS
+ *     options.
+ * A probe saves the whole session state (its KV rows and recurrent state),
+ * so it needs host memory of that size, once per model, and time; on Bonsai
+ * a probe costs about 2 decode steps. */
+#define GEISTR_PROBE_MAX_OPTIONS 26
+typedef struct geistr_chat_probe {
+    size_t             size;        /* sizeof(geistr_chat_probe) */
+    uint32_t           interval;    /* generated tokens between probes */
+    double             threshold;   /* > 0: exit at this top probability; 0: record only */
+    double             temperature; /* of the softmax over the options; 0 = 1 */
+    size_t             n_options;
+    const char *const *options;     /* the option texts the answer starts with */
+} geistr_chat_probe;
+#define GEISTR_CHAT_PROBE_INIT {sizeof(geistr_chat_probe), 128, 0.8, 1.0, 0, nullptr}
+GEISTR_NODISCARD geistr_status geistr_chat_probe_set(geistr_chat *chat, const geistr_chat_probe *probe);
+
+typedef struct geistr_probe_result {
+    size_t   size;             /* sizeof(geistr_probe_result), set by the caller */
+    uint32_t probes;           /* probes in the last answer */
+    uint32_t exit_position;    /* generated tokens when it exited; 0: no exit */
+    int32_t  exit_option;      /* index into the options; -1: no exit */
+    double   exit_probability; /* the exiting probe's top probability */
+    double   probe_ms;         /* time the probes took */
+    double   last[GEISTR_PROBE_MAX_OPTIONS]; /* the last probe's probabilities */
+} geistr_probe_result;
+GEISTR_NODISCARD geistr_status geistr_chat_probe_result(const geistr_chat *chat, geistr_probe_result *result);
+
 /* Ask the running send/next to stop as soon as possible.
  * Thread safety: the one call that may run on any thread, at any time,
  * concurrently with send/next on the same chat. Idempotent. */
@@ -318,7 +380,8 @@ typedef enum geistr_finish {
     GEISTR_FINISH_CONTEXT,   /* the context window is full */
     GEISTR_FINISH_CANCELLED, /* geistr_chat_cancel or emit */
     GEISTR_FINISH_ERROR,     /* see geistr_chat_error */
-    GEISTR_FINISH_REPETITION /* the answer repeated one passage back to back; ended there */
+    GEISTR_FINISH_REPETITION, /* the answer repeated one passage back to back; ended there */
+    GEISTR_FINISH_EARLY_EXIT  /* an answer probe was confident enough (geistr_chat_probe_set) */
 } geistr_finish;
 
 typedef struct geistr_stats {

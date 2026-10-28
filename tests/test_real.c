@@ -334,6 +334,104 @@ static const char *const BATCH_Q[] = {"Name three colours.", "What is 2 + 2?", "
  * Metal): a chat's answer is the same in two different batches of the same
  * size; against the chat alone it is reported (batched rows round
  * differently). */
+/* Answer probes (geistlib#236) on a thinking model: transparent when only
+ * recorded (alone and with geistr_chats_next), an exit at the first probe with
+ * a threshold every probe passes. */
+static const char *const PROBE_Q =
+    "Which planet is the largest? A. Mars B. Jupiter C. Venus D. Earth. Answer with the letter only.";
+static const char *const PROBE_OPTS[] = {"A", "B", "C", "D"};
+
+static geistr_chat *probe_chat(geistr_model *m, double threshold, bool probing) {
+    geistr_chat_opts o = GEISTR_CHAT_OPTS_INIT;
+    o.max_tokens       = 96;
+    o.reasoning        = GEISTR_REASONING_THINK_TAGS;
+    o.thinking         = true;
+    geistr_chat *c     = nullptr;
+    CHECK(geistr_chat_open(m, &o, &c) == GEISTR_OK, "probe chat open");
+    if (c && probing) {
+        geistr_chat_probe p = GEISTR_CHAT_PROBE_INIT;
+        p.interval          = 1; /* small models close their thinking within a few tokens */
+        p.threshold         = threshold;
+        p.n_options         = 4;
+        p.options           = PROBE_OPTS;
+        CHECK(geistr_chat_probe_set(c, &p) == GEISTR_OK, "probe set");
+    }
+    return c;
+}
+
+static void probe_ask(geistr_chat *c, char *out, size_t cap) {
+    geistr_message msg = {"user", PROBE_Q};
+    out[0]             = 0;
+    geistr_piece  p    = {.size = sizeof p};
+    geistr_status s    = geistr_chat_send(c, 1, &msg);
+    while (s == GEISTR_OK && (s = geistr_chat_next(c, &p)) == GEISTR_OK && p.part != GEISTR_PART_END)
+        strncat(out, p.text, cap - strlen(out) - 1);
+    CHECK(s == GEISTR_OK, "probe answer");
+}
+
+static void probe_engine(const char *path) {
+    geistr_model     *m = nullptr;
+    char              err[256];
+    geistr_model_opts o = *test_opts();
+    o.processor         = GEISTR_PROCESSOR_GPU;
+    if (geistr_model_open(path, &o, &m, err, sizeof err) != GEISTR_OK) {
+        CHECK(false, "open the probe model");
+        return;
+    }
+    static char plain[4096], probed[4096], exited[4096];
+    geistr_chat *a = probe_chat(m, 0, false), *b = probe_chat(m, 0, true), *x = probe_chat(m, 0.01, true);
+    probe_ask(a, plain, sizeof plain);
+    probe_ask(b, probed, sizeof probed);
+    geistr_probe_result rb = {.size = sizeof rb}, rx = {.size = sizeof rx};
+    CHECK(geistr_chat_probe_result(b, &rb) == GEISTR_OK && rb.probes >= 1 && rb.exit_option == -1,
+          "record-only probes ran and did not exit");
+    CHECK(plain[0] && !strcmp(plain, probed), "recorded probes leave the answer token for token the same");
+    probe_ask(x, exited, sizeof exited);
+    CHECK(geistr_chat_probe_result(x, &rx) == GEISTR_OK && rx.exit_option >= 0 && rx.exit_position == 1 &&
+              stats(x).finish == GEISTR_FINISH_EARLY_EXIT && rx.exit_probability >= 0.01,
+          "a threshold every probe passes exits at the first probe");
+    /* the same with geistr_chats_next: two chats, probes recorded vs none */
+    geistr_chat  *pair_plain[2] = {probe_chat(m, 0, false), probe_chat(m, 0, false)};
+    geistr_chat  *pair_probe[2] = {probe_chat(m, 0, true), probe_chat(m, 0, true)};
+    static char   tp[2][4096], tq[2][4096];
+    geistr_chat **sets[2]       = {pair_plain, pair_probe};
+    for (int set = 0; set < 2; set++) {
+        char(*out)[4096] = set ? tq : tp;
+        bool ended[2]    = {};
+        for (int i = 0; i < 2; i++) {
+            geistr_message msg = {"user", PROBE_Q};
+            out[i][0]          = 0;
+            CHECK(geistr_chat_send(sets[set][i], 1, &msg) == GEISTR_OK, "send");
+        }
+        for (int calls = 0; calls < 4096 && !(ended[0] && ended[1]); calls++) {
+            geistr_chat  *live[2];
+            geistr_piece  pc[2];
+            geistr_status st[2];
+            int           idx[2], k = 0;
+            for (int i = 0; i < 2; i++)
+                if (!ended[i])
+                    live[k] = sets[set][i], pc[k] = (geistr_piece) {.size = sizeof pc[k]}, idx[k++] = i;
+            CHECK(geistr_chats_next((size_t) k, live, pc, st) == GEISTR_OK, "chats_next");
+            for (int j = 0; j < k; j++) {
+                if (st[j] != GEISTR_OK || pc[j].part == GEISTR_PART_END)
+                    ended[idx[j]] = true;
+                else
+                    strncat(out[idx[j]], pc[j].text, 4095 - strlen(out[idx[j]]));
+            }
+        }
+    }
+    CHECK(tp[0][0] && !strcmp(tp[0], tq[0]) && !strcmp(tp[1], tq[1]),
+          "batched chats: recorded probes leave the answers the same");
+    for (int i = 0; i < 2; i++) {
+        geistr_chat_close(pair_plain[i]);
+        geistr_chat_close(pair_probe[i]);
+    }
+    geistr_chat_close(a);
+    geistr_chat_close(b);
+    geistr_chat_close(x);
+    geistr_model_close(m);
+}
+
 static void batched_engine(const char *path) {
     geistr_model *m = nullptr;
     char          err[256];
@@ -544,8 +642,10 @@ int main(void) {
         }
     }
     const char *batch_model = getenv("GEISTR_TEST_BATCH_MODEL");
-    if (batch_model && *batch_model)
+    if (batch_model && *batch_model) {
         batched_engine(batch_model);
+        probe_engine(batch_model);
+    }
 
     /* ---- the chat outlives the caller's model handle ---- */
     geistr_chat *last = chat(m, 8, GEISTR_OVERFLOW_REFUSE);
@@ -610,7 +710,7 @@ int main(void) {
         return 1;
     }
     printf("test_real: window, only-new-tokens, rewind (truncate and re-prefill), stop strings, cancel "
-           "(generation, prefill), overflow, parallel chats, batched chats, lifetime, wrapped engine model passed (%s, %s, context %u)\n",
+           "(generation, prefill), overflow, parallel chats, batched chats, answer probes, lifetime, wrapped engine model passed (%s, %s, context %u)\n",
            arch, backend, info.context);
     return 0;
 }

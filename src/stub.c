@@ -486,6 +486,29 @@ geistr_status geistr_chat_next(geistr_chat *c, geistr_piece *piece) {
     }
 }
 
+/* Answer probes (geistlib#236): the stub has no engine to probe; it checks the
+ * settings as the runtime does and reports that no probe ran. */
+geistr_status geistr_chat_probe_set(geistr_chat *c, const geistr_chat_probe *p) {
+    if (!c || (c->sent && !c->ended))
+        return GEISTR_INVALID;
+    if (!p)
+        return GEISTR_OK;
+    if (p->size < sizeof *p || p->interval == 0 || !(p->threshold >= 0 && p->threshold < 1) ||
+        !(p->temperature >= 0) || p->n_options < 2 || p->n_options > GEISTR_PROBE_MAX_OPTIONS || !p->options)
+        return GEISTR_INVALID;
+    for (size_t i = 0; i < p->n_options; i++)
+        if (!p->options[i] || !*p->options[i])
+            return GEISTR_FORMAT;
+    return c->opts.reasoning == GEISTR_REASONING_THINK_TAGS ? GEISTR_OK : GEISTR_FORMAT;
+}
+
+geistr_status geistr_chat_probe_result(const geistr_chat *c, geistr_probe_result *out) {
+    if (!c || !out || out->size < sizeof *out)
+        return GEISTR_INVALID;
+    *out = (geistr_probe_result) {.size = sizeof *out, .exit_option = -1};
+    return GEISTR_OK;
+}
+
 geistr_status geistr_chats_next(size_t n, geistr_chat *const chats[], geistr_piece pieces[],
                                 geistr_status statuses[]) {
     if (n == 0 || !chats || !pieces || !statuses || n > GEISTR_CHATS_MAX)
