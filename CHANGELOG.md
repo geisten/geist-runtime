@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- Linux on the GPU (#253): the releases add a Vulkan build next to the static
+  one, `geistr-linux-<arch>-vulkan.tar.gz` (glibc 2.28 or newer, libgomp; the
+  engine loads libvulkan.so.1 when it runs, without one it is the CPU build).
+  `install.sh` takes it when the system has a Vulkan loader and libgomp, and
+  the `.deb` ships it (Depends libgomp1, Recommends libvulkan1). The static
+  binary had no GPU backend at all, so `--gpu` failed and `auto` ran on the
+  CPU: bonsai2-27b-pq2 on an RTX 2080 Ti now decodes at 39 tokens/s instead
+  of 9 (32 CPU threads). A source build on Linux gets the Vulkan backend when
+  the Vulkan headers are installed (`rm -rf geistlib/build geistlib/lib`
+  once after installing them).
+
 ## 0.4.0
 
 ### Features

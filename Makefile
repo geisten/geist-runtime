@@ -159,6 +159,14 @@ GEIST_STATIC_OMP ?= 1
 ifeq ($(shell uname -s)-$(shell uname -m),Darwin-arm64)
 BACKENDS ?= cpu_neon cpu_scalar metal
 endif
+# Linux with the Vulkan headers: the GPU backend too (it dlopens libvulkan.so.1
+# when it runs, so the binary still starts without one; #253). Another BACKENDS
+# than the last build: rm -rf $(GEISTLIB)/build $(GEISTLIB)/lib first.
+ifeq ($(shell uname -s),Linux)
+ifneq (,$(wildcard /usr/include/vulkan/vulkan.h))
+BACKENDS ?= $(if $(filter x86_64,$(shell uname -m)),cpu_x86,cpu_neon) cpu_scalar vulkan
+endif
+endif
 TARGET ?= $(shell $(GEISTLIB)/mk/detect-target.sh)
 include $(GEISTLIB)/mk/target-$(TARGET).mk
 include $(GEISTLIB)/mk/gemm-$(GEMM_PROVIDER).mk

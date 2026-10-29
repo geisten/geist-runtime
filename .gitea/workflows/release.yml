@@ -1,8 +1,9 @@
 name: release
 
-# geistr binaries for install.sh: a fully static Linux build per architecture
-# (musl, scripts/build-static.sh) and macOS arm64 (system libraries only);
-# for Ubuntu and Debian also a .deb of the same binary (scripts/build-deb.sh).
+# geistr binaries for install.sh: per Linux architecture a fully static CPU build
+# (musl, scripts/build-static.sh) and a Vulkan GPU build (glibc >= 2.28,
+# scripts/build-vulkan.sh, #253), and macOS arm64 (system libraries only);
+# for Ubuntu and Debian also a .deb of the Vulkan build (scripts/build-deb.sh).
 #
 # Run by hand (Actions → release → Run workflow): builds and tests the
 # archives and keeps them as workflow artifacts; nothing is published.
@@ -46,7 +47,7 @@ jobs:
         include:
           - {runner: ubuntu-24.04, target: linux-amd64, deb: amd64, qemu: qemu-x86_64, old_cpu: Nehalem}
           - {runner: ubuntu-24.04-arm, target: linux-arm64, deb: arm64, qemu: qemu-aarch64, old_cpu: cortex-a72}
-    name: ${{ matrix.target }} (musl, static)
+    name: ${{ matrix.target }} (static, Vulkan)
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -74,11 +75,29 @@ jobs:
         run: |
           mkdir -p dist && cp build/static/geistr LICENSE THIRD_PARTY_LICENSES dist/
           tar -C dist -czf geistr-${{ matrix.target }}.tar.gz geistr LICENSE THIRD_PARTY_LICENSES
+      # Same checkout: the engine is synced already; build-vulkan.sh rebuilds it with the Vulkan backend.
+      - name: Vulkan build in manylinux_2_28 (glibc 2.28, GCC 14)
+        run: docker run --rm -e GEIST_REPO -e GIT_CONFIG_PARAMETERS -v "$PWD:/src" -w /src "quay.io/pypa/manylinux_2_28_$(uname -m)" sh scripts/build-vulkan.sh
+      - name: the Vulkan build needs only glibc 2.28 and libgomp; libvulkan when it runs; it answers
+        run: |
+          ldd build/vulkan/geistr
+          other=$(ldd build/vulkan/geistr | awk '{print $1}' | grep -v -E '^(linux-vdso|/lib|lib(c|m|mvec|dl|pthread|gomp)\.so)' || true)
+          test -z "$other" || { echo "unexpected library: $other"; exit 1; }
+          newest=$(objdump -T build/vulkan/geistr | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1) && echo "$newest"
+          test "$(printf '%s\nGLIBC_2.28\n' "$newest" | sort -V | tail -1)" = GLIBC_2.28
+          strings build/vulkan/geistr | grep -q '^libvulkan\.so\.1$'
+          export GEISTEN_HOME="$RUNNER_TEMP/h"
+          answer=$(build/vulkan/geistr run smollm2-360m 'What is the capital of France? One word.')
+          echo "$answer" && grep -qi paris <<<"$answer"
+      - name: archive (Vulkan)
+        run: |
+          cp build/vulkan/geistr dist/
+          tar -C dist -czf geistr-${{ matrix.target }}-vulkan.tar.gz geistr LICENSE THIRD_PARTY_LICENSES
       - name: .deb, installed here, with its launcher and user service
         run: |
           sh scripts/apt-need.sh dpkg-deb:dpkg desktop-file-validate:desktop-file-utils systemd-analyze:systemd
           version=$(sed -n 's/.*return "\([0-9.]*\)";.*/\1/p' src/runtime.c | head -1)
-          sh scripts/build-deb.sh build/static/geistr "$version" ${{ matrix.deb }} .
+          sh scripts/build-deb.sh build/vulkan/geistr "$version" ${{ matrix.deb }} .
           sudo dpkg -i geistr_*.deb
           /usr/bin/geistr --version
           desktop-file-validate /usr/share/applications/net.geisten.geistr.desktop
@@ -91,6 +110,7 @@ jobs:
           name: geistr-${{ matrix.target }}
           path: |
             geistr-${{ matrix.target }}.tar.gz
+            geistr-${{ matrix.target }}-vulkan.tar.gz
             geistr_*.deb
 
   macos:
