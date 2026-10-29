@@ -1,0 +1,17 @@
+# Status checks main's branch protection requires (git.geisten.net), one per
+# line under their pull_request status names: the fast per-PR jobs of
+# .gitea/workflows/ci.yml — build + unit tests (`make test`, which includes
+# the version check, and `make sanitize`) on every platform, and this list's
+# own check. Not required: real (real models; the macOS leg waits for the
+# M1 Max's benchmark lock), ci-ok (needs real), coverage, gpu (one desktop
+# runner), fuzz. CI fails while a listed name is not a job of ci.yml or a
+# required job's matrix leg is missing (scripts/required_checks.py check).
+# After changing CI jobs: fix this file (names: `scripts/required_checks.py
+# print`), then push it to Gitea with `GITEA_TOKEN=<admin token>
+# scripts/required_checks.py sync` — after the merge, or before it when the
+# new list only drops names.
+ci / required-checks (pull_request)
+ci / test (clang, clang++, macos-15) (pull_request)
+ci / test (clang-18, clang++-18, ubuntu-24.04) (pull_request)
+ci / test (gcc-14, g++-14, ubuntu-24.04) (pull_request)
+ci / test (gcc-14, g++-14, ubuntu-24.04-arm) (pull_request)
