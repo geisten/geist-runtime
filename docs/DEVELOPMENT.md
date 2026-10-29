@@ -156,8 +156,16 @@ service APIs, Python, decisions. Run it before a release.
 
 ## CI
 
-Every PR and push to `main` runs `.github/workflows/ci.yml`; the job
-`ci-ok` is the required check and passes only if every platform passed.
+Every PR and push to `main` runs `.gitea/workflows/ci.yml` on
+git.geisten.net (`.github/workflows/ci.yml` serves pull requests on the GitHub
+mirror). `main`'s branch protection requires the fast per-PR checks listed in
+`.gitea/required-checks.txt`: the `test` job on every platform and
+`required-checks`, which fails while that list names a job ci.yml does not
+have or misses a leg of a required job (`scripts/required_checks.py check`).
+A merge, including auto-merge, waits for them. `real`, `ci-ok` (needs `real`),
+`coverage`, `gpu` and `fuzz` still run on every PR but do not block it. After
+changing CI jobs, update the list and push it to the protection with
+`GITEA_TOKEN=<admin token> scripts/required_checks.py sync` (`verify` compares).
 
 | job | platforms | what |
 |---|---|---|
