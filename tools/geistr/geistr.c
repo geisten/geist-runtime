@@ -881,6 +881,9 @@ int main(int argc, char **argv) {
             return ERROR;
         }
         snprintf(socket_path, sizeof socket_path, "%s/geistr.sock", data_dir);
+        /* Before the first pull the folder does not exist yet: a fresh
+         * `serve --http` (the systemd user unit) failed to listen. */
+        (void) make_dirs(data_dir, 0700);
         /* A socket path has at most 103 bytes; for a long data folder, a
          * private runtime folder (only ours: another user's socket must not
          * stand in for the service). */

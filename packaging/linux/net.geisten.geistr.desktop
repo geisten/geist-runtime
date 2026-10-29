@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=geistr
+GenericName=Local AI chat
+Comment=Chat with a language model that runs on this computer
+Exec=geistr chat
+Icon=net.geisten.geistr
+Terminal=true
+Categories=Utility;
+Keywords=AI;LLM;chat;model;local;offline;
+Actions=new;
+
+[Desktop Action new]
+Name=New conversation
+Exec=geistr chat --new

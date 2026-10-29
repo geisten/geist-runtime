@@ -28,6 +28,10 @@
     differ slightly from the chat alone (batched rounding).
   - Models the engine does not batch fall back to one chat at a time,
     identical to `geistr_chat_next`.
+- Ubuntu and Debian: a `.deb` per architecture with a GNOME launcher
+  (`geistr chat` in a terminal, and "New conversation") and the systemd user
+  service `geistr` (`geistr serve --http`, every installed model). Windows:
+  how to run geistr in WSL 2 (README).
 - Experimental: speculative decoding with a draft model (geistlib#192).
   `geistr_model_opts.draft_model` (CLI: the `GEISTR_DRAFT_MODEL` environment
   variable) loads a small model with the same vocabulary, such as Qwen3.5
@@ -99,6 +103,14 @@
   downloaded. `geistr serve <model>` is unchanged (#195).
 
 ### Fixes
+
+- `install.sh` runs only once it has been downloaded completely (a `curl | sh`
+  that breaks off installs nothing), retries downloads and works with `wget`
+  when there is no `curl`.
+
+- `geistr serve --http` before the first `geistr pull` (a fresh systemd user
+  service) failed with "cannot listen on …/geistr.sock: No such file or
+  directory"; it creates the data folder (owner only) first.
 
 - The Linux release binary checks a pulled model at disk speed: SHA-256
   through OpenSSL (SHA-NI, ARMv8 SHA), which the static build links for
