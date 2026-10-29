@@ -54,7 +54,7 @@
 #define NO_POSITION SIZE_MAX
 
 const char *geistr_version(void) {
-    return "0.3.4";
+    return "0.4.0";
 }
 
 static void put_error(char *error, size_t cap, const char *fmt, ...) {
@@ -123,6 +123,9 @@ struct geistr_model {
     bool            borrowed; /* geistr_model_wrap: the caller owns m and be */
     bool            vision;   /* a vision tower is loaded (#92) */
     pthread_mutex_t embed_lock; /* geistr_embed's session, made on its first call (#91) */
+    pthread_mutex_t probe_lock; /* the answer probes' state image (geistlib#236), shared by the chats */
+    void           *probe_img;
+    size_t          probe_cap;
     struct geist_session *embed;
     geist_token_t        *scored; /* geistr_logits: the last prompt's tokens, in embed's cache */
     struct geist_model   *draft;    /* opts.draft_model, on be; nullptr = no speculative decoding */
@@ -244,9 +247,16 @@ static geistr_status model_describe(geistr_model *m, struct geist_model *gm, str
         put_error(error, cap, "model synchronization setup failed");
         return GEISTR_BACKEND;
     }
+    if (pthread_mutex_init(&m->probe_lock, nullptr) != 0) {
+        pthread_mutex_destroy(&m->engine);
+        pthread_mutex_destroy(&m->embed_lock);
+        put_error(error, cap, "model synchronization setup failed");
+        return GEISTR_BACKEND;
+    }
     if (decision->enabled && pthread_rwlock_init(&m->setup, nullptr) != 0) {
         pthread_mutex_destroy(&m->engine);
         pthread_mutex_destroy(&m->embed_lock);
+        pthread_mutex_destroy(&m->probe_lock);
         put_error(error, cap, "decision synchronization setup failed");
         return GEISTR_BACKEND;
     }
@@ -478,6 +488,8 @@ static void model_release(geistr_model *m) {
         geist_session_destroy(m->embed);
         free(m->scored);
         pthread_mutex_destroy(&m->embed_lock);
+        pthread_mutex_destroy(&m->probe_lock);
+        free(m->probe_img);
         geist_model_destroy(m->draft);
         if (!m->borrowed) {
             geist_model_destroy(m->m);
@@ -709,6 +721,15 @@ struct geistr_chat {
     double                spec_ms, plain_ms; /* moving averages; 0 = not measured */
     uint32_t              plain_left, plain_run;
     bool                  owed; /* the last token came from decode_step: the next one runs its forward */
+    /* Answer probes (geistlib#236): the settings, the probe's and options'
+     * tokens, the thinking close's token, and the last answer's result. */
+    geistr_chat_probe     probe;
+    geist_token_t         probe_ids[16];
+    size_t                n_probe_ids;
+    geist_token_t         option_ids[GEISTR_PROBE_MAX_OPTIONS];
+    geist_token_t         think_close;
+    bool                  probe_off; /* this answer closed its thinking: no more probes */
+    geistr_probe_result   probe_res;
     char              error[256];
 };
 
@@ -1394,6 +1415,8 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
     c->started  = start;
     c->error[0] = 0;
     c->n_recent = 0;
+    c->probe_off = false;
+    c->probe_res = (geistr_probe_result) {.size = sizeof c->probe_res, .exit_option = -1};
     c->stats    = (geistr_stats) {
            .size             = sizeof c->stats,
            .input_tokens     = (uint32_t) input,
@@ -1509,6 +1532,117 @@ static bool spec_discard(geistr_chat *c) {
     return ok;
 }
 
+/* ---- answer probes (geistlib#236) ---------------------------------------------- */
+
+/* text into at most cap tokens; the count, or 0 when it does not fit or fails. */
+static size_t tokens_of(geistr_chat *c, const char *text, size_t cap, geist_token_t *out) {
+    size_t n = 0;
+    engine_lock(c->model);
+    const enum geist_status es = geist_session_tokenize(c->s, text, cap, out, &n);
+    engine_unlock(c->model);
+    return es == GEIST_OK ? n : 0;
+}
+
+geistr_status geistr_chat_probe_set(geistr_chat *c, const geistr_chat_probe *p) {
+    if (!c || c->answering)
+        return GEISTR_INVALID;
+    if (!p) {
+        c->probe.interval = 0;
+        return GEISTR_OK;
+    }
+    if (p->size < sizeof *p || p->interval == 0 || !(p->threshold >= 0 && p->threshold < 1) ||
+        !(p->temperature >= 0) || p->n_options < 2 || p->n_options > GEISTR_PROBE_MAX_OPTIONS || !p->options)
+        return fail(c, GEISTR_INVALID, "probe: interval, threshold, temperature or options out of range");
+    if (c->draft)
+        return fail(c, GEISTR_INVALID, "probe: not with a draft model");
+    if (c->opts.reasoning != GEISTR_REASONING_THINK_TAGS || !c->model->thinks)
+        return fail(c, GEISTR_FORMAT, "probe: only a chat that thinks in <think> tags can be probed");
+    geist_token_t close[4];
+    const size_t  n_close = tokens_of(c, "</think>", 4, close);
+    const size_t  n_probe = tokens_of(c, "\n</think>\n\n", sizeof c->probe_ids / sizeof c->probe_ids[0], c->probe_ids);
+    if (n_close != 1 || n_probe == 0)
+        return fail(c, GEISTR_FORMAT, "probe: the model has no single </think> token");
+    for (size_t i = 0; i < p->n_options; i++) {
+        geist_token_t t[64];
+        if (!p->options[i] || !*p->options[i] || tokens_of(c, p->options[i], 64, t) == 0)
+            return fail(c, GEISTR_FORMAT, "probe: option %zu does not tokenize", i);
+        for (size_t j = 0; j < i; j++)
+            if (c->option_ids[j] == t[0])
+                return fail(c, GEISTR_FORMAT, "probe: options %zu and %zu start with the same token", j, i);
+        c->option_ids[i] = t[0];
+    }
+    c->think_close = close[0];
+    c->n_probe_ids = n_probe;
+    c->probe       = *p;
+    c->probe.size  = sizeof c->probe;
+    if (c->probe.temperature == 0)
+        c->probe.temperature = 1;
+    return GEISTR_OK;
+}
+
+geistr_status geistr_chat_probe_result(const geistr_chat *c, geistr_probe_result *out) {
+    if (!c || !out || out->size < sizeof *out)
+        return GEISTR_INVALID;
+    *out = c->probe_res;
+    return GEISTR_OK;
+}
+
+/* One probe: save the state, prefill the thinking close, read the options,
+ * restore. True when the answer should exit here. */
+static bool probe_now(geistr_chat *c, geistr_status *status) {
+    geistr_model *m  = c->model;
+    const double  t0 = now_ms();
+    float         logit[GEISTR_PROBE_MAX_OPTIONS];
+    size_t        need = 0, got = 0, nv = 0;
+    pthread_mutex_lock(&m->probe_lock);
+    engine_lock(m);
+    enum geist_status es = geist_session_snapshot_size(&need, c->s);
+    if (es == GEIST_OK && need > m->probe_cap) {
+        void *grown = realloc(m->probe_img, need);
+        if (grown)
+            m->probe_img = grown, m->probe_cap = need;
+        else
+            es = GEIST_E_OOM;
+    }
+    if (es == GEIST_OK)
+        es = geist_session_snapshot(&got, m->probe_cap, m->probe_img, c->s);
+    if (es == GEIST_OK)
+        es = geist_session_prefill_tokens(c->s, c->n_probe_ids, c->probe_ids);
+    const float *l = es == GEIST_OK ? geist_session_peek_logits(&nv, c->s) : nullptr;
+    for (size_t i = 0; l && i < c->probe.n_options; i++)
+        logit[i] = (size_t) c->option_ids[i] < nv ? l[c->option_ids[i]] : -INFINITY;
+    if (es == GEIST_OK && !l)
+        es = GEIST_E_BACKEND;
+    const enum geist_status rs = got ? geist_session_restore(got, m->probe_img, c->s) : GEIST_E_INVALID_STATE;
+    engine_unlock(m);
+    pthread_mutex_unlock(&m->probe_lock);
+    c->probe_res.probe_ms += now_ms() - t0;
+    if (es != GEIST_OK || rs != GEIST_OK) {
+        *status = fail(c, GEISTR_BACKEND, "probe: %s", geist_session_errmsg(c->s));
+        return false;
+    }
+    /* softmax(logits / T) in double precision */
+    double  top = -INFINITY, sum = 0;
+    size_t  best = 0;
+    double *p    = c->probe_res.last;
+    for (size_t i = 0; i < c->probe.n_options; i++)
+        if (logit[i] > logit[best])
+            best = i;
+    for (size_t i = 0; i < c->probe.n_options; i++)
+        sum += (p[i] = exp(((double) logit[i] - (double) logit[best]) / c->probe.temperature));
+    for (size_t i = 0; i < c->probe.n_options; i++)
+        p[i] /= sum;
+    top = p[best];
+    c->probe_res.probes++;
+    if (c->probe.threshold > 0 && top >= c->probe.threshold) {
+        c->probe_res.exit_position    = c->stats.output_tokens;
+        c->probe_res.exit_option      = (int32_t) best;
+        c->probe_res.exit_probability = top;
+        return true;
+    }
+    return false;
+}
+
 /* geistr_chat_next in two halves, so that several chats can share the
  * engine step between them (geistr_chats_next). chat_poll runs the loop up to
  * the point where a token is needed (STEP_TOKEN) or a result is ready
@@ -1565,6 +1699,34 @@ static enum chat_step chat_poll(geistr_chat *c, geistr_piece *piece, geistr_stat
     }
 }
 
+/* After a token went through the stages: a probe every interval tokens while
+ * the answer is thinking; an exit ends the answer (geistlib#236). */
+static bool probe_step(geistr_chat *c, geistr_piece *piece, geistr_status *status, geist_token_t t) {
+    if (!c->probe.interval || c->probe_off)
+        return false;
+    if (t == c->think_close) { /* the model closed its thinking: nothing to probe */
+        c->probe_off = true;
+        return false;
+    }
+    if (c->stats.output_tokens % c->probe.interval)
+        return false;
+    geistr_status s    = GEISTR_OK;
+    const bool    exit = probe_now(c, &s);
+    if (s != GEISTR_OK) {
+        end(c, piece, GEISTR_FINISH_ERROR);
+        *status = s;
+        return true;
+    }
+    if (exit) {
+        if (!finish_stages(c)) {
+            *status = fail(c, GEISTR_NO_MEMORY, "out of memory");
+            return true;
+        }
+        end(c, piece, GEISTR_FINISH_EARLY_EXIT);
+    }
+    return false;
+}
+
 /* es and t: the engine's result for this chat; p: the token's text (nullptr
  * when es failed). True when chat_next would return (*status set). */
 static bool chat_take(geistr_chat *c, geistr_piece *piece, geistr_status *status, enum geist_status es,
@@ -1608,7 +1770,7 @@ static bool chat_take(geistr_chat *c, geistr_piece *piece, geistr_status *status
         *status = fail(c, GEISTR_NO_MEMORY, "out of memory");
         return true;
     }
-    return false;
+    return probe_step(c, piece, status, t);
 }
 
 static bool chat_started(const geistr_chat *c) {

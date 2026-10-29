@@ -1,9 +1,23 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 ### Features
 
+- Experimental: early exit from reasoning (geistlib#236).
+  - `geistr decide ... --escalate chat --early-exit [--probe-interval N]
+    [--exit-threshold P]` probes the thinking model's answer every N tokens
+    (default 128): save the state, prefill the thinking close, read the
+    options, restore.
+  - The answer stops at the first probe whose top probability reaches P
+    (default 0.8). Probes that do not exit leave the generation unchanged.
+  - Library: `geistr_chat_probe_set` / `geistr_chat_probe_result`, also with
+    `geistr_chats_next`, and the new finish reason
+    `GEISTR_FINISH_EARLY_EXIT`.
+  - Measured on Bonsai 2 27B, 500 held-out MMLU questions at cap 8192: the
+    same accuracy as full reasoning (85.6 %) at 0.23x the generated tokens.
+    The paired interval is +/-4.74 pp, so a 2 pp non-inferiority margin is
+    not established.
 - Experimental: batched chats (geistlib#26).
   `geistr_chats_next(n, chats, pieces, statuses)` gives each of n chats of
   one model its next piece in one call.
@@ -93,6 +107,12 @@
 - `install.sh` runs only once it has been downloaded completely (a `curl | sh`
   that breaks off installs nothing), retries downloads and works with `wget`
   when there is no `curl`.
+
+- The Linux release binary checks a pulled model at disk speed: SHA-256
+  through OpenSSL (SHA-NI, ARMv8 SHA), which the static build links for
+  libcurl anyway, instead of the portable code at ~20 MB/s. Verifying
+  bonsai2-27b-pq2 (7.2 GB) took about 6 minutes, now 19 s from a cold disk
+  (2.8 s of CPU). A build without OpenSSL keeps the portable code (#254).
 
 - `scripts/retrieval-bench.py --rerank-gguf` (through llama-server) takes
   the exact log-probs of "yes" and "no": when one was not among the top 50

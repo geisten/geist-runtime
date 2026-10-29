@@ -232,6 +232,31 @@ The engine batches Qwen3.5-family models (Qwen3.5, Bonsai 2) on Metal and
 Vulkan, up to 8 sessions per pass; there 8 chats decode at about 3.5x the
 tokens/s of one.
 
+## Answer probes and early exit (geistlib#236)
+
+`geistr_chat_probe_set(chat, &probe)` makes a thinking chat probe its answer
+every `probe.interval` generated tokens while it thinks. A probe saves the
+session state, prefills `\n</think>\n\n`, reads the logits of each option's
+first token and restores the state. Probes are transparent: a probe that does
+not exit leaves the answer token for token the same.
+
+With `probe.threshold > 0` the answer ends (`GEISTR_FINISH_EARLY_EXIT`) at the
+first probe whose top probability over the options (softmax of logits /
+temperature) reaches it. `geistr_chat_probe_result` reports:
+- the number of probes and their time;
+- the exit position, option and probability;
+- the last probe's distribution.
+
+Settings are checked when set:
+- thinking chats only (`GEISTR_FORMAT` otherwise);
+- options with distinct first tokens;
+- no draft model.
+
+The state image is shared by the model's chats and allocated on the first
+probe. With `geistr_chats_next` a probe runs on its chat alone, between
+batched steps. `geistr decide --early-exit` uses it; docs/DECISIONS.md has the
+measured accuracy and its uncertainty.
+
 ## Catalog and verification (#5)
 
 [`include/geistr_catalog.h`](../include/geistr_catalog.h), no engine and no

@@ -467,6 +467,42 @@ static void test_batched(void) {
     geistr_model_close(other);
 }
 
+/* geistr_chat_probe_set (geistlib#236): settings and refusals. */
+static void test_probe(void) {
+    geistr_model     *model = open_model("stub:echo", 0);
+    geistr_chat_opts  plain = GEISTR_CHAT_OPTS_INIT, think = GEISTR_CHAT_OPTS_INIT;
+    think.reasoning         = GEISTR_REASONING_THINK_TAGS;
+    geistr_chat      *pc = open_chat(model, plain), *tc = open_chat(model, think);
+    const char *const opts[] = {"A", "B", "C", "D"};
+    geistr_chat_probe p      = GEISTR_CHAT_PROBE_INIT;
+    p.n_options              = 4;
+    p.options                = opts;
+    CHECK(p.interval == 128 && p.threshold == 0.8, "defaults: every 128 tokens, threshold 0.8");
+    CHECK(geistr_chat_probe_set(tc, &p) == GEISTR_OK, "a thinking chat takes probes");
+    CHECK(geistr_chat_probe_set(pc, &p) == GEISTR_FORMAT, "a chat that does not think is refused");
+    CHECK(geistr_chat_probe_set(tc, nullptr) == GEISTR_OK, "nullptr turns probing off");
+    geistr_chat_probe bad = p;
+    bad.interval          = 0;
+    CHECK(geistr_chat_probe_set(tc, &bad) == GEISTR_INVALID, "interval 0");
+    bad           = p;
+    bad.threshold = 1.0;
+    CHECK(geistr_chat_probe_set(tc, &bad) == GEISTR_INVALID, "threshold 1");
+    bad           = p;
+    bad.n_options = 1;
+    CHECK(geistr_chat_probe_set(tc, &bad) == GEISTR_INVALID, "one option");
+    bad.n_options = GEISTR_PROBE_MAX_OPTIONS + 1;
+    CHECK(geistr_chat_probe_set(tc, &bad) == GEISTR_INVALID, "too many options");
+    bad      = p;
+    bad.size = 1;
+    CHECK(geistr_chat_probe_set(tc, &bad) == GEISTR_INVALID, "a struct too small");
+    geistr_probe_result r = {.size = sizeof r};
+    CHECK(geistr_chat_probe_result(tc, &r) == GEISTR_OK && r.exit_option == -1 && r.probes == 0,
+          "no answer, no probe");
+    geistr_chat_close(pc);
+    geistr_chat_close(tc);
+    geistr_model_close(model);
+}
+
 static void test_lifetime(void) {
     geistr_model *model = open_model("stub:echo", 0);
     geistr_chat  *chat  = open_chat(model, (geistr_chat_opts) GEISTR_CHAT_OPTS_INIT);
@@ -490,11 +526,12 @@ int main(void) {
     test_conversation();
     test_cancel();
     test_batched();
+    test_probe();
     test_lifetime();
     if (failures) {
         fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;
     }
-    puts("geistr API: basics, ABI sizes, answer, thinking, reasoning protocol, limits, stop strings, conversation, rewind, cancellation, batched chats, lifetime passed");
+    puts("geistr API: basics, ABI sizes, answer, thinking, reasoning protocol, limits, stop strings, conversation, rewind, cancellation, batched chats, answer probes, lifetime passed");
     return 0;
 }

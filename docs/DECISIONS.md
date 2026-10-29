@@ -387,6 +387,54 @@ add up the cost of both stages from these fields: one decision call
 time. There is no cap on the escalated share: a single command cannot see
 one; callers that run many decisions should cap it themselves.
 
+**Early exit from the chat answer (`--early-exit`, experimental, geistlib#236).**
+With `--escalate chat`, `--early-exit` probes the thinking model's answer while
+it reasons. Every `--probe-interval N` generated tokens (default 128), while
+the model is still thinking, a probe does four things:
+1. it saves the chat session's complete state;
+2. it prefills the thinking close (`\n</think>\n\n`);
+3. it reads the logits of each option ID's first token;
+4. it restores the state.
+
+The answer stops at the first probe whose top probability (softmax over the
+options) reaches `--exit-threshold P` (default 0.8), and that option is the
+answer. Without such a probe the chat answers as before.
+- **Probes are transparent:** a probe that does not exit leaves the generation
+  token for token the same.
+- **Requirements:** each option ID must start with its own token, and the
+  model must think in `<think>` tags. Otherwise `--early-exit` exits with 2.
+- **Library:** the probes are `geistr_chat_probe_set` /
+  `geistr_chat_probe_result` and work with `geistr_chats_next`, where each
+  probe runs on its chat between batched steps.
+- **Diagnostics:** the JSON gains `early_exit` (`interval`, `threshold`,
+  `probes`, `probe_ms`, `exited`, and after an exit `position` (generated
+  tokens), `probability` and `option_index`). The `chat.finish` value of an
+  exit is `early_exit`.
+
+**Measured** (geistlib#236, Bonsai 2 27B on an M1 Max, Metal, 500 held-out
+classic-MMLU questions, 5-shot, cap 8192, probes every 128 tokens,
+threshold 0.8):
+
+| | accuracy | generated tokens | still at the cap |
+|---|---|---|---|
+| full reasoning | 85.6 % | 676,706 | 41 |
+| early exit | 85.6 % | 152,657 (0.23×) | 2 |
+
+- **Uncertainty:** gains 27, losses 27, conservative paired 95 % interval
+  [−4.74, +4.74] pp, so a 2 pp non-inferiority margin is **not established**
+  at this sample size.
+- **Where exits happen:** 330 of 500 answers exit early, 221 of them at the
+  first probe.
+- **Where the gains come from:** questions on which full reasoning runs out of
+  budget. The losses are early answers that full reasoning would have
+  corrected.
+- **Scope:** the threshold 0.8 was fixed on 200 separate calibration questions
+  before the held-out run. The curve is specific to the task and the model:
+  check your own calibration data before relying on it.
+- **Probe cost:** on Bonsai, a probe costs about two decode steps, and it
+  needs host memory for one copy of the session state (KV cache and recurrent
+  state).
+
 **Choosing the threshold and the cap.** These two settings trade speed
 against quality, and the trade-off belongs to the application, not to the
 engine. Measure it for your task and model:
