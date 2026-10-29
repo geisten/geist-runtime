@@ -85,7 +85,7 @@ jobs:
           test -z "$other" || { echo "unexpected library: $other"; exit 1; }
           newest=$(objdump -T build/vulkan/geistr | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1) && echo "$newest"
           test "$(printf '%s\nGLIBC_2.28\n' "$newest" | sort -V | tail -1)" = GLIBC_2.28
-          strings build/vulkan/geistr | grep -q '^libvulkan\.so\.1$'
+          grep -qaF libvulkan.so.1 build/vulkan/geistr  # no pipe: grep -q would SIGPIPE strings under pipefail
           export GEISTEN_HOME="$RUNNER_TEMP/h"
           answer=$(build/vulkan/geistr run smollm2-360m 'What is the capital of France? One word.')
           echo "$answer" && grep -qi paris <<<"$answer"
