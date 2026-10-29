@@ -108,6 +108,10 @@
   that breaks off installs nothing), retries downloads and works with `wget`
   when there is no `curl`.
 
+- `geistr serve --http` before the first `geistr pull` (a fresh systemd user
+  service) failed with "cannot listen on …/geistr.sock: No such file or
+  directory"; it creates the data folder (owner only) first.
+
 - The Linux release binary checks a pulled model at disk speed: SHA-256
   through OpenSSL (SHA-NI, ARMv8 SHA), which the static build links for
   libcurl anyway, instead of the portable code at ~20 MB/s. Verifying
