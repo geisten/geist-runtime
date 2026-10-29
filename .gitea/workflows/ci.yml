@@ -34,6 +34,16 @@ defaults:
     shell: bash  # -eo pipefail: a step piped into tee still fails
 
 jobs:
+  # The list of main's required checks (.gitea/required-checks.txt) names
+  # jobs of this file that exist; scripts/required_checks.py.
+  required-checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: required checks match the workflow
+        run: python3 scripts/required_checks.py check
+
   test:
     strategy:
       fail-fast: false
@@ -241,9 +251,6 @@ jobs:
           path: build/cov/coverage.md
           if-no-files-found: ignore
 
-  # #10: the one required check. Branch protection names this job, so the
-  # matrix can change without touching the protection rules.
-
   # #112: the GPU. The self-hosted runner with the RTX 2080 Ti (Vulkan); models
   # in its own folder (GEIST_CI_MODELS, else ~/geist-ci-models), fetched once.
   # Only branches of this repository run here, never forks: the runner runs the
@@ -265,6 +272,8 @@ jobs:
           name: evidence-gpu
           path: build/logs/
 
+  # #10: every platform passed (test and real). Not a required check of
+  # main's protection (.gitea/required-checks.txt): it waits for real.
   ci-ok:
     if: always()
     needs: [test, real]
