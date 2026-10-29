@@ -24,7 +24,8 @@ apk add -q build-base python3 git linux-headers perl openssl-dev openssl-libs-st
     make -s -j"$(nproc)"
     make -s install
 )
-make geistr BUILD=build/static LDFLAGS=-static GEISTR_LIBS="$(/usr/local/bin/curl-config --static-libs)"
+# GEISTR_OPENSSL: model checksums through OpenSSL, which libcurl links anyway (#254)
+make geistr BUILD=build/static CFLAGS="-O2 -g -DGEISTR_OPENSSL" LDFLAGS=-static GEISTR_LIBS="$(/usr/local/bin/curl-config --static-libs)"
 strip build/static/geistr
 build/static/geistr --version
 # Built as root in a container: hand the files back to the checkout's owner.

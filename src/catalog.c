@@ -19,6 +19,8 @@
 #include <unistd.h>
 #if defined(__APPLE__) && !defined(GEISTR_PORTABLE_SHA256)
 #include <CommonCrypto/CommonDigest.h>
+#elif defined(GEISTR_OPENSSL)
+#include <openssl/evp.h>
 #endif
 
 #define MAX_BYTES  (1u << 20)
@@ -494,8 +496,8 @@ void geistr_catalog_quality(const geistr_catalog *c, const geistr_catalog_entry 
 
 #if defined(__APPLE__) && !defined(GEISTR_PORTABLE_SHA256)
 typedef CC_SHA256_CTX sha256_ctx;
-static void sha256_init(sha256_ctx *s) {
-    CC_SHA256_Init(s);
+static bool sha256_init(sha256_ctx *s) {
+    return CC_SHA256_Init(s) == 1;
 }
 static void sha256_update(sha256_ctx *s, const unsigned char *p, size_t n) {
     CC_SHA256_Update(s, p, (CC_LONG) n);
@@ -503,10 +505,28 @@ static void sha256_update(sha256_ctx *s, const unsigned char *p, size_t n) {
 static void sha256_final(sha256_ctx *s, unsigned char digest[32]) {
     CC_SHA256_Final(digest, s);
 }
+#elif defined(GEISTR_OPENSSL)
+/* The static Linux build links OpenSSL anyway (for libcurl): SHA-NI and the
+ * ARMv8 SHA instructions, GB/s instead of the portable code's ~20 MB/s (#254). */
+typedef EVP_MD_CTX *sha256_ctx;
+static bool sha256_init(sha256_ctx *s) {
+    *s = EVP_MD_CTX_new();
+    if (*s && EVP_DigestInit_ex(*s, EVP_sha256(), nullptr))
+        return true;
+    EVP_MD_CTX_free(*s);
+    return false;
+}
+static void sha256_update(sha256_ctx *s, const unsigned char *p, size_t n) {
+    EVP_DigestUpdate(*s, p, n);
+}
+static void sha256_final(sha256_ctx *s, unsigned char digest[32]) {
+    EVP_DigestFinal_ex(*s, digest, nullptr);
+    EVP_MD_CTX_free(*s);
+}
 #else
-/* ponytail: portable FIPS 180-4, ~140 MB/s (M1; CommonCrypto 790 MB/s);
- * receipts make rehashing rare.
- * Use the ARMv8/SHA-NI instructions if first-time verification gets slow. */
+/* ponytail: portable FIPS 180-4, ~140 MB/s on an M1 but ~20 MB/s on x86-64
+ * (CommonCrypto 790 MB/s); receipts make rehashing rare. Builds with OpenSSL
+ * at hand take GEISTR_OPENSSL instead, as the static release does (#254). */
 typedef struct {
     uint32_t      h[8];
     uint64_t      bits;
@@ -543,8 +563,9 @@ static void sha256_block(sha256_ctx *s, const unsigned char *p) {
     for (int i = 0; i < 8; i++)
         s->h[i] += a[i];
 }
-static void sha256_init(sha256_ctx *s) {
+static bool sha256_init(sha256_ctx *s) {
     *s = (sha256_ctx) {.h = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19}};
+    return true;
 }
 static void sha256_update(sha256_ctx *s, const unsigned char *p, size_t n) {
     s->bits += (uint64_t) n * 8;
@@ -583,7 +604,8 @@ geistr_status geistr_sha256_memory(size_t len, const void *data, char *out) {
     if (!out || (!data && len) || len > UINT64_MAX / 8)
         return GEISTR_INVALID;
     sha256_ctx s;
-    sha256_init(&s);
+    if (!sha256_init(&s))
+        return GEISTR_NO_MEMORY;
     const unsigned char *p = data;
     while (len) {
         const size_t chunk = len < (1u << 20) ? len : (1u << 20);
@@ -611,16 +633,20 @@ geistr_status geistr_sha256_file(const char *path, char out[65]) {
         return GEISTR_NO_MEMORY;
     }
     sha256_ctx s;
-    sha256_init(&s);
+    if (!sha256_init(&s)) {
+        free(buf);
+        close(fd);
+        return GEISTR_NO_MEMORY;
+    }
     ssize_t n;
     while ((n = read(fd, buf, block)) > 0 || (n < 0 && errno == EINTR))
         if (n > 0)
             sha256_update(&s, buf, (size_t) n);
     free(buf);
     close(fd);
+    sha256_final(&s, digest); /* also on a read error: it frees the context */
     if (n < 0)
         return GEISTR_IO;
-    sha256_final(&s, digest);
     for (int i = 0; i < 32; i++)
         snprintf(out + 2 * i, 3, "%02x", digest[i]);
     return GEISTR_OK;
