@@ -9,6 +9,8 @@ the components below; each one's license follows.
   Linux releases    libcurl 8.22.0 (curl license), OpenSSL 3.3.7
   (static, musl)    (Apache-2.0), musl 1.2.5 (MIT), libgomp from GCC 14
                     (GPL-3.0-or-later WITH GCC-exception-3.1)
+  Linux releases    libcurl 8.22.0, OpenSSL 3.5.9 (Apache-2.0); glibc,
+  (Vulkan, .deb)    libgomp and libvulkan are the system's, not included
   macOS releases    LLVM OpenMP runtime libomp (Apache-2.0 WITH LLVM-exception)
 
 libgomp: the GCC Runtime Library Exception 3.1 permits distributing the
@@ -116,7 +118,7 @@ be used in advertising or otherwise to promote the sale, use or other dealings
 in this Software without prior written authorization of the copyright holder.
 
 ==============================================================================
-OpenSSL 3.3.7 — Apache License 2.0
+OpenSSL 3.3.7 and 3.5.9 — Apache License 2.0
 ==============================================================================
 
 Copyright (c) 1998-2025 The OpenSSL Project Authors

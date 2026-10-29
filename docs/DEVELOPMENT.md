@@ -47,11 +47,18 @@ Needs a C23 compiler (clang 18+ or gcc 14+) and python3; on macOS also
 module for `pull`, else it builds without network code (`PULL=0` forces
 that). The binary is self-contained: geistlib and, on macOS, libomp are
 linked statically; it needs only system libraries (macOS: Accelerate,
-libcurl; Linux: libc, libm, libgomp, libcurl).
+libcurl; Linux: libc, libm, libgomp, libcurl). On Linux it gets the Vulkan
+backend when the Vulkan headers are installed (`libvulkan-dev`); it loads
+libvulkan.so.1 when it runs. After installing them, start the engine clean:
+`rm -rf geistlib/build geistlib/lib`.
 
-For a fully static Linux build (musl), as in the releases:
+The two Linux release builds:
 `docker run --rm -v "$PWD:/src" -w /src alpine:3.21 sh scripts/build-static.sh`
-→ `build/static/geistr`.
+→ `build/static/geistr` (musl, fully static, CPU only: a static binary cannot
+load libvulkan), and
+`docker run --rm -v "$PWD:/src" -w /src quay.io/pypa/manylinux_2_28_x86_64 sh scripts/build-vulkan.sh`
+→ `build/vulkan/geistr` (Vulkan; glibc 2.28, libgomp, the rest linked in).
+Both share the minimal libcurl of `scripts/build-curl.sh`.
 
 ## Releases
 
@@ -66,11 +73,14 @@ folders are deleted in version order; `latest`, `install.sh` and the release
 just uploaded never are. The repository variable `PRUNE_DRY_RUN=1` makes it
 only print what it would delete (#148). The Linux
 binaries are fully static (musl, with a minimal libcurl, OpenSSL and libgomp);
+next to each the Vulkan build `geistr-linux-<arch>-vulkan.tar.gz`
+(glibc >= 2.28 and libgomp only, checked; #253), which `install.sh` takes when
+`ldconfig` knows libvulkan.so.1 and libgomp.so.1;
 the macOS binary needs macOS 15 or later (`MACOSX_DEPLOYMENT_TARGET`, checked).
 The archives carry `THIRD_PARTY_LICENSES`. `install.sh` downloads the archive
 for this computer, checks it against `SHA256SUMS` and installs to
-`$PREFIX/bin`. For Ubuntu and Debian, `scripts/build-deb.sh` packs the same
-static binary with the GNOME launcher, its icon and the systemd user unit
+`$PREFIX/bin`. For Ubuntu and Debian, `scripts/build-deb.sh` packs the
+Vulkan build (Depends libgomp1, Recommends libvulkan1) with the GNOME launcher, its icon and the systemd user unit
 `geistr.service` (`packaging/linux/`) into `geistr_<version>_<arch>.deb`,
 next to the archives and in `SHA256SUMS`; the `linux` job installs each one
 on its runner and checks the launcher and the unit before it keeps it.

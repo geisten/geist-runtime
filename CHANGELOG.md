@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+### Fixes
+
+- Messages render as the templates of Qwen3.5, Qwen3.6+ and Gemma 4 have
+  them, also padded with whitespace and in tool loops (#269):
+  - Message contents are trimmed where the template trims them (`|trim`,
+    as Python's `str.strip()`, Unicode whitespace included), still
+    tokenized with special tokens off (#261). An answer ending in
+    whitespace comes back trimmed before the next turn. Qwen3.6+ renders no
+    system turn for a blank system message.
+  - Qwen3.5 keeps an answer's reasoning (`<think>\n` reasoning
+    `\n</think>\n\n` answer) while tool results follow, as its template
+    renders the assistant turns after the last user query; the next query
+    takes it out of the loop's answers again. With thinking off the context
+    keeps the empty block it has, instead of a rewind and prefill per tool
+    step.
+  - Role `tool` messages are `<tool_response>` blocks in one user turn in
+    the Qwen3 family, as the templates have them; before, each was a user
+    turn of its own text. `serve --http` sends tool results this way already.
+  - Checked byte for byte against the real templates (transformers-style
+    Jinja and llama.cpp's `/apply-template`): padded messages, Unicode
+    whitespace, a blank system message, tool loops with and without
+    reasoning.
+- The catalog marks Gemma 4 (`gemma4-e2b`, `gemma4-e4b`) as thinking models
+  (#270). They think when asked since #266, but the catalog listed them as
+  not thinking: `geistr config gemma4-e2b.thinking off` was refused while
+  `on` worked, and `catalog --json` gave `"thinking": null`.
+  - New `reasoning_format` value `channel_tags` (Gemma 4's
+    `<|channel>thought … <channel|>`), beside `think_tags`; catalog revision 14.
+    A geistr up to 0.4.0 refuses a catalog file with it (`--catalog`).
+  - `geistr config <id>.thinking on|off` now takes both values for every
+    thinking model and refuses both for the others (before, `on` was taken
+    for any id). A stored `on` for a model that does not think is ignored.
+  - `geistr decide` is unchanged: only `think_tags` models decide with
+    their reasoning on.
+### Features
+
+- Linux on the GPU (#253): the releases add a Vulkan build next to the static
+  one, `geistr-linux-<arch>-vulkan.tar.gz` (glibc 2.28 or newer, libgomp; the
+  engine loads libvulkan.so.1 when it runs, without one it is the CPU build).
+  `install.sh` takes it when the system has a Vulkan loader and libgomp, and
+  the `.deb` ships it (Depends libgomp1, Recommends libvulkan1). The static
+  binary had no GPU backend at all, so `--gpu` failed and `auto` ran on the
+  CPU: bonsai2-27b-pq2 on an RTX 2080 Ti now decodes at 39 tokens/s instead
+  of 9 (32 CPU threads). A source build on Linux gets the Vulkan backend when
+  the Vulkan headers are installed (`rm -rf geistlib/build geistlib/lib`
+  once after installing them).
+
+## 0.4.0
+
 ### Security
 
 - A chat message can no longer forge a turn. Before, a message containing
