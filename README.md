@@ -52,7 +52,12 @@ curl -fsSL https://www.geisten.net/download/geistr/install.sh | GEISTR_VERSION=v
 <details>
 <summary>Requirements</summary>
 
-The Linux binaries are fully static and run on any distribution. The CPU
+On Linux there are two builds, and `install.sh` picks one: with a Vulkan
+loader (`libvulkan1` on Ubuntu and Debian, `vulkan-loader` on Fedora) and
+libgomp the GPU build (glibc 2.28 or newer: Ubuntu 20.04, Debian 10, RHEL 8
+and later; the `.deb` is this one), otherwise the fully static CPU build,
+which runs on any distribution. The GPU needs a Vulkan driver (Mesa for AMD
+and Intel, NVIDIA's own). The CPU
 needs x86-64-v3 (AVX2: Intel since 2013, AMD since 2015) or ARMv8.2 with
 dotprod (Raspberry Pi 5, AWS Graviton 2 and newer); on an older CPU geistr
 says so and exits. To build from source instead, see

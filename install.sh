@@ -4,6 +4,8 @@
 # GEISTR_VERSION=v0.4.0 picks a release (default: the latest); the server keeps the
 # last 5 releases (release.yml, KEEP), none before 0.3.2.
 # PREFIX=~/.local installs to ~/.local/bin (default: /usr/local, with sudo if needed).
+# On Linux with a Vulkan loader (libvulkan1) and libgomp it takes the GPU build
+# (glibc 2.28 or newer), otherwise the static CPU build (#253).
 set -eu
 site=https://www.geisten.net/download/geistr
 
@@ -37,8 +39,17 @@ main() {
     fi
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT INT TERM
-    echo "downloading geistr-$target ($version)"
-    if ! fetch "$base/geistr-$target.tar.gz" "$tmp/geistr-$target.tar.gz" ||
+    libs=$({ ldconfig -p || /sbin/ldconfig -p; } 2>/dev/null || true)
+    case $target in linux-*)
+        if printf '%s\n' "$libs" | grep -q 'libvulkan\.so\.1 ' && printf '%s\n' "$libs" | grep -q 'libgomp\.so\.1 '; then
+            echo "downloading geistr-$target-vulkan ($version)"
+            # a release before the Vulkan build (#253) has none: the static one then
+            fetch "$base/geistr-$target-vulkan.tar.gz" "$tmp/geistr-$target-vulkan.tar.gz" && target=$target-vulkan
+        fi
+        ;;
+    esac
+    case $target in *-vulkan) ;; *) echo "downloading geistr-$target ($version)" ;; esac
+    if ! { [ -f "$tmp/geistr-$target.tar.gz" ] || fetch "$base/geistr-$target.tar.gz" "$tmp/geistr-$target.tar.gz"; } ||
         ! fetch "$base/SHA256SUMS" "$tmp/SHA256SUMS"; then
         echo "geistr: no release $version at $base (leave GEISTR_VERSION unset for the latest)" >&2
         exit 1
