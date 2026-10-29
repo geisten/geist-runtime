@@ -276,11 +276,16 @@ test-upgrade: geistr
 # #132: serve --http against the OpenAI SDK and the Ollama library (pinned), in a
 # venv: SmolLM2 (make fetch-model), Qwen3 0.6B tools, BitNet-embedding (fetch-embed-model).
 CLIENTS ?= openai==3.29.0 ollama==0.6.3
+# openai 3.x needs Python >= 3.10; macOS's /usr/bin/python3 is 3.9 (pip 21), so
+# the venv takes the newest python3.1N on PATH or in Homebrew, else python3.
+CLIENTS_PYTHON ?= $(firstword $(foreach v,14 13 12 11 10,$(shell command -v python3.$(v) 2>/dev/null) $(wildcard /opt/homebrew/bin/python3.$(v))) python3)
 GEIST_TEST_TOOLS_MODEL ?= $(GEISTLIB)/gguf_artifacts/Qwen3-0.6B-Q8_0.gguf
 test-clients: geistr
 	@for m in "$(GEIST_TEST_MODEL)" "$(GEIST_TEST_TOOLS_MODEL)" "$(GEIST_TEST_EMBED_MODEL)"; do \
 		test -f "$$m" || { echo "no model at $$m: make fetch-model fetch-embed-model, scripts/fetch-model.sh ... qwen3-0.6b"; exit 1; }; done
-	rm -rf $(BUILD)/clients-venv && python3 -m venv $(BUILD)/clients-venv
+	@"$(CLIENTS_PYTHON)" -c 'import sys; print("test-clients: Python", sys.version.split()[0], sys.executable); sys.exit(sys.version_info < (3, 10))' || \
+		{ echo "test-clients needs Python >= 3.10 (openai 3.x): install one (e.g. brew install python@3.13) or set CLIENTS_PYTHON"; exit 1; }
+	rm -rf $(BUILD)/clients-venv && "$(CLIENTS_PYTHON)" -m venv $(BUILD)/clients-venv
 	$(BUILD)/clients-venv/bin/pip install -q $(CLIENTS)
 	$(BUILD)/clients-venv/bin/python -u tests/test_clients.py $(BUILD)/geistr "$(GEIST_TEST_MODEL)" "$(GEIST_TEST_TOOLS_MODEL)" "$(GEIST_TEST_EMBED_MODEL)"
 
