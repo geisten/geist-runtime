@@ -10,6 +10,7 @@
 # print`), then push it to Gitea with `GITEA_TOKEN=<admin token>
 # scripts/required_checks.py sync` — after the merge, or before it when the
 # new list only drops names.
+ci / hold (pull_request)
 ci / required-checks (pull_request)
 ci / test (clang, clang++, macos-15) (pull_request)
 ci / test (clang-18, clang++-18, ubuntu-24.04) (pull_request)
