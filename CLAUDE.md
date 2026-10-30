@@ -8,19 +8,11 @@ git.geisten.net --repo geisten/geist-runtime`; merge with a merge commit. CI is
 mirror). A PR opened on GitHub by someone else comes over with
 `scripts/import-github-pr.sh <n>` after reading it.
 
-**Agent pipeline.** Issues and pull requests move through status labels
-(`.gitea/workflows/agent.yml` has the details, geistlib's `AGENT.md` §9 the
-same pipeline; how all agents share work: `geisten/orga` `AGENTS.md`):
-`agent` on an issue: CI's Claude Code implements it and the bot opens the
-PR; `status:validate` on a PR: Opus reviews it against the issue;
-`status:accepted`: merges itself once the required CI is green;
-`status:fix`: the agent works the review or the CI failure; `status:stuck`:
-a human's turn. Working on your own: claim the issue with
-`orga/bin/agent-claim <n>`, open the PR from `agent/issue-<n>` with
-`Closes #<n>` and a `## Assumptions` section, label it `status:validate`.
-CI on an `agent/*` head waits until an approver read the commit and
-commented exactly `/ci-ok <sha>` (ci.yml `hold`): job containers reach the
-docker socket, the Mac legs run on the host, and jobs see GEISTLIB_TOKEN.
-A patch touching `.gitea/`, `.github/`, `scripts/`, `Makefile`,
-`packaging/`, `install.sh`, `CLAUDE.md`, `CHANGELOG.md` or any `.git*` file
-is refused (`scripts/agent_gate.py`).
+**Agent heads wait for a human.** Agents (local Claude/Codex sessions,
+temporary environments; no model runs in CI) claim an issue with
+`geisten/orga` `bin/agent-claim <n>` and work on `agent/issue-<n>`
+(`geisten/orga` `AGENTS.md`). CI runs nothing of an `agent/*` head until an
+approver read the commit and commented exactly `/ci-ok <sha>` on the PR
+(ci.yml `hold`, `scripts/agent_gate.py ci-hold`; ci-ok.yml reruns the held
+run): job containers reach the docker socket, the Mac legs run on the
+host, and jobs see GEISTLIB_TOKEN. Each new push needs its own `/ci-ok`.

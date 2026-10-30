@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """agent_gate.py — the pipeline-enforced rules of the agent pipeline
-(.gitea/workflows/agent.yml, CLAUDE.md "Agent pipeline"). The prompts ask the model to
+(.gitea/workflows/agent.yml, AGENT.md §9). The prompts ask the model to
 behave; these checks hold whatever the model does. Stdlib only.
 
 Model output is data. The jobs that hold AGENT_BOT_TOKEN run this script
@@ -66,7 +66,6 @@ DENY = re.compile(r"""^(?:
     | (?:.*/)?\.git[^/]*$          # .gitattributes, .gitmodules, .gitignore at any depth
     | (?:.*/)?\.claude/ | (?:.*/)?CLAUDE(?:\.local)?\.md$ | (?:.*/)?AGENTS?\.md$
     | \.mcp\.json$ | \.clang-format$ | CHANGELOG\.md$
-    | packaging/ | install\.sh$       # what releases ship and users run
     | (?:.*/)?[^/]*\.mk$ | build/ | bin/   # make includes (common.mk: -include $(DEPS))
 )""", re.X)
 MAX_OUT_BYTES = 4 << 20

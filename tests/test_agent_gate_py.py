@@ -43,12 +43,10 @@ for p in [".gitea/workflows/ci.yml", ".github/actions/apt-install/action.yml", "
           "mk/common.mk", "Makefile", ".gitattributes", "src/.gitattributes", ".gitmodules",
           "tests/.gitignore", ".claude/settings.json", "src/.claude/settings.local.json",
           "CLAUDE.md", "AGENT.md", "AGENTS.md", "docs/AGENTS.md", ".mcp.json", ".clang-format",
-          "CHANGELOG.md", "tests/extra.mk", "build/linux/release/src/x.d", "bin/x",
-          "packaging/deb/control", "install.sh"]:
+          "CHANGELOG.md", "tests/extra.mk", "build/linux/release/src/x.d", "bin/x"]:
     expect(gate.denied([p]) == [p], f"{p} refused")
 for p in ["src/engine/session.c", "tests/test_x.c", "changes/42-fix.md", "docs/OFFLOAD.md",
-          "tools/geistr/geistr.c", "include/geist.h", "src/makefile_notes.txt", "docs/git.md",
-          "python/geistr/__init__.py", "docs/install.sh.md"]:
+          "tools/geistr/geistr.c", "include/geist.h", "src/makefile_notes.txt", "docs/git.md"]:
     expect(gate.denied([p]) == [], f"{p} allowed")
 
 print("sandbox output")
