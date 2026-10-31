@@ -34,9 +34,31 @@ defaults:
     shell: bash  # -eo pipefail: a step piped into tee still fails
 
 jobs:
+  # An agent/* head (model-written: orga/AGENTS.md) runs no CI until an
+  # approver commented "/ci-ok <sha>" for this commit (ci-ok.yml reruns the
+  # held run): job containers reach the docker socket, the Mac legs run on
+  # the host, and every job sees GEISTLIB_TOKEN. Every job that builds or
+  # runs the tree needs this one; other heads pass at once.
+  # scripts/agent_gate.py and its test are geistlib's, unchanged (sync them
+  # from there); only ci-hold and rerun-held are used here.
+  hold:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: hold an agent head until a human approves it
+        env:
+          GITEA_TOKEN: ${{ github.token }}
+        run: python3 scripts/agent_gate.py ci-hold
+
   # The list of main's required checks (.gitea/required-checks.txt) names
   # jobs of this file that exist; scripts/required_checks.py.
   required-checks:
+    needs: hold
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -45,6 +67,7 @@ jobs:
         run: python3 scripts/required_checks.py check
 
   test:
+    needs: hold
     strategy:
       fail-fast: false
       matrix:
@@ -88,6 +111,7 @@ jobs:
 
   # #4: the real runtime on the pinned geistlib, against the reference model.
   real:
+    needs: hold
     strategy:
       fail-fast: false
       matrix:
@@ -208,6 +232,7 @@ jobs:
   # Line coverage of src/ and tools/geistr/ (make coverage, tools/coverage.py):
   # the report goes to the job summary and an artifact. Not part of ci-ok.
   coverage:
+    needs: hold
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
@@ -256,6 +281,7 @@ jobs:
   # Only branches of this repository run here, never forks: the runner runs the
   # PR's code. Not part of ci-ok: a runner that is offline must not block merges.
   gpu:
+    needs: hold
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: geist-vulkan
     timeout-minutes: 60
