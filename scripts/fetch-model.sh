@@ -1,6 +1,8 @@
 #!/bin/sh
 # fetch-model.sh <catalog.json> <id> <dir> — the reference model for the real
 # tests, from its catalog entry: downloaded once, SHA-256 verified.
+# GEIST_MODEL_CACHE (a runner's env): a local directory checked first, so a
+# host runner on a slow network links its copy instead of downloading.
 set -eu
 catalog=$1 id=$2 dir=$3
 eval "$(python3 -c '
@@ -14,6 +16,12 @@ if [ -f "$path" ] && [ "$(sum "$path")" = "$sha" ]; then
     exit 0
 fi
 mkdir -p "$dir"
+src=${GEIST_MODEL_CACHE:-}/$file
+if [ -n "${GEIST_MODEL_CACHE:-}" ] && [ -f "$src" ] && [ "$(sum "$src")" = "$sha" ]; then
+    ln -f "$src" "$path" 2>/dev/null || cp "$src" "$path"
+    echo "reference model ready (local cache, SHA-256 verified): $path"
+    exit 0
+fi
 curl -fsSL --retry 3 --proto '=https' -o "$path.part" "$url"
 if [ "$(sum "$path.part")" != "$sha" ]; then
     rm -f "$path.part"
