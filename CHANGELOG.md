@@ -14,9 +14,9 @@
   - Conversations without such text tokenize exactly as before.
   - User-defined vocabulary (Qwen3's `<think>`, `<tool_call>`) is still
     matched, as in llama.cpp.
-  - Takes effect with an engine that has `geist_session_tokenize_plain`
-    (geistlib#409, #413). Until the engine pin moves past it, builds
-    tokenize as before (#261).
+  - Uses the engine's `geist_session_tokenize_plain` (geistlib#409,
+    #413), in the pinned engine since #263. A build against an older
+    engine tokenizes as before (#261).
 
 ### Features
 
@@ -223,6 +223,25 @@
 
 ### Engine
 
+- geistlib `52ef042` (from `eedaae6`, 487 commits) brings
+  `geist_session_tokenize_plain` (geistlib#409, #413): the protection of
+  #261 above is now live (#263).
+  - Tokenizer parity with llama.cpp: Llama 3 byte-BPE uses the llama3
+    pretokenizer (geistlib#399), SmolLM2 and the other GPT-2-regex vocabularies
+    llama.cpp's GPT-2 regex (geistlib#403), control-looking vocab strings are
+    special tokens (geistlib#404). Ordinary chats keep their ids; text with
+    digit runs, `...`, whitespace runs or contractions can tokenize
+    differently, now as `llama-tokenize` does.
+  - Llama 3.x GGUFs without `add_bos_token` report `add_bos` true
+    (geistlib#385), so their chats now start with `<|begin_of_text|>`, as in
+    llama.cpp.
+  - Llama 3.1-3.3 apply `rope_freqs` (geistlib#379); greedy decode uses the
+    full output head except on BitNet (geistlib#384); Gemma 3 decodes with
+    the right embedding scale. Llama 3.2 and Gemma 3 answers change.
+  - Also: GPT-OSS, Llama 4, DeepSeek-V2, GraniteMoE, OLMoE and Mixtral
+    families; MXFP4; MoE prefill staging and batched MoE decode; Metal tensor
+    GEMM work.
+  - No runtime source change was needed.
 - geistlib `eedaae6` (from `36e335d`) brings
   `geist_session_decode_batch` / `geist_model_decode_batch_max`
   (geistlib#26, experimental): one decode step for several sessions of one
