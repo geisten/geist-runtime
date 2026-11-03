@@ -647,8 +647,8 @@ static void openai_calls(FILE *f, const char *id, const struct calls *c, bool de
     fputc(']', f);
 }
 
-/* A chunk whose delta has the role (the first), content, or neither (the last). */
-static void openai_chunk(struct openai *a, bool role, const char *content, const char *finish) {
+/* A chunk whose delta has the role (the first), content, reasoning, or none (the last). */
+static void openai_delta(struct openai *a, bool role, const char *content, const char *reasoning, const char *finish) {
     fprintf(a->out, "data: {\"id\":\"%s\",\"object\":\"chat.completion.chunk\",\"created\":%lld,\"model\":", a->id,
             a->created);
     json_write(a->out, a->model);
@@ -657,9 +657,15 @@ static void openai_chunk(struct openai *a, bool role, const char *content, const
         fputs("\"role\":\"assistant\",", a->out);
     if (content)
         fputs("\"content\":", a->out), json_write(a->out, content);
+    if (reasoning) /* llama.cpp's and DeepSeek's field (#266) */
+        fputs("\"reasoning_content\":", a->out), json_write(a->out, reasoning);
     fputs("},\"finish_reason\":", a->out);
     finish ? (void) fprintf(a->out, "\"%s\"", finish) : (void) fputs("null", a->out);
     fputs("}]}\n\n", a->out);
+}
+
+static void openai_chunk(struct openai *a, bool role, const char *content, const char *finish) {
+    openai_delta(a, role, content, nullptr, finish);
 }
 
 static void openai_start(struct openai *a) {
@@ -694,7 +700,18 @@ static bool openai_part(void *ctx, const char *text, size_t len) {
     return fflush(a->out) != EOF;
 }
 
-/* Accepted, or still reasoning: the headers and role first, then an SSE comment. */
+/* The reasoning as it comes (#266): delta.reasoning_content; whole in done otherwise. */
+static bool openai_thought(void *ctx, const char *text, size_t len) {
+    (void) len;
+    struct openai *a = ctx;
+    if (!a->stream)
+        return true;
+    openai_start(a);
+    openai_delta(a, false, nullptr, text, nullptr);
+    return fflush(a->out) != EOF;
+}
+
+/* Accepted: the headers and role first; later an SSE comment (a sign of life). */
 static bool openai_alive(void *ctx) {
     struct openai *a = ctx;
     if (!a->stream)
@@ -714,7 +731,7 @@ static unsigned prompt_tokens(const geistr_stats *st) {
     return st->context_tokens > st->output_tokens ? st->context_tokens - st->output_tokens : 0;
 }
 
-static void openai_done(void *ctx, const geistr_stats *st, const char *answer) {
+static void openai_done(void *ctx, const geistr_stats *st, const char *answer, const char *thinking) {
     struct openai *a      = ctx;
     const char    *finish = finish_reason(st);
     unsigned       prompt = prompt_tokens(st);
@@ -772,6 +789,8 @@ static void openai_done(void *ctx, const geistr_stats *st, const char *answer) {
         fputs(",\"tool_calls\":", f), openai_calls(f, a->id, &calls, false);
     } else
         json_write(f, answer);
+    if (*thinking)
+        fputs(",\"reasoning_content\":", f), json_write(f, thinking);
     calls_free(&calls);
     fprintf(f, "},\"finish_reason\":\"%s\"}],\"usage\":%s}", finish, usage);
     respond_json(a->out, 200, &body);
@@ -791,6 +810,35 @@ static void openai_error(void *ctx, geistr_status status, const char *text) {
         return;
     }
     fputs("data: {\"error\":{\"message\":", a->out), json_write(a->out, text), fputs("}}\n\n", a->out);
+}
+
+/* Thinking per request (#266), as clients send it: OpenAI's reasoning_effort
+ * ("none" turns it off), and vLLM's and llama.cpp's chat_template_kwargs
+ * (enable_thinking, reasoning_effort). Off wins. false: not a valid value. */
+static bool openai_think(const struct json *j, struct svc_request *r) {
+    int   kwargs = json_field(j, 0, "chat_template_kwargs"), on = json_field(j, kwargs, "enable_thinking");
+    bool  ok     = true;
+    r->think     = -1;
+    for (int k = 0; k < 2 && ok; k++) {
+        int t = k ? json_field(j, kwargs, "reasoning_effort") : json_field(j, 0, "reasoning_effort");
+        if (t < 0 || json_null(j, t))
+            continue;
+        char         *level = json_string(j, t);
+        int           think = -1;
+        geistr_effort e     = GEISTR_EFFORT_DEFAULT;
+        ok                  = svc_think_level(level, &think, &e);
+        free(level);
+        if (ok && (r->think != 0))
+            r->think = think, r->effort = e;
+    }
+    if (ok && on >= 0 && !json_null(j, on)) {
+        ok = json_is_bool(j, on);
+        if (ok && !json_bool(j, on, true))
+            r->think = 0;
+        else if (ok && r->think < 0)
+            r->think = 1;
+    }
+    return ok;
 }
 
 static void openai_chat(const struct svc_options *o, struct held *pool, FILE *out, const struct json *j) {
@@ -816,6 +864,14 @@ static void openai_chat(const struct svc_options *o, struct held *pool, FILE *ou
     r.temperature = clamp(json_number(j, json_field(j, 0, "temperature"), 1)); /* OpenAI's default */
     r.max         = json_unsigned(j, max >= 0 ? max : json_field(j, 0, "max_tokens"), 0);
     read_stop(j, json_field(j, 0, "stop"), &r);
+    if (!openai_think(j, &r)) {
+        svc_free_request(&r);
+        error_json(out, 400, true,
+                   "reasoning_effort: none, minimal, low, medium, high or xhigh; chat_template_kwargs.enable_thinking: "
+                   "true or false",
+                   nullptr);
+        return;
+    }
     int           options = json_field(j, 0, "stream_options");
     struct openai a       = {.out     = out,
                              .model   = o->name,
@@ -824,7 +880,8 @@ static void openai_chat(const struct svc_options *o, struct held *pool, FILE *ou
                              .usage   = json_bool(j, json_field(j, options, "include_usage"), false)};
     snprintf(a.id, sizeof a.id, "chatcmpl-%x%x", (unsigned) a.created, ++serial);
     a.hold.tools = tools >= 0;
-    svc_chat(o, pool, &r, &(struct svc_sink) {&a, openai_part, openai_done, openai_error, openai_alive, fileno(a.out)});
+    svc_chat(o, pool, &r,
+             &(struct svc_sink) {&a, openai_part, openai_done, openai_error, openai_alive, fileno(a.out), openai_thought});
     free(a.hold.text);
     svc_free_request(&r);
 }
@@ -873,6 +930,20 @@ static void ollama_head(struct ollama *a, FILE *f) {
     fputs("{\"model\":", f), json_write(f, a->model), fprintf(f, ",\"created_at\":\"%s\"", now);
 }
 
+/* Ollama's message.thinking (#266), streamed as it comes. */
+static bool ollama_thought(void *ctx, const char *text, size_t len) {
+    (void) len;
+    struct ollama *a = ctx;
+    if (!a->stream)
+        return true;
+    if (!a->started)
+        a->started = true, stream_begin(a->out, "application/x-ndjson");
+    ollama_head(a, a->out);
+    fputs(",\"message\":{\"role\":\"assistant\",\"content\":\"\",\"thinking\":", a->out), json_write(a->out, text);
+    fputs("},\"done\":false}\n", a->out);
+    return fflush(a->out) != EOF;
+}
+
 static bool ollama_part(void *ctx, const char *text, size_t len) {
     (void) len;
     struct ollama *a = ctx;
@@ -907,7 +978,7 @@ static bool ollama_alive(void *ctx) {
     return fflush(a->out) != EOF;
 }
 
-static void ollama_done(void *ctx, const geistr_stats *st, const char *answer) {
+static void ollama_done(void *ctx, const geistr_stats *st, const char *answer, const char *thinking) {
     struct ollama *a = ctx;
     struct text    body;
     FILE          *f = a->stream ? a->out : text_open(&body);
@@ -936,6 +1007,8 @@ static void ollama_done(void *ctx, const geistr_stats *st, const char *answer) {
     fputs(",\"message\":{\"role\":\"assistant\",\"content\":", f);
     json_write(f, a->stream ? rest : calls.n ? (before ? before : "") : answer);
     free(before);
+    if (!a->stream && *thinking)
+        fputs(",\"thinking\":", f), json_write(f, thinking);
     if (calls.n)
         fputs(",\"tool_calls\":", f), ollama_calls(f, &calls);
     calls_free(&calls);
@@ -979,11 +1052,25 @@ static void ollama_chat(const struct svc_options *o, struct held *pool, FILE *ou
     r.temperature  = clamp(json_number(j, json_field(j, options, "temperature"), 0.8)); /* Ollama's default */
     r.max          = json_unsigned(j, json_field(j, options, "num_predict"), 0); /* -1: unlimited */
     read_stop(j, json_field(j, options, "stop"), &r);
+    /* think (#266): true, false, or a level ("high", "medium", "low"), as Ollama takes it */
+    int   think = json_field(j, 0, "think");
+    char *level = think >= 0 ? json_string(j, think) : nullptr;
+    r.think     = think < 0 || json_null(j, think) ? -1 : json_is_bool(j, think) ? json_bool(j, think, false) : -2;
+    r.strict    = true;
+    if (level && !svc_think_level(level, &r.think, &r.effort))
+        r.think = -2;
+    free(level);
+    if (r.think == -2) {
+        svc_free_request(&r);
+        error_json(out, 400, false, "think: true, false, \"high\", \"medium\" or \"low\"", nullptr);
+        return;
+    }
     struct ollama a = {.out    = out,
                        .model  = o->name,
                        .stream = json_bool(j, json_field(j, 0, "stream"), true),
                        .hold   = {.tools = tools >= 0}};
-    svc_chat(o, pool, &r, &(struct svc_sink) {&a, ollama_part, ollama_done, ollama_error, ollama_alive, fileno(a.out)});
+    svc_chat(o, pool, &r,
+             &(struct svc_sink) {&a, ollama_part, ollama_done, ollama_error, ollama_alive, fileno(a.out), ollama_thought});
     free(a.hold.text);
     svc_free_request(&r);
 }

@@ -234,32 +234,79 @@ static void draft(const char *path, const char *other) {
     printf("  draft model: the same answers, another vocabulary refused\n");
 }
 
-/* A thinking model (Qwen3): earlier reasoning leaves the history, as its
- * template has it; kept, the next answer was empty (#96). The continued
- * chat answers like one built from the plain messages. */
+/* send + drain, the answer into out and the reasoning's bytes into *thought. */
+static geistr_status ask_split(geistr_chat *c, size_t n, const geistr_message msgs[], char *out, size_t cap,
+                               size_t *thought) {
+    out[0]          = 0;
+    *thought        = 0;
+    geistr_status s = geistr_chat_send(c, n, msgs);
+    geistr_piece  p = {.size = sizeof p};
+    while (s == GEISTR_OK && (s = geistr_chat_next(c, &p)) == GEISTR_OK && p.part != GEISTR_PART_END)
+        if (p.part == GEISTR_PART_THINKING)
+            *thought += p.len;
+        else
+            strncat(out, p.text, cap - strlen(out) - 1);
+    return s;
+}
+
+/* A thinking model (Qwen3, Qwen3.5, ...), its reasoning on, off and as its
+ * template has it by default (#212, #266). The reasoning comes apart, never in
+ * the answer; off, there is none. Earlier reasoning leaves the history, as the
+ * templates have it; kept, Qwen3's next answer was empty (#96). The continued
+ * chat's context is what a fresh chat builds from the plain messages: the
+ * template's rendering, also after an answer with thinking off. */
 static void thinking(const char *path) {
     geistr_model *m = nullptr;
-    char          error[256], a[512], b[512], r[512];
+    char          error[256], a[2048], b[2048], r[2048];
     CHECK(geistr_model_open(path, test_opts(), &m, error, sizeof error) == GEISTR_OK, error);
     if (!m)
         return;
-    geistr_chat_opts o = GEISTR_CHAT_OPTS_INIT;
-    o.max_tokens       = 400;
-    o.reasoning        = GEISTR_REASONING_THINK_TAGS;
-    geistr_chat   *c = nullptr, *fresh = nullptr;
-    geistr_message q1 = {"user", "What is the capital of France? One word."};
-    geistr_message q2 = {"user", "And of Germany? One word."};
-    CHECK(geistr_chat_open(m, &o, &c) == GEISTR_OK && geistr_chat_open(m, &o, &fresh) == GEISTR_OK, "thinking: open");
-    CHECK(ask(c, 1, &q1, a, sizeof a) == GEISTR_OK && ask(c, 1, &q2, b, sizeof b) == GEISTR_OK, "thinking: two turns");
-    CHECK(strstr(b, "Berlin"), "thinking: the second answer after reasoning");
-    geistr_message all[] = {q1, {"assistant", a}, q2};
-    const uint32_t held = stats(c).context_tokens - stats(c).output_tokens;
-    CHECK(ask(fresh, 3, all, r, sizeof r) == GEISTR_OK && strstr(r, "Berlin"), "thinking: rebuilt answers");
-    const uint32_t built = stats(fresh).context_tokens - stats(fresh).output_tokens;
-    CHECK(held == built, "thinking: the continued context is the rebuilt one");
-    printf("  thinking model: \"%s\", then \"%s\" (rebuilt: \"%s\"), context %u and %u tokens\n", a, b, r, held, built);
-    geistr_chat_close(fresh);
-    geistr_chat_close(c);
+    geistr_model_info info = {.size = sizeof info};
+    CHECK(geistr_model_info_get(m, &info) == GEISTR_OK && info.thinking && info.thinking_off,
+          "thinking: the template has the switch");
+    static const geistr_reasoning modes[] = {GEISTR_REASONING_AUTO, GEISTR_REASONING_THINK_TAGS,
+                                             GEISTR_REASONING_THINK_OFF};
+    static const char *const      names[] = {"default", "on", "off"};
+    for (size_t k = 0; k < 3; k++) {
+        geistr_chat_opts o = GEISTR_CHAT_OPTS_INIT;
+        o.max_tokens       = 600;
+        o.reasoning        = modes[k];
+        o.thinking         = 1;
+        geistr_chat   *c = nullptr, *fresh = nullptr;
+        geistr_message q1 = {"user", "What is the capital of France? One word."};
+        geistr_message q2 = {"user", "And of Germany? One word."};
+        size_t         ta = 0, tb = 0, tr = 0;
+        CHECK(geistr_chat_open(m, &o, &c) == GEISTR_OK && geistr_chat_open(m, &o, &fresh) == GEISTR_OK, "thinking: open");
+        CHECK(ask_split(c, 1, &q1, a, sizeof a, &ta) == GEISTR_OK && ask_split(c, 1, &q2, b, sizeof b, &tb) == GEISTR_OK,
+              "thinking: two turns");
+        const bool thinks = modes[k] == GEISTR_REASONING_THINK_TAGS || (modes[k] == GEISTR_REASONING_AUTO && info.thinking == 1);
+        CHECK(!strstr(a, "think>") && !strstr(b, "think>"), "thinking: no <think> in the answers");
+        if (modes[k] == GEISTR_REASONING_THINK_OFF)
+            CHECK(!ta && !tb && stats(c).output_tokens < 100, "thinking off: no reasoning");
+        if (thinks)
+            CHECK(ta > 0, "thinking on: the reasoning comes apart");
+        if (thinks && info.thinking == 1)
+            CHECK(strstr(b, "Berlin"), "thinking: the second answer after reasoning");
+        geistr_message all[] = {q1, {"assistant", a}, q2};
+        const uint32_t held  = stats(c).context_tokens - stats(c).output_tokens;
+        CHECK(ask_split(fresh, 3, all, r, sizeof r, &tr) == GEISTR_OK, "thinking: rebuilt answers");
+        const uint32_t built = stats(fresh).context_tokens - stats(fresh).output_tokens;
+        CHECK(held == built, "thinking: the continued context is the rebuilt one");
+        printf("  thinking %s (%s): \"%.40s\" (%zu bytes of reasoning), then \"%.40s\", context %u and %u tokens\n",
+               names[k], info.thinking == 1 ? "thinks by default" : "thinks when asked", a, ta, b, held, built);
+        geistr_chat_close(fresh);
+        geistr_chat_close(c);
+    }
+    /* the default options (#266): the template's default, the reasoning apart */
+    geistr_chat     *d  = nullptr;
+    geistr_message   q  = {"user", "What is the capital of France? One word."};
+    size_t           td = 0;
+    geistr_chat_opts dflt = GEISTR_CHAT_OPTS_INIT;
+    dflt.max_tokens       = 600; /* a small model may reason on and on */
+    CHECK(geistr_chat_open(m, &dflt, &d) == GEISTR_OK, "thinking: default options");
+    CHECK(d && ask_split(d, 1, &q, a, sizeof a, &td) == GEISTR_OK && !strstr(a, "think>") && !td,
+          "thinking: by default the reasoning never reaches the answer");
+    geistr_chat_close(d);
     geistr_model_close(m);
 }
 
@@ -825,9 +872,13 @@ int main(void) {
         recurrent(rec);
         draft(rec, path);
     }
+    /* GEIST_TEST_MODEL_THINKING: one path, or several separated by ':' (#266) */
+    char        thinkers[4096];
     const char *thinker = getenv("GEIST_TEST_MODEL_THINKING");
-    if (thinker && access(thinker, R_OK) == 0)
-        thinking(thinker);
+    snprintf(thinkers, sizeof thinkers, "%s", thinker ? thinker : "");
+    for (char *save = nullptr, *one = strtok_r(thinkers, ":", &save); one; one = strtok_r(nullptr, ":", &save))
+        if (access(one, R_OK) == 0)
+            thinking(one);
     const char *large = getenv("GEIST_TEST_MODEL_LARGE");
     if (large && access(large, R_OK) == 0)
         window(large, "large model");

@@ -67,6 +67,16 @@ with serve(chat_model) as (oa, ol):
     parts = list(ol.chat(model=model, messages=[{'role': 'user', 'content': 'Name a color.'}], stream=True,
                          options={'temperature': 0, 'num_predict': 3}))
     assert not parts[0].done and parts[-1].done and parts[-1].eval_count == 3, parts
+    # a model that does not think: Ollama says so for think true (#266); off and OpenAI's effort are ignored
+    try:
+        ol.chat(model=model, messages=[{'role': 'user', 'content': 'Hi'}], think=True)
+        raise AssertionError('think true on a model that does not think')
+    except ollama.ResponseError as e:
+        assert e.status_code == 400 and 'thinking' in str(e), e
+    assert ol.chat(model=model, messages=[{'role': 'user', 'content': 'Name a color.'}], think=False,
+                   options={'temperature': 0, 'num_predict': 3}).message.content
+    assert strict(oa.chat.completions.create(model=model, messages=ask, temperature=0, max_tokens=3,
+                                             reasoning_effort='high')).choices[0].message.content
 print('openai and ollama clients, SmolLM2: one answer, stream, max_tokens, stop, usage passed')
 
 # ---- Qwen3: the OpenAI SDK's function-calling round-trip ------------------------
@@ -98,7 +108,25 @@ with serve(tools_model) as (oa, ol):
     one = ol.chat(model=model, messages=ask + [one.message, {'role': 'tool', 'content': json.dumps({'temperature_c': 4, 'sky': 'snow'})}],
                   tools=tools, options={'temperature': 0})
     assert '4' in one.message.content and not one.message.tool_calls, one
-print('openai and ollama clients, Qwen3: tool call round-trip (plain, streamed) passed')
+    # thinking (#266), as the clients switch it: the OpenAI SDK through extra_body (vLLM's and
+    # llama.cpp's chat_template_kwargs) or reasoning_effort, Ollama's think; the reasoning apart
+    q = [{'role': 'user', 'content': 'What is 2+3? One word.'}]
+    one = strict(oa.chat.completions.create(model=model, messages=q, temperature=0))
+    assert one.choices[0].message.model_extra.get('reasoning_content') and 'think>' not in one.choices[0].message.content, one
+    for off in ({'extra_body': {'chat_template_kwargs': {'enable_thinking': False}}}, {'reasoning_effort': 'none'}):
+        one = strict(oa.chat.completions.create(model=model, messages=q, temperature=0, **off))
+        assert 'reasoning_content' not in one.choices[0].message.model_extra, (off, one)
+        assert 'think>' not in one.choices[0].message.content and one.usage.completion_tokens < 40, (off, one)
+    chunks = [strict(c) for c in oa.chat.completions.create(model=model, messages=q, temperature=0, stream=True)]
+    assert any((c.choices[0].delta.model_extra or {}).get('reasoning_content') for c in chunks if c.choices), chunks[:3]
+    assert 'think>' not in ''.join(c.choices[0].delta.content or '' for c in chunks if c.choices)
+    off = ol.chat(model=model, messages=q, think=False, options={'temperature': 0})
+    assert not off.message.thinking and 'think>' not in off.message.content, off
+    on = ol.chat(model=model, messages=q, think=True, options={'temperature': 0})
+    assert on.message.thinking and 'think>' not in on.message.content, on
+    parts = list(ol.chat(model=model, messages=q, think=True, stream=True, options={'temperature': 0}))
+    assert any(p.message.thinking for p in parts) and 'think>' not in ''.join(p.message.content or '' for p in parts)
+print('openai and ollama clients, Qwen3: tool call round-trip (plain, streamed), thinking on/off and apart passed')
 
 # ---- bitnet-embed: embeddings.create (base64, the SDK default) and ollama embed --
 with serve(embed_model) as (oa, ol):

@@ -29,6 +29,8 @@ unsigned json_unsigned(const struct json *j, int t, unsigned dflt);
 /* An offset or size in a file: a whole number 0 to 2^53; false (v unchanged) if t is none. */
 bool   json_offset(const struct json *j, int t, uint64_t *v);
 bool   json_bool(const struct json *j, int t, bool dflt); /* true or false, else dflt */
+bool   json_is_bool(const struct json *j, int t); /* t is true or false */
+bool   json_null(const struct json *j, int t);    /* t is null */
 
 /* A top-level string or number of one object as text into out ("" if absent). */
 void json_get(const char *object, const char *key, char *out, size_t cap);

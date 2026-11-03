@@ -1323,9 +1323,42 @@ def section_tools():
     # without tools: a plain answer, no call format
     done = json.loads(call('/v1/chat/completions', {'messages': [{'role': 'user', 'content': 'Say hi.'}], 'temperature': 0}))
     assert done['choices'][0]['finish_reason'] == 'stop' and 'tool_calls' not in done['choices'][0]['message'], done
+    # thinking (#266): Qwen3 thinks by default; its reasoning apart, never in the answer; off per request
+    q = [{'role': 'user', 'content': 'What is 2+3? One word.'}]
+    message = json.loads(call('/v1/chat/completions', {'messages': q, 'temperature': 0}))['choices'][0]['message']
+    assert message.get('reasoning_content') and 'think>' not in message['content'], message
+    for off in ({'chat_template_kwargs': {'enable_thinking': False}}, {'reasoning_effort': 'none'}):
+        message = json.loads(call('/v1/chat/completions', {'messages': q, 'temperature': 0, **off}))['choices'][0]['message']
+        assert 'reasoning_content' not in message and 'think>' not in message['content'], (off, message)
+    body = call('/v1/chat/completions', {'messages': q, 'temperature': 0, 'stream': True})
+    deltas = [json.loads(l[6:])['choices'][0]['delta'] for l in body.split('\n') if l.startswith('data: {"id"')]
+    deltas = [d for d in deltas if d]
+    assert any(d.get('reasoning_content') for d in deltas) and 'think>' not in ''.join(d.get('content', '') for d in deltas), body[:2000]
+    first = next(i for i, d in enumerate(deltas) if d.get('content'))
+    assert not any(d.get('reasoning_content') for d in deltas[first:]), body[:2000]  # the reasoning first, then the answer
+    done = json.loads(call('/api/chat', {'messages': q, 'think': False, 'stream': False, 'options': {'temperature': 0}}))
+    assert 'thinking' not in done['message'] and 'think>' not in done['message']['content'], done
+    done = json.loads(call('/api/chat', {'messages': q, 'think': True, 'stream': False, 'options': {'temperature': 0}}))
+    assert done['message']['thinking'] and 'think>' not in done['message']['content'], done
+    lines = [json.loads(l) for l in call('/api/chat', {'messages': q, 'think': 'low', 'options': {'temperature': 0}}).splitlines()]
+    assert any(l['message'].get('thinking') for l in lines if not l['done']) and lines[-1]['done'], lines[:3]
+    c = http.client.HTTPConnection('127.0.0.1', port, timeout=300)
+    c.request('POST', '/v1/chat/completions', body=json.dumps({'messages': q, 'reasoning_effort': 'maximum'}))
+    r = c.getresponse(); bad = r.read().decode(); c.close()
+    assert r.status == 400 and 'reasoning_effort' in bad, (r.status, bad)
+    # the socket: think false, and the reasoning as parts only when asked
+    s = unix.socket(unix.AF_UNIX); s.connect(sock)
+    s.sendall((json.dumps({'op': 'chat', 'think': False, 'messages': q}) + '\n').encode())
+    lines = s.makefile().read().splitlines(); s.close()
+    assert all('thinking' not in l for l in lines) and json.loads(lines[-1])['output_tokens'] < 40, lines
+    s = unix.socket(unix.AF_UNIX); s.connect(sock)
+    s.sendall((json.dumps({'op': 'chat', 'thinking': True, 'max': 20, 'messages': q}) + '\n').encode())
+    lines = s.makefile().read().splitlines(); s.close()
+    assert json.loads(lines[0])['part'] == 'thinking', lines
     service.send_signal(signal.SIGTERM)
     assert service.wait(60) == 0
-    print('geistr serve --http tools (Qwen3): OpenAI call (plain, streamed), the result back, Ollama call and result, no tools passed')
+    print('geistr serve --http tools (Qwen3): OpenAI call (plain, streamed), the result back, Ollama call and result, no tools, '
+          'thinking on/off per request (reasoning_content, message.thinking, socket think) passed')
 
 # ---- bench and the speed chart --------------------------------------------------
 def section_bench():

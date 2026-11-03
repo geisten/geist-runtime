@@ -94,9 +94,11 @@ static int dial(const char *path) {
 /* A conversation the service holds: its chat (KV cache), the options it was
  * opened with, and the messages in it. */
 struct held {
-    geistr_chat *chat;
-    double       temperature;
-    char        *stop; /* the stop strings, joined by \x1f; nullptr for none */
+    geistr_chat     *chat;
+    double           temperature;
+    geistr_reasoning reasoning; /* thinking on, off or the default (#266) */
+    geistr_effort    effort;
+    char            *stop; /* the stop strings, joined by \x1f; nullptr for none */
     size_t       n;
     char       **role, **content;
     uint64_t     used;
@@ -146,8 +148,26 @@ static char *stop_key(const struct svc_request *r) {
     return key;
 }
 
-static bool same_options(const struct held *c, double temperature, const char *stop) {
-    return c->temperature == temperature && (c->stop ? stop && !strcmp(c->stop, stop) : !stop);
+static bool same_options(const struct held *c, double temperature, geistr_reasoning reasoning, geistr_effort effort,
+                         const char *stop) {
+    return c->temperature == temperature && c->reasoning == reasoning && c->effort == effort &&
+           (c->stop ? stop && !strcmp(c->stop, stop) : !stop);
+}
+
+bool svc_think_level(const char *level, int *think, geistr_effort *effort) {
+    static const struct {
+        const char   *name;
+        int           think;
+        geistr_effort effort;
+    } levels[] = {{"none", 0, GEISTR_EFFORT_DEFAULT},   {"minimal", 1, GEISTR_EFFORT_LOW},
+                  {"low", 1, GEISTR_EFFORT_LOW},        {"medium", 1, GEISTR_EFFORT_MEDIUM},
+                  {"high", 1, GEISTR_EFFORT_HIGH},      {"xhigh", 1, GEISTR_EFFORT_HIGH}};
+    for (size_t i = 0; level && i < sizeof levels / sizeof *levels; i++)
+        if (!strcmp(level, levels[i].name)) {
+            *think = levels[i].think, *effort = levels[i].effort;
+            return true;
+        }
+    return false;
 }
 
 static bool same_role(const char *a, const char *b) {
@@ -235,6 +255,27 @@ void svc_chat(const struct svc_options *o, struct held *pool, const struct svc_r
         out->error(out->ctx, GEISTR_INVALID, "an embedding model does not chat: POST /v1/embeddings or /api/embed");
         return;
     }
+    /* Thinking (#266): the request's switch, else the server's default. A
+     * model without thinking ignores off (and on, unless strict: Ollama says
+     * so); one that cannot stop thinking refuses off. */
+    geistr_model_info info      = {.size = sizeof info};
+    geistr_reasoning  reasoning = o->reasoning;
+    geistr_effort     effort    = GEISTR_EFFORT_DEFAULT;
+    (void) geistr_model_info_get(o->model, &info);
+    if (r->think < 0 && o->think && info.thinking && (o->think == 1 || info.thinking_off))
+        reasoning = o->think == 1 ? GEISTR_REASONING_THINK_TAGS : GEISTR_REASONING_THINK_OFF;
+    if (r->think == 1 && !info.thinking && r->strict) {
+        out->error(out->ctx, GEISTR_INVALID, "this model does not support thinking");
+        return;
+    }
+    if (r->think == 0 && info.thinking && !info.thinking_off) {
+        out->error(out->ctx, GEISTR_INVALID, "this model cannot turn thinking off");
+        return;
+    }
+    if (r->think >= 0 && info.thinking)
+        reasoning = r->think ? GEISTR_REASONING_THINK_TAGS : GEISTR_REASONING_THINK_OFF;
+    if (r->think == 1 && info.thinking)
+        effort = r->effort;
     char *stop = stop_key(r);
     /* The conversation that holds the most of this one (same options); else
      * a free slot, else the least recently used. */
@@ -242,7 +283,7 @@ void svc_chat(const struct svc_options *o, struct held *pool, const struct svc_r
     struct held *c    = nullptr;
     size_t       keep = 0;
     for (size_t i = 0; i < o->chats; i++)
-        if (pool[i].chat && same_options(&pool[i], r->temperature, stop)) {
+        if (pool[i].chat && same_options(&pool[i], r->temperature, reasoning, effort, stop)) {
             size_t h = common(&pool[i], m, n);
             if (!c || h > keep)
                 c = &pool[i], keep = h;
@@ -257,12 +298,13 @@ void svc_chat(const struct svc_options *o, struct held *pool, const struct svc_r
                 slot = &pool[i];
         c    = slot;
         keep = 0;
-        if (c->chat && !same_options(c, r->temperature, stop))
+        if (c->chat && !same_options(c, r->temperature, reasoning, effort, stop))
             held_close(c);
     }
     if (!c->chat) {
         geistr_chat_opts opts = GEISTR_CHAT_OPTS_INIT;
-        opts.reasoning        = o->reasoning;
+        opts.reasoning        = reasoning;
+        opts.effort           = effort;
         opts.temperature      = (float) r->temperature;
         opts.overflow         = GEISTR_OVERFLOW_DROP_OLDEST;
         opts.thinking         = 1; /* its pieces keep a stream alive */
@@ -274,6 +316,8 @@ void svc_chat(const struct svc_options *o, struct held *pool, const struct svc_r
             return;
         }
         c->temperature = r->temperature;
+        c->reasoning   = reasoning;
+        c->effort      = effort;
         c->stop        = stop, stop = nullptr;
     }
     free(stop);
@@ -310,17 +354,27 @@ void svc_chat(const struct svc_options *o, struct held *pool, const struct svc_r
     for (size_t i = keep; i < n; i++)
         (void) held_push(c, m[i].role, m[i].content);
     /* Stream the answer; a client that goes away stops it. */
-    char        *text     = nullptr;
-    size_t       text_len = 0;
+    char        *text     = nullptr, *thinking = nullptr;
+    size_t       text_len = 0, thinking_len = 0;
     FILE        *answer   = open_memstream(&text, &text_len);
+    FILE        *thought  = open_memstream(&thinking, &thinking_len);
+    bool         reasoned = false; /* the reasoning's first text, after its line breaks, went out */
     geistr_piece p        = {.size = sizeof p};
     bool         gone     = out->alive && !out->alive(out->ctx); /* accepted: a stream's headers go now */
     time_t       beat     = time(nullptr);
     while (!gone && (s = geistr_chat_next(c->chat, &p)) == GEISTR_OK && p.part != GEISTR_PART_END) {
         if (*o->stop) /* SIGTERM: the answer ends now, as stopped, and the service after it */
             geistr_chat_cancel(c->chat);
-        if (p.part == GEISTR_PART_THINKING) { /* hidden reasoning: a sign of life about once a second */
-            if (out->alive && time(nullptr) != beat)
+        if (p.part == GEISTR_PART_THINKING) { /* the reasoning (#266), or a sign of life about once a second */
+            /* without the line breaks around it, as llama.cpp's reasoning_content */
+            const char  *from = reasoned ? p.text : p.text + strspn(p.text, " \t\r\n");
+            const size_t len  = p.len - (size_t) (from - p.text);
+            reasoned          = reasoned || len;
+            if (thought && len)
+                fwrite(from, 1, len, thought);
+            if (out->thought && len)
+                gone = !out->thought(out->ctx, from, len);
+            else if (!out->thought && out->alive && time(nullptr) != beat)
                 beat = time(nullptr), gone = !out->alive(out->ctx);
         } else if (p.part == GEISTR_PART_ANSWER) {
             if (answer)
@@ -335,18 +389,23 @@ void svc_chat(const struct svc_options *o, struct held *pool, const struct svc_r
     }
     if (answer)
         fclose(answer);
+    if (thought)
+        fclose(thought);
+    for (size_t k = thinking ? strlen(thinking) : 0; k && strchr(" \t\r\n", thinking[k - 1]); k--)
+        thinking[k - 1] = 0;
     (void) held_push(c, "assistant", text ? text : "");
     geistr_stats st = {.size = sizeof st};
     (void) geistr_chat_stats(c->chat, &st);
     if (st.dropped_messages) /* the runtime's conversation is shorter now: match anew next time */
         held_keep(c, 0), (void) geistr_chat_rewind(c->chat, 0);
     if (!gone && (s == GEISTR_OK || s == GEISTR_CANCELLED))
-        out->done(out->ctx, &st, text ? text : "");
+        out->done(out->ctx, &st, text ? text : "", thinking ? thinking : "");
     else if (!gone) {
         out->error(out->ctx, GEISTR_BACKEND, geistr_chat_error(c->chat));
         held_close(c);
     }
     free(text);
+    free(thinking);
 }
 
 /* ---- the socket protocol: one JSON object per line ----------------------- */
@@ -358,8 +417,15 @@ static bool line_part(void *ctx, const char *text, size_t len) {
     return fflush(out) != EOF;
 }
 
-static void line_done(void *ctx, const geistr_stats *st, const char *answer) {
-    (void) answer;
+static bool line_thought(void *ctx, const char *text, size_t len) {
+    (void) len;
+    FILE *out = ctx;
+    fputs("{\"part\":\"thinking\",\"text\":", out), json_write(out, text), fputs("}\n", out);
+    return fflush(out) != EOF;
+}
+
+static void line_done(void *ctx, const geistr_stats *st, const char *answer, const char *thinking) {
+    (void) answer, (void) thinking;
     fprintf(ctx,
             "{\"done\":true,\"finish\":\"%s\",\"input_tokens\":%u,\"context_tokens\":%u,\"output_tokens\":%u,"
             "\"prefill_ms\":%.1f,\"generation_ms\":%.1f,\"total_ms\":%.1f}\n",
@@ -377,8 +443,17 @@ static void chat_request(const struct svc_options *o, struct held *pool, FILE *o
     struct svc_request r = {.messages    = calloc(n ? n : 1, sizeof *r.messages),
                             .n           = n,
                             .temperature = json_number(j, json_field(j, 0, "temperature"), 0),
-                            .max         = json_unsigned(j, json_field(j, 0, "max"), 0)};
+                            .max         = json_unsigned(j, json_field(j, 0, "max"), 0),
+                            .think       = -1};
     bool ok   = r.messages && n;
+    int  think = json_field(j, 0, "think"); /* #266: true, false; "effort": "low", "medium", "high" */
+    if (think >= 0)
+        r.think = json_bool(j, think, false) ? 1 : 0, r.strict = true;
+    char *effort = json_string(j, json_field(j, 0, "effort"));
+    int   level  = 1;
+    if (effort && (!svc_think_level(effort, &level, &r.effort) || !level))
+        ok = false;
+    free(effort);
     int  item = -1;
     for (size_t k = 0; ok && k < n; k++) {
         item                  = json_next(j, list, item);
@@ -386,10 +461,11 @@ static void chat_request(const struct svc_options *o, struct held *pool, FILE *o
         r.messages[k].content = json_string(j, json_field(j, item, "content"));
         ok                    = r.messages[k].role && r.messages[k].content;
     }
+    const bool show = json_bool(j, json_field(j, 0, "thinking"), false);
     if (ok)
-        svc_chat(o, pool, &r, &(struct svc_sink) {out, line_part, line_done, line_error, nullptr, -1}); /* ponytail: a unix client half-closes after its line (nc), so EOF is not "gone" there */
+        svc_chat(o, pool, &r, &(struct svc_sink) {out, line_part, line_done, line_error, nullptr, -1, show ? line_thought : nullptr}); /* ponytail: a unix client half-closes after its line (nc), so EOF is not "gone" there */
     else
-        reply_error(out, "invalid", "messages: a list of messages, each with role and content");
+        reply_error(out, "invalid", "messages: a list of messages, each with role and content; effort: low, medium or high");
     svc_free_request(&r);
 }
 
@@ -512,7 +588,7 @@ geistr_status service_info(const char *path, char *out, size_t cap) {
 }
 
 geistr_status service_chat(const char *path, size_t n, const geistr_message *m, unsigned max,
-                           double temperature, svc_part_fn part, svc_cancel_fn cancel, void *ctx,
+                           double temperature, int think, svc_part_fn part, svc_cancel_fn cancel, void *ctx,
                            struct svc_stats *stats, char *error, size_t cap) {
     *stats = (struct svc_stats) {};
     if (cap)
@@ -526,7 +602,10 @@ geistr_status service_chat(const char *path, size_t n, const geistr_message *m, 
     size_t len     = 0;
     FILE  *req     = open_memstream(&request, &len);
     if (req) {
-        fprintf(req, "{\"op\":\"chat\",\"max\":%u,\"temperature\":%g,\"messages\":[", max, temperature);
+        fprintf(req, "{\"op\":\"chat\",\"max\":%u,\"temperature\":%g,", max, temperature);
+        if (think >= 0)
+            fprintf(req, "\"think\":%s,", think ? "true" : "false");
+        fputs("\"messages\":[", req);
         for (size_t i = 0; i < n; i++) {
             fputs(i ? ",{\"role\":" : "{\"role\":", req), json_write(req, m[i].role);
             fputs(",\"content\":", req), json_write(req, m[i].content), fputs("}", req);

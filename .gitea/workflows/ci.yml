@@ -162,9 +162,17 @@ jobs:
           key: geist-model-qwen3-0.6b-q8-9465e63a22ad
       - name: fetch thinking model (Qwen3 0.6B from the catalog, SHA-verified)
         run: sh scripts/fetch-model.sh models/catalog.json qwen3-0.6b geistlib/gguf_artifacts
+      # #266: a model that thinks only when asked (its template's default is off)
+      - name: cache thinking model (Qwen3.5 0.8B)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: geistlib/gguf_artifacts/Qwen3.5-0.8B-Q8_0.gguf
+          key: geist-model-qwen35-0.8b-q8-0ad885ffd4bb
+      - name: fetch thinking model (Qwen3.5 0.8B from the catalog, SHA-verified)
+        run: sh scripts/fetch-model.sh models/catalog.json qwen35-0.8b geistlib/gguf_artifacts
       - name: real runtime tests
         env:
-          GEIST_TEST_MODEL_THINKING: geistlib/gguf_artifacts/Qwen3-0.6B-Q8_0.gguf
+          GEIST_TEST_MODEL_THINKING: geistlib/gguf_artifacts/Qwen3-0.6B-Q8_0.gguf:geistlib/gguf_artifacts/Qwen3.5-0.8B-Q8_0.gguf
         run: make test-real 2>&1 | tee build/logs/test-real.log
       - name: cache embedding model (BitNet-embedding 0.6B)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

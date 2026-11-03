@@ -206,6 +206,25 @@ static void test_thinking(void) {
 
     geistr_chat_close(quiet);
     geistr_chat_close(shown);
+
+    /* #266: AUTO, the template's default, is the default; the stub's template has no thinking. */
+    CHECK(((geistr_chat_opts) GEISTR_CHAT_OPTS_INIT).reasoning == GEISTR_REASONING_AUTO, "AUTO is the default");
+    geistr_model_info info = {.size = sizeof info};
+    CHECK(geistr_model_info_get(model, &info) == GEISTR_OK && info.thinking == 0 && !info.thinking_off && !info.effort,
+          "the stub's template does nothing with thinking");
+    opts.reasoning      = GEISTR_REASONING_AUTO;
+    opts.effort         = GEISTR_EFFORT_LOW;
+    geistr_chat *autom = open_chat(model, opts);
+    CHECK(geistr_chat_send(autom, 1, &msg) == GEISTR_OK && drain(autom, &got) == GEISTR_OK &&
+              !strcmp(got.answer, "Echo: Why?") && !got.thinking[0],
+          "AUTO on a model without thinking: as NONE");
+    geistr_chat_close(autom);
+    geistr_chat *bad = nullptr;
+    opts.reasoning   = (geistr_reasoning) 99;
+    CHECK(geistr_chat_open(model, &opts, &bad) == GEISTR_INVALID && !bad, "an unknown reasoning is refused");
+    opts.reasoning = GEISTR_REASONING_AUTO;
+    opts.effort    = (geistr_effort) 9;
+    CHECK(geistr_chat_open(model, &opts, &bad) == GEISTR_INVALID && !bad, "an unknown effort is refused");
     geistr_model_close(model);
 }
 

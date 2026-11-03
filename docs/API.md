@@ -149,21 +149,17 @@ job in the stateful design (#4, `GEISTR_OVERFLOW_DROP_OLDEST`).
 1. **UTF-8**: complete, validated code points only (no overlongs,
    surrogates or values above U+10FFFF). Invalid model output ends the
    answer with `GEISTR_BACKEND` and finish `ERROR`.
-2. **Thinking** (`GEISTR_REASONING_THINK_TAGS`): `<think>` … `</think>` blocks
-   before the answer become `GEISTR_PART_THINKING` (or are discarded without
-   `opts.thinking`), without their closing markers. Nesting up to 16 deep;
-   beyond that, and for unfinished thinking, the rest is discarded and never
-   shown. Up to 32 leading whitespace bytes are kept, so an answer may start
-   with whitespace, as in geist-serve. A `<think>` after the answer has
-   started is literal text.
-   `GEISTR_REASONING_THINK_OFF` (#212) is a thinking model told not to
-   think: the generation prompt ends in the empty block its template
-   renders for `enable_thinking=false` (ChatML/Qwen: `<think>\n\n</think>\n\n`,
-   `tpl_think_off`), so no thinking tokens are generated. It is part of the
-   prompt, not of the answer; it stays in the context after the answer, while
-   a conversation rendered anew (dropped turns, resume) has it only before the
-   new answer, as the template renders earlier turns. A chat format without such a switch makes `geistr_chat_open`
-   return `GEISTR_FORMAT`.
+2. **Thinking** (any reasoning but `GEISTR_REASONING_NONE`, and `AUTO` on a
+   model that thinks): `<think>` … `</think>` blocks before the answer
+   (Gemma 4: `<|channel>thought` … `<channel|>`) become
+   `GEISTR_PART_THINKING` (or are discarded without `opts.thinking`),
+   without their markers. Where the prompt opened the block already
+   (Qwen3.5+'s `<think>\n`), the text starts as reasoning. Nesting up to 16
+   deep; beyond that, and for unfinished thinking, the rest is discarded and
+   never shown. Up to 32 leading whitespace bytes are kept, so an answer may
+   start with whitespace, as in geist-serve. A `<think>` after the answer
+   has started is literal text. What the prompt gets for thinking on and off
+   is in [Thinking on and off](#thinking-on-and-off-212-266).
 3. **Stop strings** (D11): the answer ends before the first match; a
    possible start of one is held back across tokens.
 
@@ -182,6 +178,60 @@ moved with only names changed; their tests are ported unchanged
 a 6 MB bounded discard, 1 MB of thinking on character boundaries).
 geist-serve's reasoning cases (`tests/app/reasoning_test.py`) also run
 through the API (`tests/test_api.c`, model `stub:raw`).
+
+## Thinking on and off (#212, #266)
+
+Hybrid reasoning models switch thinking in their chat template
+(`enable_thinking`, and Qwen3.6+ also `reasoning_effort`). The runtime reads
+the switch from the GGUF's `tokenizer.chat_template` (`tpl_thinking_of`, by
+the templates' own Jinja conditions) and renders what the template renders:
+
+| template | default | on (`THINK_TAGS`) | off (`THINK_OFF`) | earlier answers |
+|---|---|---|---|---|
+| Qwen3 | on | generation prompt as it is | + `<think>\n\n</think>\n\n` | text only |
+| Qwen3.5 | off | + `<think>\n` | + `<think>\n\n</think>\n\n` | text only |
+| Qwen3.6+ (Qwen3.8, Bonsai 2) | on, effort `xhigh` | + `<think>\n`; the effort's instruction leads the system turn (a turn of its own without a system message) | + `<think>\n\n</think>\n\n`, no instruction | `<think>\n\n</think>\n\n` + text (`preserve_thinking`) |
+| Gemma 4 | off | `<\|think\|>\n` opens the system turn (a turn of its own without one) | as it is | text only |
+| other ChatML with `<think>` | on | as it is | `GEISTR_FORMAT` | text only |
+
+- `GEISTR_REASONING_AUTO` is the template's default; on a model without
+  thinking it is `NONE`. `geistr_model_info.thinking` says which (1: thinks
+  unless told not to, 2: only when asked), `thinking_off` whether off
+  works, `effort` whether `geistr_chat_opts.effort` changes anything.
+- `geistr_chat_opts.effort` (`LOW`, `MEDIUM`, `HIGH`; `DEFAULT` the
+  template's `xhigh`) is Qwen3.6+'s `reasoning_effort`: `low` and `xhigh`
+  put an instruction into the system turn, `medium` none. Only with
+  thinking on, as in the template.
+- `AUTO` is the default (`GEISTR_CHAT_OPTS_INIT`, nullptr options; before
+  #266 it was `NONE`): a caller that sets nothing gets the template's
+  default and the reasoning apart from the answer. `NONE` keeps the old
+  behaviour for callers that want the raw text: no switch rendered, the
+  generated text as it is, so a thinking model's `<think>` arrives as
+  answer text.
+- **Earlier answers.** The runtime keeps no reasoning, so an earlier answer
+  is what the template renders for an assistant message without
+  `reasoning_content`. Where the context holds something else after an
+  answer (its reasoning; Qwen3's and Qwen3.5's empty block of thinking
+  off), the next send takes the answer out of the context and puts it back
+  as the template has it (a prefill of the answer, #96). Qwen3.6+ with
+  thinking off keeps its context as it is: the template has the empty block
+  there too.
+- **Checked against the templates.** `tests/test_template.c` renders the
+  real templates' conversations (`tests/fixtures/templates/`: system
+  prompt or none, earlier turns) with thinking unset, on, off and each
+  effort, and compares the bytes with transformers' `apply_chat_template`
+  (`tools/thinking_goldens.py`, jinja2), which agree with llama.cpp's
+  `/apply-template` in every explicit mode. On the real models (Qwen3
+  0.6B, Qwen3.5 0.8B, Gemma 4 E2B: default, on, off; Bonsai 2 27B: off, on
+  at `low`, default) the context before a second answer has as many tokens
+  as `llama-tokenize` gives for the template's text of the conversation;
+  `test_real` checks that a continued chat's context equals a fresh chat's
+  built from the plain messages, in each mode.
+- **Not rendered.** Qwen3.5+ and Gemma 4 trim message contents (`|trim`);
+  the runtime does not, so a message with leading or trailing whitespace
+  differs from the template there. Qwen3.5's tool-call turns after the last
+  user message (`<think>` blocks in a tool loop) are not rendered: tool
+  calling is Qwen3's format only.
 
 ## The runtime on geistlib (#4)
 

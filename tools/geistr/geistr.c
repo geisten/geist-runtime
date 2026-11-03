@@ -10,7 +10,7 @@
  *   geistr config [key [value]]      settings, remembered between runs (geistr.conf)
  *   geistr bench [model…]            measure tokens/s on CPU and GPU (shown by catalog)
  *   geistr bench --compare [A [B]]   two engines' bench speeds side by side, the change in %
- *   geistr serve <model> [--socket=PATH] [--chats N] [--http[=ADDR:PORT]] [--max-request=MiB]
+ *   geistr serve <model> [--socket=PATH] [--chats N] [--http[=ADDR:PORT]] [--max-request=MiB] [--thinking=on|off]
  *                                    the model as a service on a Unix socket (service.h)
  *   geistr serve --http[=ADDR:PORT] …  every installed model, the one a request names loaded
  *   geistr chat --socket[=PATH]      chat with that service
@@ -106,7 +106,8 @@ static int usage(void) {
           "       geistr bench --compare [A [B]] two geistlib commits' bench speeds and the change in %\n"
           "       geistr serve <model> [--socket=PATH] [--chats N] [--http[=ADDR:PORT]] [--max-request=MiB]\n"
           "                                       (--http: OpenAI and Ollama APIs, default 127.0.0.1:11434;\n"
-          "                                        --max-request: one request's size, default 16 MiB, larger: 413)\n"
+          "                                        --max-request: one request's size, default 16 MiB, larger: 413;\n"
+          "                                        --thinking=on|off: for requests that do not say, over the settings)\n"
           "       geistr serve --http[=ADDR:PORT] [...]  every installed model; a request's model is loaded\n"
           "                                       in place of the one before (one in memory)\n"
           "       geistr chat --socket[=PATH]\n"
@@ -290,8 +291,9 @@ static int catalog(bool installed_only, bool available_only, bool json) {
                 printf(",\"gpu\":");
                 local[i].gpu.rate > 0 ? (void) printf("%.1f", local[i].gpu.rate) : (void) printf("null");
                 printf("}");
-                bool thinks = m->reasoning_format && !strcmp(m->reasoning_format, "think_tags");
-                printf(",\"thinking\":%s", !thinks ? "null" : thinking_on(m->id) ? "\"on\"" : "\"off\"");
+                bool      thinks = m->reasoning_format && !strcmp(m->reasoning_format, "think_tags");
+                const int on     = thinking_choice(m->id); /* default: as its template has it (#266) */
+                printf(",\"thinking\":%s", !thinks ? "null" : on < 0 ? "\"default\"" : on ? "\"on\"" : "\"off\"");
                 if (decision_config_file) {
                     printf(",\"decision\":{\"configured\":%s,\"profile\":", permission && permission->enabled ? "true" : "false");
                     if (permission && permission->profile) json_write(stdout, geistr_decision_profile_name(permission->profile));
@@ -320,8 +322,8 @@ static int catalog(bool installed_only, bool available_only, bool json) {
                 else if (f->resource != GEISTR_RESOURCE_FITS)
                     printf("  %s %s", f->resource == GEISTR_RESOURCE_UNAVAILABLE ? "✗" : "⚠",
                            limit_text(f->resource_reason));
-                if (m->reasoning_format && !strcmp(m->reasoning_format, "think_tags") && !thinking_on(m->id))
-                    printf("  thinking off");
+                if (m->reasoning_format && !strcmp(m->reasoning_format, "think_tags") && thinking_choice(m->id) >= 0)
+                    printf("  thinking %s", thinking_choice(m->id) ? "on" : "off");
                 if (permission && permission->enabled)
                     printf("  decision configured (%s; support not loaded)", geistr_decision_profile_name(permission->profile));
                 putchar('\n');
@@ -362,7 +364,7 @@ static bool offer_download(const geistr_catalog_entry *m, geistr_install state) 
 int resolve(const char *model, char *path, size_t cap, geistr_reasoning *reasoning, int *embedding) {
     geistr_catalog *c   = load_catalog();
     const char     *base = strrchr(model, '/') ? strrchr(model, '/') + 1 : model;
-    *reasoning           = GEISTR_REASONING_NONE;
+    *reasoning           = GEISTR_REASONING_AUTO; /* the runtime reads the switch from the template (#266) */
     if (embedding)
         *embedding = 0;
     bool is_path         = strchr(model, '/') || strstr(model, ".gguf") || !strncmp(model, "stub:", 5);
@@ -370,8 +372,10 @@ int resolve(const char *model, char *path, size_t cap, geistr_reasoning *reasoni
         const geistr_catalog_entry *m = geistr_catalog_get(c, i);
         if (is_path ? strcmp(base, m->file) : strcmp(model, m->id))
             continue;
-        if (m->reasoning_format && !strcmp(m->reasoning_format, "think_tags")) /* off: geistr config (#212) */
-            *reasoning = thinking_on(m->id) ? GEISTR_REASONING_THINK_TAGS : GEISTR_REASONING_THINK_OFF;
+        const int on = thinking_choice(m->id); /* geistr config (#212): on, off, or the template's default */
+        const bool thinks = m->reasoning_format && !strcmp(m->reasoning_format, "think_tags");
+        if (on == 1 || (on == 0 && thinks))
+            *reasoning = on ? GEISTR_REASONING_THINK_TAGS : GEISTR_REASONING_THINK_OFF;
         if (embedding)
             *embedding = m->embedding;
         if (!is_path) {
@@ -543,7 +547,7 @@ static bool serve_load(struct svc_options *o, const char *id) {
 
 /* name: one model; nullptr: every installed one, one loaded at a time (#195). */
 static int serve(const char *name, const char *processor, const char *socket, const char *http, size_t chats,
-                 size_t max_request) {
+                 size_t max_request, int thinking) {
     serving         = true; /* an embedding model too (#91) */
     serve_processor = processor;
     int rc          = name ? session_open(&served, name, processor, 0, true) : OK;
@@ -557,7 +561,7 @@ static int serve(const char *name, const char *processor, const char *socket, co
     struct svc_options o = {.model = served.model, .reasoning = served.reasoning, .name = served.name, .socket = socket,
                             .http = http, .chats = chats, .max_request = max_request, .stop = &stopping,
                             .embedding = served.embedding, .installed = name ? nullptr : serve_installed,
-                            .load = name ? nullptr : serve_load};
+                            .load = name ? nullptr : serve_load, .think = thinking};
     rc = service_run(&o) ? ERROR : OK;
     session_close(&served);
     return rc;
@@ -793,6 +797,7 @@ int main(int argc, char **argv) {
     bool        fresh     = false; /* chat --new */
     long        chats = 2;
     long        max_request = 16; /* serve --max-request=MiB */
+    int         thinking    = 0; /* serve --thinking=on|off (#266): 1, 2; for requests without their own */
     long        threads_opt = 0; /* --threads N: this run's engine threads, over the setting */
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--models") && i + 1 < argc)
@@ -821,6 +826,8 @@ int main(int argc, char **argv) {
             max_request = strtol(argv[i] + 14, &end, 10);
             if (*end || max_request < 1 || max_request > 1024)
                 return usage();
+        } else if (!strcmp(argv[i], "--thinking=on") || !strcmp(argv[i], "--thinking=off")) {
+            thinking = argv[i][12] == 'n' ? 1 : 2;
         } else if (!strcmp(argv[i], "--chats") && i + 1 < argc) {
             char *end;
             chats = strtol(argv[++i], &end, 10);
@@ -899,9 +906,9 @@ int main(int argc, char **argv) {
         socket = socket_path;
     }
     if (!strcmp(command, "serve") && n == 2)
-        return serve(args[1], processor, socket, http, (size_t) chats, (size_t) max_request << 20);
+        return serve(args[1], processor, socket, http, (size_t) chats, (size_t) max_request << 20, thinking);
     if (!strcmp(command, "serve") && n == 1 && http) /* every installed model (#195) */
-        return serve(nullptr, processor, socket, http, (size_t) chats, (size_t) max_request << 20);
+        return serve(nullptr, processor, socket, http, (size_t) chats, (size_t) max_request << 20, thinking);
     if (!strcmp(command, "chat") && socket)
         return n == 1 ? chat("", processor, socket, fresh) : usage();
     if (!strcmp(command, "chat") && n == 1) { /* the last model, else the geisten app's */

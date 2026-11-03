@@ -10,9 +10,15 @@
  * 4. Body spans (#261): the bytes outside them are exactly the render of the
  *    same conversation with empty messages, and each span is one message's
  *    whole content, in every family, whole and incremental.
+ * 5. Thinking on/off (#266): the real templates of Qwen3, Qwen3.5, Qwen3.8,
+ *    Bonsai 2 and Gemma 4 (tests/fixtures/templates), their switch read from
+ *    their text, render as transformers' apply_chat_template does for
+ *    enable_thinking unset, true, false and each reasoning_effort
+ *    (tools/thinking_goldens.py, checked against llama.cpp's Jinja engine).
  */
 #include "template.h"
 #include "decision_profile.h"
+#include "fixtures/templates/thinking.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -344,6 +350,110 @@ static void stops(void) {
     check(n == 1 && ids[0] == 7, "no EOS; the cap is respected");
 }
 
+static char *slurp(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f)
+        return nullptr;
+    char  *s = nullptr;
+    size_t n = 0, cap = 0, r;
+    char   chunk[4096];
+    while ((r = fread(chunk, 1, sizeof chunk, f)) > 0) {
+        if (n + r + 1 > cap) {
+            cap     = (n + r + 1) * 2;
+            char *g = realloc(s, cap);
+            if (!g)
+                abort();
+            s = g;
+        }
+        memcpy(s + n, chunk, r);
+        n += r;
+    }
+    fclose(f);
+    if (s)
+        s[n] = 0;
+    return s;
+}
+
+/* As a chat renders a whole conversation: the template's switch, the extra
+ * text, the turns, the generation prompt and what follows it. */
+static void thinking_goldens(void) {
+    static const struct {
+        const char    *name;
+        geistr_message m[4];
+        size_t         n;
+    } convs[] = {
+            {"user", {{"user", "Hi"}}, 1},
+            {"system", {{"system", "Be brief."}, {"user", "Hi"}}, 2},
+            {"turns", {{"system", "Be brief."}, {"user", "Hi"}, {"assistant", "Hello!"}, {"user", "Bye"}}, 4},
+            {"turns_nosys", {{"user", "Hi"}, {"assistant", "Hello!"}, {"user", "Bye"}}, 3},
+    };
+    size_t checked = 0;
+    for (size_t i = 0; i < sizeof THINKING_GOLDENS / sizeof *THINKING_GOLDENS; i++) {
+        const struct thinking_golden *g = &THINKING_GOLDENS[i];
+        char                          path[256], name[128];
+        snprintf(path, sizeof path, "tests/fixtures/templates/%s.jinja", g->template);
+        snprintf(name, sizeof name, "thinking %s %s %s", g->template, g->conv, g->mode);
+        char *tpl = slurp(path);
+        check(tpl != nullptr, path);
+        if (!tpl)
+            continue;
+        const enum tpl_family     f = tpl_family_detect(tpl, nullptr);
+        const struct tpl_thinking t = tpl_thinking_of(f, tpl);
+        free(tpl);
+        const bool on = !strcmp(g->mode, "default") ? t.default_on : strcmp(g->mode, "off") != 0;
+        const geistr_effort e = !strcmp(g->mode, "low")      ? GEISTR_EFFORT_LOW
+                                : !strcmp(g->mode, "medium") ? GEISTR_EFFORT_MEDIUM
+                                : !strcmp(g->mode, "high")   ? GEISTR_EFFORT_HIGH
+                                                             : GEISTR_EFFORT_DEFAULT;
+        check(t.thinks && t.off != nullptr, name);
+        const struct tpl_extra x = tpl_thinking_extra(&t, on, e);
+        for (size_t c = 0; c < sizeof convs / sizeof *convs; c++) {
+            if (strcmp(convs[c].name, g->conv))
+                continue;
+            struct tpl_state st;
+            tpl_init_extra(&st, f, &x);
+            char *text = tpl_render_send(&st, convs[c].n, convs[c].m);
+            tpl_free(&st);
+            append(&text, on ? t.on : t.off);
+            eq(name, g->text, text);
+            free(text);
+            checked++;
+        }
+    }
+    check(checked == sizeof THINKING_GOLDENS / sizeof *THINKING_GOLDENS, "thinking: every golden checked");
+
+    /* What each template does, and templates without thinking. */
+    static const struct {
+        const char *file;
+        bool        default_on, effort, prefill, history;
+    } want[] = {
+            {"qwen3", true, false, false, false},  {"qwen35", false, false, true, false},
+            {"qwen38", true, true, true, true},    {"bonsai2", true, true, true, true},
+            {"gemma4", false, false, false, false},
+    };
+    for (size_t i = 0; i < sizeof want / sizeof *want; i++) {
+        char path[256];
+        snprintf(path, sizeof path, "tests/fixtures/templates/%s.jinja", want[i].file);
+        char *tpl = slurp(path);
+        if (!tpl)
+            continue;
+        const struct tpl_thinking t = tpl_thinking_of(tpl_family_detect(tpl, nullptr), tpl);
+        free(tpl);
+        check(t.thinks && t.default_on == want[i].default_on && t.effort == want[i].effort &&
+                      (*t.on != 0) == want[i].prefill && (*t.history != 0) == want[i].history,
+              want[i].file);
+    }
+    const struct tpl_thinking none = tpl_thinking_of(TPL_CHATML, "{{ '<|im_start|>' + message.role }}");
+    check(!none.thinks && !none.off && !*none.on && !strcmp(none.open, "<think>"), "thinking: SmolLM2's ChatML has none");
+    const struct tpl_thinking old = tpl_thinking_of(TPL_CHATML, "<|im_start|>assistant\n<think>");
+    check(old.thinks && old.default_on && !old.off, "thinking: <think> without a switch thinks, always");
+    check(!tpl_thinking_of(TPL_LLAMA3, nullptr).thinks, "thinking: no template");
+    const struct tpl_thinking g4 = tpl_thinking_of(TPL_GEMMA4, "<|think|> enable_thinking");
+    check(g4.thinks && !strcmp(g4.open, "<|channel>thought") && !strcmp(g4.close, "<channel|>"), "thinking: Gemma 4's markers");
+    check(!tpl_effort_text(GEISTR_EFFORT_MEDIUM) && tpl_effort_text(GEISTR_EFFORT_HIGH) == tpl_effort_text(GEISTR_EFFORT_DEFAULT),
+          "effort: medium has no instruction, high is the default xhigh");
+}
+
 int main(void) {
     goldens();
     incremental_equals_whole();
@@ -353,10 +463,11 @@ int main(void) {
     close_texts();
     detection();
     stops();
+    thinking_goldens();
     if (failures) {
         fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;
     }
-    puts("templates: geist-serve goldens, incremental = whole for 5 families, body spans, generation prompts, thinking off, closes, detection, stops passed");
+    puts("templates: geist-serve goldens, incremental = whole for 5 families, body spans, generation prompts, thinking off, closes, detection, stops, thinking on/off for 5 templates passed");
     return 0;
 }

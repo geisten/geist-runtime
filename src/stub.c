@@ -244,6 +244,12 @@ geistr_status geistr_chat_open(geistr_model *m, const geistr_chat_opts *opts, ge
         snprintf(m->error, sizeof m->error, "this model's chat format is not supported");
         return GEISTR_FORMAT;
     }
+    if (o.reasoning > GEISTR_REASONING_AUTO || o.effort > GEISTR_EFFORT_HIGH) {
+        snprintf(m->error, sizeof m->error, "chat options: unknown reasoning or effort");
+        return GEISTR_INVALID;
+    }
+    if (o.reasoning == GEISTR_REASONING_AUTO) /* the stub's "template" has no thinking (#266) */
+        o.reasoning = GEISTR_REASONING_NONE;
     geistr_chat  *c     = calloc(1, sizeof *c);
     char        **stops = nullptr;
     geistr_status s     = c ? stops_copy(&o, &stops) : GEISTR_NO_MEMORY;

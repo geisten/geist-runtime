@@ -68,9 +68,9 @@ static ptrdiff_t per_model_find(const char *id, size_t n) {
     return -1;
 }
 
-bool thinking_on(const char *id) {
+int thinking_choice(const char *id) {
     ptrdiff_t i = per_model_find(id, strlen(id));
-    return i >= 0 ? per_model[i].on : cfg.thinking;
+    return i >= 0 ? per_model[i].on : cfg.thinking ? -1 : 0;
 }
 
 /* nullptr when the value is valid for key and stored, else why not. */
@@ -249,8 +249,9 @@ int config(int n, const char **args) {
     if (thinking_key(args[1], &id_len)) {
         char id[sizeof per_model[0].id];
         snprintf(id, sizeof id, "%.*s", (int) id_len, args[1]);
-        if (n == 2) {
-            puts(thinking_on(id) ? "on" : "off");
+        if (n == 2) { /* default: as the model's template has it (#266) */
+            const int on = thinking_choice(id);
+            puts(on < 0 ? "default" : on ? "on" : "off");
             return OK;
         }
         /* Off only for a catalog model that thinks: its template has the switch. */
