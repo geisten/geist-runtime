@@ -22,5 +22,5 @@ jobs:
         with:
           persist-credentials: false
       - env:
-          GITEA_TOKEN: ${{ secrets.AGENT_BOT_TOKEN }}
+          GITEA_TOKEN: ${{ secrets.CI_OK_TOKEN }}
         run: python3 scripts/agent_gate.py rerun-held
