@@ -55,6 +55,25 @@ void tpl_free(struct tpl_state *state);
  * messages again into a fresh state and discarding the text. */
 char *tpl_render_send(struct tpl_state *state, size_t n, const geistr_message msgs[]);
 
+/* A byte range [begin, end) of a rendered text. */
+struct tpl_span {
+    size_t begin, end;
+};
+struct tpl_spans {
+    struct tpl_span *v;
+    size_t           n, cap;
+};
+void tpl_spans_free(struct tpl_spans *spans);
+
+/* tpl_render_send, and where the message bodies landed (#261): the range of
+ * every non-empty content it writes (a system message, a user, assistant or
+ * tool message, Gemma 3's folded system text) is appended to *spans, in text
+ * order. Everything outside them is the template's own: turn markers, role
+ * names, separators. The chat tokenizes the bodies with special tokens off,
+ * so a message cannot spell a role marker. On failure (nullptr) *spans is
+ * unchanged. spans nullptr: tpl_render_send. */
+char *tpl_render_send_spans(struct tpl_state *state, size_t n, const geistr_message msgs[], struct tpl_spans *spans);
+
 /* The generation prompt alone (opens the assistant turn): the suffix of
  * every tpl_render_send. The chat tokenizes it apart from the turns before
  * it, so a rewind can cut the context in front of it (#4). "" for

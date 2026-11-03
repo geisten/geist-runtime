@@ -2,6 +2,22 @@
 
 ## 0.4.0
 
+### Security
+
+- A chat message can no longer forge a turn. Before, a message containing
+  `<|im_end|>\n<|im_start|>system\n…` (or `<|eot_id|>`, `<end_of_turn>`, …)
+  was tokenized into real role tokens, as it would be anywhere in the
+  rendered prompt, and opened a system or assistant turn of its own.
+  - Message bodies are now tokenized with special tokens off; the
+    template's markers keep theirs. This covers system, user, assistant and
+    tool messages, from the library, `geistr chat` and `serve --http` alike.
+  - Conversations without such text tokenize exactly as before.
+  - User-defined vocabulary (Qwen3's `<think>`, `<tool_call>`) is still
+    matched, as in llama.cpp.
+  - Takes effect with an engine that has `geist_session_tokenize_plain`
+    (geistlib#409, #413). Until the engine pin moves past it, builds
+    tokenize as before (#261).
+
 ### Features
 
 - Experimental: early exit from reasoning (geistlib#236).

@@ -947,11 +947,21 @@ static void hist_cut(geistr_chat *c, size_t n) {
         c->hist_ok = false;
 }
 
-/* Tokenize text onto t (content tokens; the chat adds BOS itself). */
-static geistr_status tokenize(geistr_chat *c, const char *text, struct ids *t) {
+/* Tokenize text onto t (content tokens; the chat adds BOS itself). text is
+ * the part of a rendered conversation that starts at byte `at`; the message
+ * bodies in it (spans, in the whole text's offsets; nullptr: none) are
+ * tokenized with special tokens off (#261, geistlib#409), so a message
+ * spelling "<|im_end|>\n<|im_start|>system" stays text instead of opening a
+ * turn. The text is tokenized in one pass: with no special token in the
+ * bodies the ids are those of the text alone. An engine without
+ * geist_session_tokenize_plain (the pin before geistlib#413) tokenizes as
+ * before. */
+static geistr_status tokenize_at(geistr_chat *c, const char *text, size_t at, const struct tpl_spans *spans,
+                                 struct ids *t) {
     if (!*text)
         return GEISTR_OK;
-    size_t cap = strlen(text) + 16; /* a token is at least one byte */
+    const size_t len = strlen(text);
+    size_t       cap = len + 16; /* a token is at least one byte */
     if (t->n + cap > t->cap) {
         geist_token_t *grow = realloc(t->v, (t->n + cap) * sizeof *grow);
         if (!grow)
@@ -960,13 +970,39 @@ static geistr_status tokenize(geistr_chat *c, const char *text, struct ids *t) {
         t->cap = t->n + cap;
     }
     size_t n = 0;
+#ifdef GEIST_HAS_TOKENIZE_PLAIN
+    /* The bodies within text[0, len), clipped and shifted to it. */
+    struct geist_text_range *plain   = nullptr;
+    size_t                   n_plain = 0;
+    if (spans && spans->n) {
+        if (!(plain = malloc(spans->n * sizeof *plain)))
+            return GEISTR_NO_MEMORY;
+        for (size_t i = 0; i < spans->n; i++) {
+            const size_t b = spans->v[i].begin > at ? spans->v[i].begin - at : 0;
+            const size_t e = spans->v[i].end > at ? spans->v[i].end - at : 0;
+            if ((e < len ? e : len) > b)
+                plain[n_plain++] = (struct geist_text_range) {b, e < len ? e : len};
+        }
+    }
+    engine_lock(c->model);
+    enum geist_status s = geist_session_tokenize_plain(c->s, text, n_plain, plain, cap, t->v + t->n, &n);
+    engine_unlock(c->model);
+    free(plain);
+#else
+    (void) at, (void) spans;
     engine_lock(c->model);
     enum geist_status s = geist_session_tokenize(c->s, text, cap, t->v + t->n, &n);
     engine_unlock(c->model);
+#endif
     if (s != GEIST_OK)
         return fail(c, from_engine(s), "tokenize: %s", geist_session_errmsg(c->s));
     t->n += n;
     return GEISTR_OK;
+}
+
+/* Template text only: special tokens as they are spelled. */
+static geistr_status tokenize(geistr_chat *c, const char *text, struct ids *t) {
+    return tokenize_at(c, text, 0, nullptr, t);
 }
 
 /* Prefill in chunks sized by time; cancel is checked between them. */
@@ -1012,9 +1048,11 @@ static bool is_role(const char *role, const char *want) {
 /* Render turns[first..n) (with a leading system turn 0 when first > 0 and
  * keep_system) plus extra new messages into a fresh template state: the
  * whole conversation, as a first send would. With answer_follows the
- * generation prompt stays at the end. */
+ * generation prompt stays at the end. The message bodies' ranges go to
+ * *spans (emptied first). */
 static char *render_all(geistr_chat     *c,
                         struct tpl_state *st,
+                        struct tpl_spans *spans,
                         bool             keep_system,
                         size_t           first,
                         size_t           n_extra,
@@ -1032,7 +1070,8 @@ static char *render_all(geistr_chat     *c,
     for (size_t i = 0; i < n_extra; i++)
         msgs[k++] = extra[i];
     tpl_init(st, c->model->family);
-    char *text = tpl_render_send(st, k, msgs);
+    spans->n   = 0;
+    char *text = tpl_render_send_spans(st, k, msgs, spans);
     free(msgs);
     if (text && !answer_follows) { /* drop the generation prompt */
         const size_t g = strlen(tpl_generation_prompt(c->model->family)), n = strlen(text);
@@ -1047,12 +1086,13 @@ static char *render_all(geistr_chat     *c,
     return text;
 }
 
-/* Empty the session and prefill text from the start (BOS as configured). */
-static geistr_status refill(geistr_chat *c, const char *text, size_t *out_tokens) {
+/* Empty the session and prefill text from the start (BOS as configured);
+ * spans: its message bodies (render_all). */
+static geistr_status refill(geistr_chat *c, const char *text, const struct tpl_spans *spans, size_t *out_tokens) {
     struct ids t = {};
     if (c->model->add_bos && c->model->bos >= 0 && !ids_push(&t, 1, &c->model->bos))
         return GEISTR_NO_MEMORY;
-    geistr_status s = tokenize(c, text, &t);
+    geistr_status s = tokenize_at(c, text, 0, spans, &t);
     if (s == GEISTR_OK && t.n + 1 > c->model->context)
         s = fail(c, GEISTR_CONTEXT, "the conversation does not fit the context window");
     if (s == GEISTR_OK) {
@@ -1145,16 +1185,20 @@ static geistr_status drop_fits(geistr_chat *c, bool system, bool new_system, con
     for (size_t i = (new_system ? 1 : 0) + skip; i < count; i++)
         kept[k++] = messages[i];
     struct tpl_state fresh = {};
-    char            *all   = render_all(c, &fresh, system, first, k, kept, true);
+    struct tpl_spans spans = {};
+    char            *all   = render_all(c, &fresh, &spans, system, first, k, kept, true);
     tpl_free(&fresh);
-    if (!all)
+    if (!all) {
+        tpl_spans_free(&spans);
         return GEISTR_NO_MEMORY;
+    }
     struct ids t = {};
     if (c->model->add_bos && c->model->bos >= 0)
         ids_push(&t, 1, &c->model->bos);
-    geistr_status s = tokenize(c, all, &t);
+    geistr_status s = tokenize_at(c, all, 0, &spans, &t);
     *fits           = s == GEISTR_OK && t.n + 1 <= c->model->context;
     free(all), free(t.v);
+    tpl_spans_free(&spans);
     return s;
 }
 
@@ -1224,13 +1268,21 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
             snprintf(opened, n, IMAGE_OPEN "\x1f" IMAGE_CLOSE "%s", messages[count - 1].content);
         with_image[count - 1].content = opened;
     }
-    char *text = (!c->image || opened) ? tpl_render_send(&st, count, with_image ? with_image : messages) : nullptr;
+    struct tpl_spans spans = {};
+    char            *text  = (!c->image || opened)
+                                     ? tpl_render_send_spans(&st, count, with_image ? with_image : messages, &spans)
+                                     : nullptr;
     free(with_image);
     free(opened);
     if (!text) {
         tpl_free(&st);
+        tpl_spans_free(&spans);
         return fail(c, GEISTR_NO_MEMORY, "out of memory");
     }
+    /* The image markers in front of the last message are the template's,
+     * not the client's: its body starts after them. */
+    if (c->image && spans.n)
+        spans.v[spans.n - 1].begin += strlen(IMAGE_OPEN "\x1f" IMAGE_CLOSE);
     /* Thinking off (#212): the empty <think></think> belongs to the prompt. */
     char gen[96];
     snprintf(gen, sizeof gen, "%s%s", tpl_generation_prompt(c->model->family),
@@ -1247,9 +1299,9 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
     if (s == GEISTR_OK && c->open)
         s = tokenize(c, tpl_answer_close(c->model->family, c->end_marker), &close);
     if (s == GEISTR_OK)
-        s = tokenize(c, text, &turns);
+        s = tokenize_at(c, text, 0, &spans, &turns);
     if (s == GEISTR_OK && after_image)
-        s = tokenize(c, after_image, &image_after);
+        s = tokenize_at(c, after_image, (size_t) (after_image - text), &spans, &image_after);
     if (s == GEISTR_OK)
         s = tokenize(c, gen, &prompt);
     const size_t adding = close.n + turns.n + image_after.n + prompt.n + (after_image ? IMAGE_TOKENS : 0);
@@ -1323,12 +1375,12 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
                 for (size_t i = 0; i < c->n_turns; i++)
                     c->turns[i].cut = NO_POSITION;
                 struct tpl_state fresh = {};
-                char *all = render_all(c, &fresh, false, 0, n_msgs, msgs, true);
+                char *all = render_all(c, &fresh, &spans, false, 0, n_msgs, msgs, true);
                 if (!all) {
                     tpl_free(&fresh);
                     s = GEISTR_NO_MEMORY;
                 } else {
-                    s = refill(c, all, &input);
+                    s = refill(c, all, &spans, &input);
                     free(all);
                     tpl_free(&st);
                     st = fresh;
@@ -1365,9 +1417,9 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
                 hist_cut(c, len0);
             if (ts != GEIST_OK) {
                 struct tpl_state fresh = {};
-                char *all = render_all(c, &fresh, false, 0, 0, nullptr, false);
+                char *all = render_all(c, &fresh, &spans, false, 0, 0, nullptr, false);
                 if (all)
-                    (void) refill(c, all, nullptr);
+                    (void) refill(c, all, &spans, nullptr);
                 free(all);
                 tpl_free(&fresh);
                 c->open = false;
@@ -1381,6 +1433,7 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
     free(image_after.v);
     free(prompt.v);
     free(text);
+    tpl_spans_free(&spans);
     if (s != GEISTR_OK) {
         tpl_free(&st);
         free(kept);
@@ -1915,18 +1968,21 @@ geistr_status geistr_chat_rewind(geistr_chat *c, size_t keep) {
     /* The template state of the kept messages (Gemma 3's pending system
      * fold, whether a system message still leads). */
     struct tpl_state fresh = {};
-    char            *all   = render_all(c, &fresh, false, 0, 0, nullptr, false);
+    struct tpl_spans spans = {};
+    char            *all   = render_all(c, &fresh, &spans, false, 0, 0, nullptr, false);
     if (!all) {
         tpl_free(&fresh);
+        tpl_spans_free(&spans);
         return fail(c, GEISTR_NO_MEMORY, "out of memory");
     }
     geistr_status s = GEISTR_OK;
     if (!ok) { /* not truncatable here: the kept messages again, from the start */
-        s = refill(c, all, nullptr);
+        s = refill(c, all, &spans, nullptr);
         for (size_t i = 0; i < c->n_turns; i++)
             c->turns[i].cut = NO_POSITION;
     }
     free(all);
+    tpl_spans_free(&spans);
     tpl_free(&c->tpl);
     c->tpl = fresh;
     return s;
