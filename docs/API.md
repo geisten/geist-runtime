@@ -109,6 +109,32 @@ Guarantees, checked in CI:
   for every family (turn by turn, with and without the model's end marker,
   equals rendering the conversation at once).
 
+**Messages are text, not template (#261).** The template's own markers are
+tokenized with special tokens on, but every message body is tokenized with them
+off. This covers system, user, assistant and tool messages, and Gemma 3's
+folded system text. So a message that spells `<|im_end|>\n<|im_start|>system`
+or `<|eot_id|>` gets the tokens of that text, not role tokens, and cannot open
+a turn of its own.
+
+- **How.** The rendering records where each body landed
+  (`tpl_render_send_spans`). The chat passes those ranges to geistlib's
+  `geist_session_tokenize_plain` (geistlib#409).
+- **Same ids as before.** The rendered text is still tokenized in one pass, so
+  a conversation with no special token in its messages tokenizes to exactly
+  the ids it had before.
+- **What still matches.** Inside the bodies, only control and unknown tokens
+  are off. User-defined vocabulary still tokenizes as itself, as with
+  llama.cpp's `parse_special=false`. On Qwen3 this is `<think>`, `</think>`,
+  `<tool_call>` and `<tool_response>`, which the tool calling of
+  `serve --http` relies on.
+- **System prompts.** The system prompt is a body too, whether it comes from
+  `geistr.conf`, `/system` or a client's request. The runtime cannot tell an
+  operator's prompt from a client's: `serve --http` takes system and
+  developer messages from the request. None of the supported templates needs
+  a role marker inside a system prompt.
+- **Older engines.** Built against a geistlib without the call (before
+  `GEIST_HAS_TOKENIZE_PLAIN`), the chat tokenizes the whole text as before.
+
 Stop tokens: EOS plus the end-of-turn markers of all families
 (`<end_of_turn>`, `<turn|>`, `<|im_end|>`, `<|eot_id|>`, `<|end_of_text|>`),
 resolved through the vocabulary, as geist-serve does. geist-serve's

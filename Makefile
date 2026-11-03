@@ -190,7 +190,7 @@ $(RUNTIME): $(BUILD)/runtime.o $(BUILD)/common.o $(TEXT)
 runtime: $(RUNTIME)
 
 $(BUILD)/test_real: tests/test_real.c $(RUNTIME) $(ENGINE_LIB)
-	$(CC) $(CFLAGS) -isystem $(GEISTLIB)/include $< $(RUNTIME) $(ENGINE_LINK) $(LDFLAGS) $(LDLIBS) -o $@
+	$(CC) $(CFLAGS) -Isrc -isystem $(GEISTLIB)/include $< $(RUNTIME) $(ENGINE_LINK) $(LDFLAGS) $(LDLIBS) -o $@
 
 $(BUILD)/chat-real: examples/chat.c $(RUNTIME) $(ENGINE_LIB)
 	$(CC) $(CFLAGS) -isystem $(GEISTLIB)/include $< $(RUNTIME) $(ENGINE_LINK) $(LDFLAGS) $(LDLIBS) -o $@

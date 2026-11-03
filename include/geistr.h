@@ -231,7 +231,10 @@ void geistr_chat_close(geistr_chat *chat);
  * dropping the oldest turns (DROP_OLDEST); the chat is then unchanged.
  * GEISTR_INVALID: count is 0 or the last message is from the assistant.
  * GEISTR_CANCELLED: cancelled during input processing; the new messages are
- * then not part of the conversation. */
+ * then not part of the conversation.
+ * Message contents are text: a special token they spell ("<|im_start|>",
+ * "<|eot_id|>", ...) is tokenized as the characters it is made of, never as
+ * a role marker (docs/API.md, "Messages are text, not template"). */
 GEISTR_NODISCARD geistr_status geistr_chat_send(geistr_chat *chat, size_t count, const geistr_message messages[]);
 
 /* Messages in the conversation: every sent message and every answer (an

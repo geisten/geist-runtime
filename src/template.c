@@ -84,9 +84,10 @@ void tpl_free(struct tpl_state *st) {
 }
 
 struct out {
-    char  *p;
-    size_t len, cap;
-    bool   oom;
+    char             *p;
+    size_t            len, cap;
+    bool              oom;
+    struct tpl_spans *spans; /* nullptr: not wanted */
 };
 
 static void put(struct out *o, const char *s) {
@@ -107,6 +108,31 @@ static void put(struct out *o, const char *s) {
     }
     memcpy(o->p + o->len, s, n + 1);
     o->len += n;
+}
+
+/* A message body: put, and its range into o->spans. */
+static void put_body(struct out *o, const char *s) {
+    const size_t at = o->len;
+    put(o, s);
+    if (o->oom || o->spans == nullptr || o->len == at)
+        return;
+    struct tpl_spans *sp = o->spans;
+    if (sp->n == sp->cap) {
+        size_t           cap  = sp->cap ? sp->cap * 2 : 16;
+        struct tpl_span *grow = realloc(sp->v, cap * sizeof *grow);
+        if (grow == nullptr) {
+            o->oom = true;
+            return;
+        }
+        sp->v   = grow;
+        sp->cap = cap;
+    }
+    sp->v[sp->n++] = (struct tpl_span) {at, o->len};
+}
+
+void tpl_spans_free(struct tpl_spans *sp) {
+    free(sp->v);
+    *sp = (struct tpl_spans) {};
 }
 
 static bool is_role(const geistr_message *m, const char *role) {
@@ -154,7 +180,7 @@ static void render_turns(struct out            *o,
             put(o, f->open);
             put(o, f->sys_role);
             put(o, f->role_end);
-            put(o, msgs[0].content);
+            put_body(o, msgs[0].content);
             put(o, f->close);
         } else {
             *folded = msgs[0].content;
@@ -167,11 +193,11 @@ static void render_turns(struct out            *o,
         put(o, asst ? f->asst_role : f->user_role);
         put(o, f->role_end);
         if (*folded != nullptr && !asst) {
-            put(o, *folded);
+            put_body(o, *folded);
             put(o, "\n\n");
             *folded = nullptr;
         }
-        put(o, msgs[i].content);
+        put_body(o, msgs[i].content);
         put(o, f->close);
     }
     put(o, f->open);
@@ -186,14 +212,19 @@ static void render_turns(struct out            *o,
 static void render_bitnet(struct out *o, size_t n, const geistr_message msgs[]) {
     for (size_t i = 0; i < n; i++) {
         put(o, is_role(&msgs[i], "system") ? "System: " : is_role(&msgs[i], "assistant") ? "Assistant: " : "User: ");
-        put(o, msgs[i].content);
+        put_body(o, msgs[i].content);
         put(o, "<|eot_id|>");
     }
     put(o, "Assistant: ");
 }
 
 char *tpl_render_send(struct tpl_state *st, size_t n, const geistr_message msgs[]) {
-    struct out             o      = {};
+    return tpl_render_send_spans(st, n, msgs, nullptr);
+}
+
+char *tpl_render_send_spans(struct tpl_state *st, size_t n, const geistr_message msgs[], struct tpl_spans *spans) {
+    struct out             o      = {.spans = spans};
+    const size_t           n0     = spans ? spans->n : 0;
     const struct turn_fmt *f      = turn_fmt(st->family);
     const char            *folded = st->folded;
     if (st->family == TPL_BITNET)
@@ -208,6 +239,8 @@ char *tpl_render_send(struct tpl_state *st, size_t n, const geistr_message msgs[
         o.oom = true;
     if (o.oom) {
         free(o.p);
+        if (spans)
+            spans->n = n0;
         return nullptr;
     }
     if (folded != st->folded) {
