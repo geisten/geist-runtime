@@ -298,10 +298,12 @@ static void thinking(const char *path) {
         geistr_chat_close(c);
     }
     /* the default options (#266): the template's default, the reasoning apart */
-    geistr_chat   *d  = nullptr;
-    geistr_message q  = {"user", "What is the capital of France? One word."};
-    size_t         td = 0;
-    CHECK(geistr_chat_open(m, nullptr, &d) == GEISTR_OK, "thinking: default options");
+    geistr_chat     *d  = nullptr;
+    geistr_message   q  = {"user", "What is the capital of France? One word."};
+    size_t           td = 0;
+    geistr_chat_opts dflt = GEISTR_CHAT_OPTS_INIT;
+    dflt.max_tokens       = 600; /* a small model may reason on and on */
+    CHECK(geistr_chat_open(m, &dflt, &d) == GEISTR_OK, "thinking: default options");
     CHECK(d && ask_split(d, 1, &q, a, sizeof a, &td) == GEISTR_OK && !strstr(a, "think>") && !td,
           "thinking: by default the reasoning never reaches the answer");
     geistr_chat_close(d);
