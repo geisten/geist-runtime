@@ -229,6 +229,12 @@
   chat` keeps the prompt its early-exit evidence was measured with: no
   effort instruction (Qwen3.6+'s `medium`).
 
+- The chat's default reasoning is `GEISTR_REASONING_AUTO` (#266):
+  `GEISTR_CHAT_OPTS_INIT` and nullptr options give the template's default,
+  with the reasoning as `GEISTR_PART_THINKING` (discarded without
+  `opts.thinking`) instead of `<think>…` in the answer. A caller that wants
+  the raw text sets `GEISTR_REASONING_NONE`.
+
 ### Decisions (EXPERIMENTAL)
 
 - Preparation for several questions over one context (#162; the API follows

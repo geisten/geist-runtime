@@ -183,7 +183,8 @@ const char *geistr_model_error(const geistr_model *model);
  * says what the model can do. */
 typedef enum geistr_reasoning {
     GEISTR_REASONING_NONE = 0,   /* no thinking handling: the prompt without any switch, the
-                                    generated text as it is (a thinking model's markers included) */
+                                    generated text as it is (a thinking model's markers included);
+                                    for callers that want the raw text */
     GEISTR_REASONING_THINK_TAGS, /* thinking on: the template's enable_thinking=true (Qwen3.5,
                                     Qwen3.6+: the prompt ends in "<think>\n"; Gemma 4: <|think|>);
                                     on a model without thinking: <think>…</think> before the
@@ -191,8 +192,9 @@ typedef enum geistr_reasoning {
     GEISTR_REASONING_THINK_OFF,  /* thinking off: the template's enable_thinking=false (the empty
                                     <think></think> after the generation prompt); geistr_chat_open
                                     returns GEISTR_FORMAT if the template has no such switch */
-    GEISTR_REASONING_AUTO        /* the template's default: Qwen3 and Qwen3.6+ think, Qwen3.5
-                                    and Gemma 4 do not; a model without thinking as NONE (#266) */
+    GEISTR_REASONING_AUTO        /* the default (GEISTR_CHAT_OPTS_INIT, nullptr options): the
+                                    template's default, Qwen3 and Qwen3.6+ think, Qwen3.5 and
+                                    Gemma 4 do not; a model without thinking as NONE (#266) */
 } geistr_reasoning;
 
 /* How much a thinking chat reasons, where the template has reasoning_effort
@@ -215,7 +217,7 @@ typedef struct geistr_chat_opts {
     float            temperature; /* 0 = greedy (default) */
     float            top_p;       /* 1 = off (default) */
     uint32_t         max_tokens;  /* answer limit; 0 = the rest of the context */
-    geistr_reasoning reasoning;   /* default NONE */
+    geistr_reasoning reasoning;   /* default AUTO (#266; NONE before) */
     geistr_overflow  overflow;    /* default REFUSE */
     int              thinking;    /* nonzero: deliver thinking as GEISTR_PART_THINKING;
                                      default 0: thinking is discarded, never kept */
@@ -226,7 +228,7 @@ typedef struct geistr_chat_opts {
 } geistr_chat_opts;
 
 #define GEISTR_CHAT_OPTS_INIT                                                                      \
-    {sizeof(geistr_chat_opts), 0.0f, 1.0f, 0, GEISTR_REASONING_NONE, GEISTR_OVERFLOW_REFUSE, 0,       \
+    {sizeof(geistr_chat_opts), 0.0f, 1.0f, 0, GEISTR_REASONING_AUTO, GEISTR_OVERFLOW_REFUSE, 0,       \
      nullptr, 0, GEISTR_EFFORT_DEFAULT}
 
 typedef struct geistr_message {

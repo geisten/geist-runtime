@@ -202,10 +202,12 @@ the templates' own Jinja conditions) and renders what the template renders:
   template's `xhigh`) is Qwen3.6+'s `reasoning_effort`: `low` and `xhigh`
   put an instruction into the system turn, `medium` none. Only with
   thinking on, as in the template.
-- `NONE` (the default of `GEISTR_CHAT_OPTS_INIT`) keeps the old behaviour:
-  no switch rendered, the generated text as it is, so a thinking model's
-  `<think>` arrives as answer text. A caller that does not know the model
-  wants `AUTO`; `geistr`, the service and the Python package use it.
+- `AUTO` is the default (`GEISTR_CHAT_OPTS_INIT`, nullptr options; before
+  #266 it was `NONE`): a caller that sets nothing gets the template's
+  default and the reasoning apart from the answer. `NONE` keeps the old
+  behaviour for callers that want the raw text: no switch rendered, the
+  generated text as it is, so a thinking model's `<think>` arrives as
+  answer text.
 - **Earlier answers.** The runtime keeps no reasoning, so an earlier answer
   is what the template renders for an assistant message without
   `reasoning_content`. Where the context holds something else after an
