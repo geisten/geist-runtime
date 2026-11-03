@@ -243,6 +243,9 @@ static const char *ask_in_chat(geistr_model *model, geistr_reasoning reasoning, 
     fclose(f);
     geistr_chat_opts opts = GEISTR_CHAT_OPTS_INIT;
     opts.reasoning = reasoning;
+    /* #266: no effort instruction in the system turn (Qwen3.6+'s "medium"), the
+     * prompt the early-exit evidence was measured with (Bonsai 2, 0.4.0) */
+    opts.effort = GEISTR_EFFORT_MEDIUM;
     opts.max_tokens = max_tokens;
     geistr_chat *chat = nullptr;
     const geistr_message messages[2] = {

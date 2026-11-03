@@ -45,9 +45,17 @@ void str_output_thinking(struct str_output *o, str_emit_fn think) {
     o->think = think;
 }
 void str_output_init(struct str_output *o, bool think_tags) {
-    *o = (struct str_output) {.enabled = think_tags};
+    *o = (struct str_output) {.enabled = think_tags, .open = "<think>", .close = "</think>"};
     if (!o->enabled)
         o->state = STR_ANSWER;
+}
+void str_output_markers(struct str_output *o, const char *open, const char *close, bool inside) {
+    if (!o->enabled || strlen(open) > 24 || strlen(close) >= sizeof o->held)
+        return;
+    o->open  = open;
+    o->close = close;
+    if (inside)
+        o->state = STR_REASONING, o->reasoning = true, o->depth = 1;
 }
 static bool whitespace(char c) {
     return c == ' ' || c == '\n' || c == '\r' || c == '\t';
@@ -59,7 +67,8 @@ bool str_output_feed(struct str_output *o,
                      const char        *s,
                      str_emit_fn emit,
                      void *ctx) {
-    static const char open[] = "<think>", close[] = "</think>";
+    const char  *open = o->open, *close = o->close;
+    const size_t n_open = strlen(open), n_close = strlen(close);
     if (o->state == STR_FINISHED)
         return false;
     while (*s) {
@@ -82,7 +91,7 @@ bool str_output_feed(struct str_output *o,
                     ++o->opening;
                 else
                     o->opening = c == open[0] ? 1 : 0;
-                if (o->opening == sizeof open - 1) {
+                if (o->opening == n_open) {
                     o->opening = 0;
                     if (++o->depth > 16) {
                         o->state = STR_DISCARD;
@@ -94,8 +103,8 @@ bool str_output_feed(struct str_output *o,
                     ++o->closing;
                 else
                     o->closing = c == close[0] ? 1 : 0;
-                if (o->closing == sizeof close - 1) {
-                    n -= sizeof close - 1; /* the marker is protocol, not thought */
+                if (o->closing == n_close) {
+                    n -= n_close; /* the marker is protocol, not thought */
                     o->closing = 0;
                     if (--o->depth)
                         continue;
@@ -135,7 +144,7 @@ bool str_output_feed(struct str_output *o,
         if ((matched == 0 && whitespace(*s)) || *s == open[matched]) {
             o->prefix[o->used++] = *s++;
             o->prefix[o->used]   = 0;
-            if (!whitespace(o->prefix[o->used - 1]) && o->used - leading == sizeof open - 1) {
+            if (!whitespace(o->prefix[o->used - 1]) && o->used - leading == n_open) {
                 o->state     = STR_REASONING;
                 o->reasoning = true;
                 o->depth     = 1;

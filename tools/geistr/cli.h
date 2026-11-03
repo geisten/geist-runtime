@@ -21,7 +21,8 @@ struct settings {
     double temperature, resume_tokens; /* resume_tokens: what a resumed conversation re-reads at most */
     double threads;                    /* CPU threads for the engine; 0: geistr chooses (engine_threads) */
     bool   markdown, stats, intro, resume, history;
-    bool   thinking; /* for thinking models without a <id>.thinking of their own (#212) */
+    bool   thinking; /* for thinking models without a <id>.thinking of their own (#212): on, each as its
+                        template has it by default (#266); off, none thinks */
 };
 extern struct settings cfg;
 extern char            config_path[4200], data_dir[4096]; /* "" when unknown */
@@ -29,9 +30,10 @@ extern char            config_path[4200], data_dir[4096]; /* "" when unknown */
 bool data_folder(void); /* find both; false without HOME or GEISTEN_HOME */
 void config_load(void);
 bool config_save(void);
-/* Whether the model with this catalog id thinks: its <id>.thinking, else the
- * thinking setting (#212). */
-bool thinking_on(const char *id);
+/* Whether the model with this catalog id thinks: 1 or 0 by its <id>.thinking,
+ * else 0 with the thinking setting off, else -1: as its template has it (#212,
+ * #266). */
+int  thinking_choice(const char *id);
 void config_thinking(const char *id, bool on); /* its own value, for config_save (/save) */
 int  config(int n, const char **args); /* geistr config [key [value]] */
 
@@ -115,7 +117,8 @@ struct session {
     char          name[256], processor[8], backend[16], format[16];
     double           temperature;
     uint32_t         context;
-    geistr_reasoning reasoning; /* the catalog's, for each chat on the model */
+    geistr_reasoning reasoning; /* the settings' (resolve), for each chat on the model; /think */
+    int              remote_think; /* chat --socket (#266): 0 the service's default, 1 on, 2 off */
     uint32_t         used;      /* context tokens after the last answer (0: unknown, or cleared) */
     bool             embedding; /* the catalog says so (#91): it serves, it does not chat */
     bool             decisions; /* opened with a verified decision profile (/decide) */

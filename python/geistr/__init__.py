@@ -45,13 +45,13 @@ class _ModelOpts(C.Structure):
 
 class _ModelInfo(C.Structure):
     _fields_ = [("size", C.c_size_t), ("arch", _str), ("chat_format", _str), ("backend", _str), ("context", C.c_uint32),
-                ("vision", C.c_int)]
+                ("vision", C.c_int), ("thinking", C.c_int), ("thinking_off", C.c_int), ("effort", C.c_int)]
 
 
 class _ChatOpts(C.Structure):
     _fields_ = [("size", C.c_size_t), ("temperature", C.c_float), ("top_p", C.c_float), ("max_tokens", C.c_uint32),
                 ("reasoning", C.c_int), ("overflow", C.c_int), ("thinking", C.c_int),
-                ("stop", C.POINTER(_str)), ("n_stop", C.c_size_t)]
+                ("stop", C.POINTER(_str)), ("n_stop", C.c_size_t), ("effort", C.c_int)]
 
 
 class _Message(C.Structure):
@@ -291,7 +291,10 @@ class Model:
         with self._guard:
             _check(_model_info(self._handle(), C.byref(i)))
         return {"arch": _s(i.arch), "chat_format": _s(i.chat_format), "backend": _s(i.backend), "context": i.context,
-                "vision": bool(i.vision)}
+                "vision": bool(i.vision),
+                # #266: None (no thinking), "on" (thinks unless told not to), "off" (only when asked)
+                "thinking": [None, "on", "off"][i.thinking] if 0 <= i.thinking <= 2 else None,
+                "thinking_off": bool(i.thinking_off), "effort": bool(i.effort)}
 
     def embed(self, text: str) -> list[float]:
         """The text's unit-length embedding, by an embedding model (BitNet-embedding, #91). A query
@@ -314,9 +317,10 @@ class Model:
         return Decision(self, mode=mode, max_prompt_tokens=max_prompt_tokens)
 
     def chat(self, system: str | None = None, *, temperature: float = 0.0, top_p: float = 1.0, max_tokens: int = 0,
-             overflow: str = "refuse", thinking: bool = False, stop: tuple[str, ...] = ()) -> "Chat":
+             overflow: str = "refuse", thinking: bool = False, stop: tuple[str, ...] = (), think: bool | None = None,
+             effort: str | None = None) -> "Chat":
         return Chat(self, system, temperature=temperature, top_p=top_p, max_tokens=max_tokens, overflow=overflow,
-                    thinking=thinking, stop=stop)
+                    thinking=thinking, stop=stop, think=think, effort=effort)
 
     def _handle(self):
         if not self._h:
@@ -349,11 +353,18 @@ class Chat:
     becomes part of the conversation by itself."""
 
     def __init__(self, model: Model, system: str | None = None, *, temperature: float = 0.0, top_p: float = 1.0,
-                 max_tokens: int = 0, overflow: str = "refuse", thinking: bool = False, stop: tuple[str, ...] = ()):
+                 max_tokens: int = 0, overflow: str = "refuse", thinking: bool = False, stop: tuple[str, ...] = (),
+                 think: bool | None = None, effort: str | None = None):
+        """think: None as the model's chat template has it by default, True or False its
+        enable_thinking (#266); effort: "low", "medium" or "high" where the template has
+        reasoning_effort (Qwen3.6+). thinking: deliver the reasoning as Pieces."""
         stops = (_str * max(len(stop), 1))(*[s.encode() for s in stop])
-        opts = _ChatOpts(C.sizeof(_ChatOpts), temperature, top_p, max_tokens,
-                         1 if model._reasoning == "think_tags" else 0, ["refuse", "drop_oldest"].index(overflow),
-                         int(thinking), stops if stop else None, len(stop))
+        if think is False and model.info["thinking"] is None:  # nothing to turn off
+            think = None
+        reasoning = 3 if think is None else 1 if think else 2  # AUTO, THINK_TAGS, THINK_OFF
+        opts = _ChatOpts(C.sizeof(_ChatOpts), temperature, top_p, max_tokens, reasoning,
+                         ["refuse", "drop_oldest"].index(overflow), int(thinking), stops if stop else None, len(stop),
+                         [None, "low", "medium", "high"].index(effort))
         self._h = _p()
         with model._guard:
             _check(_chat_open(model._handle(), C.byref(opts), C.byref(self._h)))

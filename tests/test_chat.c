@@ -192,14 +192,14 @@ int main(void) {
      * that model only; the others follow the thinking setting; a model that
      * does not think, or no catalog model, is refused. */
     CHECK(setenv("GEISTEN_HOME", tmp, 1) == 0 && data_folder());
-    CHECK(thinking_on("qwen3-0.6b") && thinking_on("qwen38-27b-q4"));
+    CHECK(thinking_choice("qwen3-0.6b") == -1 && thinking_choice("qwen38-27b-q4") == -1); /* the template's default (#266) */
     CHECK(config(3, (const char *[]) {"config", "qwen3-0.6b.thinking", "off"}) == OK);
-    CHECK(!thinking_on("qwen3-0.6b") && thinking_on("qwen38-27b-q4"));
+    CHECK(thinking_choice("qwen3-0.6b") == 0 && thinking_choice("qwen38-27b-q4") == -1);
     CHECK(config(3, (const char *[]) {"config", "gemma4-e2b.thinking", "off"}) == USAGE); /* does not think */
     CHECK(config(3, (const char *[]) {"config", "nope.thinking", "off"}) == USAGE);
     CHECK(config(3, (const char *[]) {"config", "qwen3-0.6b.thinking", "maybe"}) == USAGE);
     CHECK(config(3, (const char *[]) {"config", "thinking", "off"}) == OK);
-    CHECK(!thinking_on("qwen38-27b-q4"));
+    CHECK(thinking_choice("qwen38-27b-q4") == 0);
     CHECK(config(3, (const char *[]) {"config", "qwen3-0.6b.thinking", "on"}) == OK);
     FILE *conf = fopen(config_path, "r");
     char  text[4096] = "";
@@ -210,9 +210,9 @@ int main(void) {
     cfg.thinking = true; /* read back: the file's values return */
     config_thinking("qwen3-0.6b", false);
     config_load();
-    CHECK(thinking_on("qwen3-0.6b") && !thinking_on("qwen38-27b-q4"));
+    CHECK(thinking_choice("qwen3-0.6b") == 1 && thinking_choice("qwen38-27b-q4") == 0);
     CHECK(config(3, (const char *[]) {"config", "qwen3-0.6b.thinking", ""}) == OK); /* back to the setting */
-    CHECK(!thinking_on("qwen3-0.6b"));
+    CHECK(thinking_choice("qwen3-0.6b") == 0);
 
     conv_free(&c), conv_free(&next), conv_free(&empty);
     char cmd[64];

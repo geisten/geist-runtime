@@ -25,10 +25,12 @@ void fuzz_chat(const struct svc_options *o, struct held *pool, const struct svc_
         return;
     const char *answer = r->messages[r->n - 1].content; /* in two pieces: a <tool_call> may span them */
     size_t      half   = strlen(answer) / 2;
+    if (r->think == 1 && out->thought && !out->thought(out->ctx, answer, strlen(answer))) /* #266 */
+        return;
     if (!out->part(out->ctx, answer, half) || !out->part(out->ctx, answer + half, strlen(answer + half)))
         return;
     geistr_stats st = {.size = sizeof st, .finish = GEISTR_FINISH_STOP};
-    out->done(out->ctx, &st, answer);
+    out->done(out->ctx, &st, answer, r->think == 1 ? answer : "");
 }
 
 struct client {

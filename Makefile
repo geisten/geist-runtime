@@ -57,7 +57,7 @@ $(BUILD)/test_api: tests/test_api.c $(LIB)
 $(BUILD)/test_cxx: tests/test_cxx.cpp $(LIB) include/geistr.h
 	$(CXX) $(CXXFLAGS) $< $(LIB) $(LDFLAGS) $(LDLIBS) -o $@
 
-$(BUILD)/test_template: tests/test_template.c $(TEXT)
+$(BUILD)/test_template: tests/test_template.c tests/fixtures/templates/thinking.h $(TEXT)
 	$(CC) $(CFLAGS) -Isrc $< $(TEXT) $(LDFLAGS) $(LDLIBS) -o $@
 
 $(BUILD)/test_stream: tests/test_stream.c $(TEXT)

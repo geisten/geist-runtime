@@ -8,8 +8,10 @@
  *
  *   → {"op":"info"}
  *   ← {"model":"gemma4-e2b","backend":"metal","chat_format":"gemma4","context":8192,"chats":2}
- *   → {"op":"chat","messages":[{"role":"user","content":"…"},…],"max":0,"temperature":0}
+ *   → {"op":"chat","messages":[{"role":"user","content":"…"},…],"max":0,"temperature":0,
+ *      "think":false,"effort":"low","thinking":true}
  *   ← {"part":"answer","text":"…"}            (as often as the answer has pieces)
+ *   ← {"part":"thinking","text":"…"}          (only if the request asked: "thinking":true)
  *   ← {"done":true,"finish":"stop","input_tokens":14,"context_tokens":52,"output_tokens":7,
  *      "prefill_ms":40.1,"generation_ms":95.3,"total_ms":136.2}
  *   ← {"error":"…","status":"context"}        (instead, on failure)
@@ -39,7 +41,7 @@ struct svc_stats {
 
 struct svc_options {
     geistr_model    *model;  /* nullptr: none loaded yet (a service of every model) */
-    geistr_reasoning reasoning;
+    geistr_reasoning reasoning; /* a request's without its own think (#266): the server's default */
     const char      *name;   /* shown by info; "" while none is loaded */
     const char      *socket; /* path */
     const char      *http;   /* ADDR:PORT for the HTTP API, or nullptr */
@@ -53,6 +55,8 @@ struct svc_options {
      * set model, reasoning, name and embedding; false after saying why. */
     size_t (*installed)(char (*ids)[64], size_t cap);
     bool (*load)(struct svc_options *o, const char *id);
+    int think; /* serve --thinking (#266), for requests without their own: 0 the settings' reasoning
+                  above, 1 on, 2 off; a model that does not think, or cannot stop, ignores it */
 };
 
 /* Serve until *stop is set. Returns a geistr exit code (0 ok, 1 error). */
@@ -70,25 +74,36 @@ struct svc_request {
     size_t              n_stop;
     unsigned char      *image; /* the last message's image (#92): PNG, JPEG or BMP bytes */
     size_t              image_len;
+    int                 think;  /* #266: -1 the server's default, 0 off, 1 on */
+    geistr_effort       effort; /* with think on: how much (Qwen3.6+'s reasoning_effort) */
+    bool                strict; /* think on for a model that cannot think: 400 (Ollama), else ignored */
 };
 void svc_free_request(struct svc_request *r);
 
 /* Where the answer goes. part returns false when the client is gone (the
  * answer stops); then neither done nor error follows. done gets the whole
- * answer; error's status is GEISTR_INVALID, GEISTR_CONTEXT or another
- * (the service failed). alive, if set, comes when the request is accepted
- * and about once a second of hidden reasoning; false: the client is gone.
+ * answer and the whole reasoning ("" without); error's status is
+ * GEISTR_INVALID, GEISTR_CONTEXT or another (the service failed). thought,
+ * if set, gets the reasoning as it comes (#266), like part; without it,
+ * alive comes about once a second of reasoning. alive, if set, comes when
+ * the request is accepted; false: the client is gone.
  * fd, if >= 0, is the client's connection: while the prompt is processed
  * (which can take minutes) it is watched for the peer closing it, and that,
  * like the service's stop flag, cancels the work (#146). */
 struct svc_sink {
     void *ctx;
     bool (*part)(void *ctx, const char *text, size_t len);
-    void (*done)(void *ctx, const geistr_stats *stats, const char *answer);
+    void (*done)(void *ctx, const geistr_stats *stats, const char *answer, const char *thinking);
     void (*error)(void *ctx, geistr_status status, const char *text);
     bool (*alive)(void *ctx);
     int  fd;
+    bool (*thought)(void *ctx, const char *text, size_t len);
 };
+
+/* A request's think and effort from a client's value (#266): true/false,
+ * OpenAI's reasoning_effort or Ollama's think level ("none", "minimal", "low",
+ * "medium", "high", "xhigh"). false for a value that is none of these. */
+bool svc_think_level(const char *level, int *think, geistr_effort *effort);
 
 struct held; /* the conversations the service keeps */
 void        svc_chat(const struct svc_options *o, struct held *pool, const struct svc_request *r,
@@ -110,9 +125,10 @@ typedef bool (*svc_part_fn)(void *ctx, const char *text);
 typedef bool (*svc_cancel_fn)(void *ctx);
 
 /* Send a conversation, stream the answer to part(); cancel() is polled while
- * waiting and closes the connection (the service stops the answer).
+ * waiting and closes the connection (the service stops the answer). think:
+ * -1 the service's default, 0 off, 1 on (#266).
  * GEISTR_OK, GEISTR_CANCELLED, GEISTR_CONTEXT, GEISTR_IO (no service) or
  * GEISTR_BACKEND (error text in error). */
 geistr_status service_chat(const char *socket, size_t n, const geistr_message *messages, unsigned max,
-                           double temperature, svc_part_fn part, svc_cancel_fn cancel, void *ctx,
+                           double temperature, int think, svc_part_fn part, svc_cancel_fn cancel, void *ctx,
                            struct svc_stats *stats, char *error, size_t cap);

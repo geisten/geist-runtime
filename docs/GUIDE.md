@@ -132,8 +132,9 @@ geistr catalog --json           # for scripts
 `recommended_ram_gib`, `state` (`available`, `unverified`, `installed`,
 `mismatch`, `corrupt`), `resource` (`fits`, `limited`, `unavailable`),
 `resource_reason`, `tokens_per_s` (`cpu`, `gpu`, or `null`) and `thinking`
-(`on`, `off`, or `null` for a model that does not think). The list shows
-`thinking off` after a thinking model that has it off.
+(`on`, `off`, `default` when nothing set it, or `null` for a model that does
+not think). The list shows `thinking off` or `thinking on` after a thinking
+model whose setting says so.
 
 The models in catalog revision 12:
 
@@ -284,8 +285,8 @@ Type `/` for the list; ↑↓ choose, Tab takes, Enter runs, Esc closes it.
 | `/temp 0.7` | set it, 0 to 2 (0: always the most likely word) |
 | `/system` | show the system prompt |
 | `/system Be brief.` | set it; `/system off` removes it |
-| `/think` | a thinking model: show whether it thinks |
-| `/think off`, `/think on` | answer at once, without reasoning; or reason again (`/save` keeps it for this model) |
+| `/think` | a thinking model: show whether it thinks (`on`, `off`, or the model's default) |
+| `/think off`, `/think on` | answer at once, without reasoning; or reason first (`/save` keeps it for this model; over `--socket` for this chat) |
 | `/info` | backend, model, chat format, context used of total (and %), temperature, CPU threads, thinking, system prompt |
 | `/files ~/Notes` | answers from a folder of your files; `/files off` (or `/files`) stops |
 | `/retry` | the last answer again (at temperature 0: this once at 0.7) |
@@ -384,28 +385,42 @@ explaining everything again.
 
 ### Thinking models
 
-Qwen3, Qwen3.5, Qwen3.8 and Bonsai 2 reason before they answer. While they
-do, the chat shows `⠋ thinking · N s`. The reasoning itself is not shown,
-not kept in the conversation and not sent back to the model; only the
-answer is. Over HTTP it is left out of the answer too.
+Qwen3, Qwen3.5, Qwen3.8, Bonsai 2 and Gemma 4 can reason before they answer.
+While they do, the chat shows `⠋ thinking · N s`. The reasoning itself is
+not shown, not kept in the conversation and not sent back to the model; only
+the answer is. Over HTTP it comes apart from the answer
+([HTTP](#http)).
+
+Unless a setting or a request says otherwise, each model does what its chat
+template does by default (#266):
+
+| model | by default | `/think on` adds |
+|---|---|---|
+| `qwen3-0.6b` | thinks | — |
+| `qwen38-27b-q4`, `qwen38-27b-q8`, `bonsai2-27b-pq2` | thinks, at the template's highest effort (`xhigh`) | — |
+| `qwen35-0.8b` | answers at once | `<think>` after the generation prompt |
+| `gemma4-e2b`, `gemma4-e4b` | answers at once | `<\|think\|>` in the system turn |
 
 Reasoning takes time: with `qwen3-0.6b` on a CPU, about half of a short
 answer's wait. Whether it is worth it depends on the model, so it can be
-switched off per model:
+switched per model:
 
 ```sh
 geistr config qwen3-0.6b.thinking off   # this model answers at once
-geistr config qwen3-0.6b.thinking       # show it
+geistr config qwen35-0.8b.thinking on   # this one reasons first
+geistr config qwen3-0.6b.thinking       # show it: on, off or default
 geistr config qwen3-0.6b.thinking ""    # back to the thinking setting
 geistr config thinking off              # every thinking model without its own value
 ```
 
-Off, the model does not reason at all (its template's `enable_thinking=false`:
-an empty `<think></think>` opens the answer), so the chat goes from
-`reading` straight to the answer. It applies to `chat`, `run` and `serve`.
-In a chat, `/think off` and `/think on` switch it; `/save` keeps it for the
+`thinking` (on by default) lets each model think as its template has it;
+off, none does. Off, the model does not reason at all (its template's
+`enable_thinking=false`: for Qwen an empty `<think></think>` opens the
+answer), so the chat goes from `reading` straight to the answer. It applies
+to `chat`, `run` and `serve`. In a chat, `/think off` and `/think on` switch
+it, also over `geistr chat --socket` (for that chat); `/save` keeps it for the
 model. A model that does not think refuses it (`geistr: gemma4-e2b does not
-think`)
+think`, for `config`, where the catalog decides)
 
 ### Embedding models do not chat
 
@@ -514,6 +529,7 @@ Models installed while it runs are offered at once. The socket protocol
 | `--socket=PATH` | the Unix socket's path (default: `geistr.sock` in the data folder) |
 | `--chats N` | conversations kept in memory, 1 to 64 (default 2) |
 | `--max-request=MiB` | largest request, 1 to 1024 (default 16) |
+| `--thinking=on`, `--thinking=off` | thinking for requests that do not say, over the settings; models that cannot ignore it ([Thinking models](#thinking-models)) |
 | `--cpu`, `--gpu`, `--threads N` | the processor, as everywhere |
 
 ### HTTP
@@ -540,10 +556,10 @@ started with, or no `model` at all; another name gets 404
 
 | endpoint | |
 |---|---|
-| `POST /v1/chat/completions` | OpenAI: `messages`, `temperature`, `max_tokens` / `max_completion_tokens`, `stop`, `stream` (SSE, `stream_options.include_usage`), `tools` / `tool_choice` |
+| `POST /v1/chat/completions` | OpenAI: `messages`, `temperature`, `max_tokens` / `max_completion_tokens`, `stop`, `stream` (SSE, `stream_options.include_usage`), `tools` / `tool_choice`, `reasoning_effort`, `chat_template_kwargs.enable_thinking` / `.reasoning_effort` |
 | `POST /v1/embeddings` | OpenAI: `input` (a text or a list), `encoding_format` (`float`, `base64`); with an embedding model |
 | `GET /v1/models` | the model, or without one every installed model |
-| `POST /api/chat` | Ollama: `messages`, `stream` (NDJSON, the default), `options.temperature`, `options.num_predict`, `options.stop`, `tools`, `images` |
+| `POST /api/chat` | Ollama: `messages`, `stream` (NDJSON, the default), `options.temperature`, `options.num_predict`, `options.stop`, `tools`, `images`, `think` |
 | `POST /api/embed` | Ollama: `input` (a text or a list); with an embedding model |
 | `GET /api/tags` | the same as Ollama's list |
 | `GET /api/version` | the geistr version |
@@ -558,8 +574,31 @@ gives the same answer.
 
 **Streaming.** With `"stream": true` the OpenAI endpoint sends SSE chunks and
 ends with `data: [DONE]`; the Ollama endpoint streams NDJSON unless
-`"stream": false`. While a thinking model reasons, the stream gets comment
-lines (`: thinking`) so clients do not time out.
+`"stream": false`. While a thinking model reasons, its reasoning streams
+apart from the answer (below), so clients do not time out.
+
+**Thinking** (#266) is switched per request the way clients send it:
+
+| client sends | thinking |
+|---|---|
+| OpenAI `reasoning_effort`: `none` | off |
+| OpenAI `reasoning_effort`: `minimal`, `low`, `medium`, `high`, `xhigh` | on, at that effort |
+| `chat_template_kwargs: {"enable_thinking": false}` (vLLM, llama.cpp; the OpenAI SDK's `extra_body`) | off; `true`: on |
+| `chat_template_kwargs: {"reasoning_effort": "low"}` | as `reasoning_effort` |
+| Ollama `think`: `false` (`ollama run --think=false`), `true`, `"low"`, `"medium"`, `"high"` | off, on, on at that effort |
+| nothing | the `--thinking` option, else the settings, else the model's default ([Thinking models](#thinking-models)) |
+
+Off wins over an effort. The effort counts where the model's template has
+one (Qwen3.8, Bonsai 2: `low`, `medium`, else `xhigh`, an instruction in the
+system turn; `minimal` is `low`, `high` is `xhigh`); other models only think.
+The reasoning comes apart from the answer, as llama.cpp and Ollama return
+it: OpenAI `message.reasoning_content` (streamed: `delta.reasoning_content`
+chunks before the content), Ollama `message.thinking`. A conversation sent
+back without it is what the model expects: earlier reasoning is not part of
+the history. Ollama's `think: true` for a model that does not think is 400
+(`this model does not support thinking`), as in Ollama; `false`, and the
+OpenAI fields, are ignored there. A model that always thinks refuses off
+(400). A value that is none of these is 400.
 
 **Tool calling** works with Qwen3 models (`qwen3-0.6b` and the other
 Qwen3.x): send `tools`, get `tool_calls` back (`finish_reason: tool_calls`;
@@ -641,8 +680,10 @@ echo '{"op":"chat","messages":[{"role":"user","content":"Hi"}]}' | nc -U ~/.loca
 # {"done":true,"finish":"stop","input_tokens":14,"context_tokens":52,"output_tokens":7,"prefill_ms":40.1,"generation_ms":95.3,"total_ms":136.2}
 ```
 
-A chat request may also carry `"temperature"` (0 to 2) and `"max"` (answer
-tokens; 0: the rest of the context). On failure the last line is
+A chat request may also carry `"temperature"` (0 to 2), `"max"` (answer
+tokens; 0: the rest of the context), `"think"` (`true` or `false`, #266),
+`"effort"` (`"low"`, `"medium"`, `"high"`) and `"thinking": true` for the
+reasoning as `{"part":"thinking","text":"…"}` lines. On failure the last line is
 `{"error":"…","status":"…"}`. The details are in
 [`tools/geistr/service.h`](../tools/geistr/service.h).
 
@@ -711,8 +752,8 @@ geistr config system ""               # back to the default (empty)
 | `history` | `on` | `on`, `off` | keep typed lines between chats |
 | `resume_tokens` | `2048` | 0 to 1000000 | what a resumed conversation re-reads at most |
 | `threads` | `0` | 0 to 1024 | CPU threads; 0: geistr chooses |
-| `thinking` | `on` | `on`, `off` | whether thinking models reason before they answer |
-| `<model>.thinking` | (the `thinking` setting) | `on`, `off` | the same for one model ([Thinking models](#thinking-models)) |
+| `thinking` | `on` | `on`, `off` | on: thinking models reason as their template has it by default; off: none does |
+| `<model>.thinking` | (the `thinking` setting) | `on`, `off` | one model reasons, or not ([Thinking models](#thinking-models)) |
 
 A value with spaces needs no quotes: `geistr config system Answer in German.`
 An empty value (`""`) resets a key to its default. In a chat, `/save` writes

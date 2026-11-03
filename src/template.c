@@ -78,6 +78,10 @@ void tpl_init(struct tpl_state *st, enum tpl_family family) {
     *st = (struct tpl_state) {.family = family};
 }
 
+void tpl_init_extra(struct tpl_state *st, enum tpl_family family, const struct tpl_extra *extra) {
+    *st = (struct tpl_state) {.family = family, .extra = extra ? *extra : (struct tpl_extra) {}};
+}
+
 void tpl_free(struct tpl_state *st) {
     free(st->folded);
     st->folded = nullptr;
@@ -88,6 +92,7 @@ struct out {
     size_t            len, cap;
     bool              oom;
     struct tpl_spans *spans; /* nullptr: not wanted */
+    struct tpl_extra  extra;
 };
 
 static void put(struct out *o, const char *s) {
@@ -174,8 +179,21 @@ static void render_turns(struct out            *o,
                          const char           **folded,
                          size_t                 n,
                          const geistr_message   msgs[]) {
-    size_t i = 0;
-    if (!started && n > 0 && is_role(&msgs[0], "system")) {
+    size_t       i       = 0;
+    const char  *lead    = f->sys_role ? o->extra.lead : nullptr, *history = o->extra.history;
+    const bool   system  = !started && n > 0 && is_role(&msgs[0], "system");
+    if (!started && lead && *lead) { /* a thinking chat's system turn (#266) */
+        put(o, f->open);
+        put(o, f->sys_role);
+        put(o, f->role_end);
+        put(o, lead);
+        if (system && *msgs[0].content) {
+            put(o, o->extra.join ? o->extra.join : "");
+            put_body(o, msgs[0].content);
+        }
+        put(o, f->close);
+        i = system ? 1 : 0;
+    } else if (system) {
         if (f->sys_role != nullptr) {
             put(o, f->open);
             put(o, f->sys_role);
@@ -197,6 +215,8 @@ static void render_turns(struct out            *o,
             put(o, "\n\n");
             *folded = nullptr;
         }
+        if (asst && history)
+            put(o, history);
         put_body(o, msgs[i].content);
         put(o, f->close);
     }
@@ -223,7 +243,7 @@ char *tpl_render_send(struct tpl_state *st, size_t n, const geistr_message msgs[
 }
 
 char *tpl_render_send_spans(struct tpl_state *st, size_t n, const geistr_message msgs[], struct tpl_spans *spans) {
-    struct out             o      = {.spans = spans};
+    struct out             o      = {.spans = spans, .extra = st->extra};
     const size_t           n0     = spans ? spans->n : 0;
     const struct turn_fmt *f      = turn_fmt(st->family);
     const char            *folded = st->folded;
@@ -264,8 +284,61 @@ const char *tpl_generation_prompt(enum tpl_family family) {
     return family >= TPL_UNKNOWN && family <= TPL_BITNET ? prompts[family] : "";
 }
 
+static const char THINK_EMPTY[] = "<think>\n\n</think>\n\n";
+
 const char *tpl_think_off(enum tpl_family family) {
-    return family == TPL_CHATML ? "<think>\n\n</think>\n\n" : nullptr;
+    return family == TPL_CHATML ? THINK_EMPTY : nullptr;
+}
+
+/* Fingerprints are the templates' own Jinja conditions, as the GGUFs carry them:
+ *   Qwen3:    enable_thinking false → the empty block; nothing when thinking
+ *   Qwen3.5:  "enable_thinking is defined and enable_thinking is true" → "<think>\n",
+ *             else the empty block: it thinks only when asked
+ *   Qwen3.6+: as Qwen3.5 but thinking by default, reasoning_effort's instruction
+ *             in the system turn, preserve_thinking (Qwen3.8, Bonsai 2)
+ *   Gemma 4:  enable_thinking (default false) puts <|think|> into the system
+ *             turn; the reasoning comes as <|channel>thought … <channel|> */
+struct tpl_thinking tpl_thinking_of(enum tpl_family family, const char *tpl) {
+    struct tpl_thinking t = {.on = "", .history = "", .open = "<think>", .close = "</think>"};
+    if (tpl == nullptr)
+        return t;
+    if (family == TPL_GEMMA4 && strstr(tpl, "<|think|>") && strstr(tpl, "enable_thinking"))
+        return (struct tpl_thinking) {.thinks    = true,
+                                      .on        = "",
+                                      .off       = "",
+                                      .history   = "",
+                                      .system_on = "<|think|>\n",
+                                      .open      = "<|channel>thought",
+                                      .close     = "<channel|>"};
+    if (family != TPL_CHATML || !strstr(tpl, "<think>"))
+        return t;
+    const bool sw = strstr(tpl, "enable_thinking") != nullptr;
+    t.thinks      = true;
+    t.off         = sw ? THINK_EMPTY : nullptr;
+    t.on          = strstr(tpl, "{{- '<think>\\n' }}") ? "<think>\n" : "";
+    t.default_on  = !(sw && strstr(tpl, "enable_thinking is defined and enable_thinking is true"));
+    t.effort      = sw && strstr(tpl, "reasoning_effort") && strstr(tpl, "Reasoning effort is set to");
+    t.history     = strstr(tpl, "preserve_thinking is undefined or preserve_thinking is true") ? THINK_EMPTY : "";
+    return t;
+}
+
+struct tpl_extra tpl_thinking_extra(const struct tpl_thinking *t, bool on, geistr_effort effort) {
+    const char *lead = !on ? nullptr : t->system_on ? t->system_on : t->effort ? tpl_effort_text(effort) : nullptr;
+    return (struct tpl_extra) {.lead = lead, .join = t->system_on ? "" : "\n\n", .history = t->history};
+}
+
+const char *tpl_effort_text(geistr_effort effort) {
+    switch (effort) {
+    case GEISTR_EFFORT_LOW:
+        return "Reasoning effort is set to low. Keep your thinking brief and focused, moving directly to the "
+               "conclusion without unnecessary elaboration.";
+    case GEISTR_EFFORT_MEDIUM:
+        return nullptr;
+    default:
+        return "Reasoning effort is set to xhigh. Please think carefully through the task, validate key "
+               "assumptions, consider plausible alternatives, and prioritize correctness, consistency, and "
+               "clarity in the final answer.";
+    }
 }
 
 const char *tpl_answer_close(enum tpl_family family, const char *end_marker) {

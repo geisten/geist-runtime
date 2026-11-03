@@ -134,6 +134,17 @@ bool json_bool(const struct json *j, int t, bool dflt) {
     return *v == 't' ? true : *v == 'f' ? false : dflt;
 }
 
+bool json_is_bool(const struct json *j, int t) {
+    if (t < 0 || T(j)[t].type != JSMN_PRIMITIVE)
+        return false;
+    const char *v = j->s + T(j)[t].start;
+    return *v == 't' || *v == 'f';
+}
+
+bool json_null(const struct json *j, int t) {
+    return t >= 0 && T(j)[t].type == JSMN_PRIMITIVE && j->s[T(j)[t].start] == 'n';
+}
+
 void json_get(const char *object, const char *key, char *out, size_t cap) {
     struct json j = {};
     out[0]        = 0;

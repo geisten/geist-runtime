@@ -37,14 +37,20 @@ bool str_utf8_feed(struct str_utf8 *s, const char *piece, char *out, size_t cap)
 typedef bool (*str_emit_fn)(void *context, const char *text);
 struct str_output {
     enum { STR_PREFIX, STR_REASONING, STR_ANSWER, STR_DISCARD, STR_FINISHED } state;
-    char        prefix[40];
-    char        held[8]; /* a possible partial closing marker, until it resolves */
+    char        prefix[64];
+    char        held[16]; /* a possible partial closing marker, until it resolves */
     size_t      used, closing, opening, held_len;
     unsigned    depth;
     bool        enabled, reasoning;
     str_emit_fn think;
+    const char *open, *close; /* the markers: <think> and </think> unless str_output_markers */
 };
 void str_output_init(struct str_output *out, bool think_tags);
+/* After init (think_tags): other markers (static, open at most 24 bytes, close
+ * at most 15: Gemma 4's "<|channel>thought" … "<channel|>"), and inside: the
+ * prompt already opened the reasoning (Qwen3.5+'s "<think>\n"), so the
+ * text starts as reasoning (#266). */
+void str_output_markers(struct str_output *out, const char *open, const char *close, bool inside);
 /* Receive reasoning text (without markers) through think, with feed's context. */
 void str_output_thinking(struct str_output *out, str_emit_fn think);
 /* false if an emit callback returned false, or after finish. */

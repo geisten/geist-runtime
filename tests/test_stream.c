@@ -164,8 +164,37 @@ static void stop_strings(void) {
     stop_case("plain", 0, nullptr, "plain");
 }
 
+/* #266: other markers (Gemma 4's channel) and a prompt that opened the
+ * reasoning already (Qwen3.5+'s "<think>\n"), for every split. */
+static void check_marked(const char *input, const char *open, const char *close, bool inside, const char *answer,
+                         const char *thought) {
+    for (size_t split = 0; split <= strlen(input); ++split) {
+        char left[1024];
+        memcpy(left, input, split);
+        left[split]              = 0;
+        static struct pair pair;
+        pair = (struct pair) {.boundaries = true};
+        struct str_output p;
+        str_output_init(&p, true);
+        str_output_markers(&p, open, close, inside);
+        str_output_thinking(&p, emit_thought);
+        assert(str_output_feed(&p, left, emit_answer, &pair));
+        assert(str_output_feed(&p, input + split, emit_answer, &pair));
+        str_output_finish(&p);
+        assert(!strcmp(pair.answer.text, answer));
+        assert(!strcmp(pair.thought, thought));
+    }
+}
+
 int main(void) {
     utf8();
+    check_marked("\nWeighing.\n</think>\n\nParis", "<think>", "</think>", true, "Paris", "\nWeighing.\n");
+    check_marked("Unfinished SECRET", "<think>", "</think>", true, "", "Unfinished SECRET");
+    check_marked("</think>\n\nParis", "<think>", "</think>", true, "Paris", "");
+    check_marked("<|channel>thought\nWeighing.<channel|>Paris", "<|channel>thought", "<channel|>", false, "Paris",
+                 "\nWeighing.");
+    check_marked("Paris <|channel>thought", "<|channel>thought", "<channel|>", false, "Paris <|channel>thought", "");
+    check_marked("<think>x</think>Paris", "<|channel>thought", "<channel|>", false, "<think>x</think>Paris", "");
     stop_strings();
 
     check("<think>SECRET Grüß 🌿</think>Answer", "Answer", true, "think_tags");

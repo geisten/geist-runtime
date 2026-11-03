@@ -111,6 +111,7 @@ struct geistr_model {
     geist_token_t         bos;
     bool                  add_bos;
     bool                  thinks; /* the chat template has <think>: decisions render thinking off */
+    struct tpl_thinking   think;  /* what the template does with thinking (#266) */
     uint32_t              context;
     geistr_decision_policy decision;
     atomic_size_t decision_allocations, decision_bytes;
@@ -231,6 +232,7 @@ static geistr_status model_describe(geistr_model *m, struct geist_model *gm, str
                                               geist_model_arch(gm));
     const char *chat_template = geist_model_metadata_str(gm, "tokenizer.chat_template", nullptr);
     m->thinks    = chat_template && strstr(chat_template, "<think>");
+    m->think     = tpl_thinking_of(m->family, chat_template);
     m->vision    = m->family == TPL_GEMMA4 && (geist_model_modalities(gm) & GEIST_MOD_VISION);
     m->n_stops   = tpl_stop_ids(token_lookup, gm, geist_model_eos_token(gm), MAX_STOPS, m->stops);
     m->bos       = geist_model_bos_token(gm);
@@ -514,8 +516,11 @@ geistr_status geistr_model_info_get(const geistr_model *m, geistr_model_info *in
                .arch        = geist_model_arch(m->m),
                .chat_format = tpl_family_name(m->family),
                .backend     = !strncmp(backend, "cpu", 3) ? "cpu" : backend,
-               .context     = m->context,
-               .vision      = m->vision,
+               .context      = m->context,
+               .vision       = m->vision,
+               .thinking     = !m->think.thinks ? 0 : m->think.default_on ? 1 : 2,
+               .thinking_off = m->think.off != nullptr,
+               .effort       = m->think.effort,
     };
     size_t size = info->size;
     if (size < sizeof size || size > sizeof full)
@@ -686,6 +691,12 @@ struct geistr_chat {
     struct geist_session *s;
     atomic_bool           cancel;
     struct tpl_state      tpl;
+    /* Thinking (#266): opts.reasoning resolved at open. RAW: no handling; ON
+     * and OFF render the template's enable_thinking true or false: gen
+     * follows the generation prompt, extra goes into the turns. */
+    enum { THINK_RAW, THINK_ON, THINK_OFF } mode;
+    const char           *gen;
+    struct tpl_extra      extra;
     struct turn          *turns;
     size_t                n_turns, cap_turns;
     /* the answer of the last send */
@@ -791,7 +802,11 @@ geistr_status geistr_chat_open(geistr_model *m, const geistr_chat_opts *opts, ge
         snprintf(m->error, sizeof m->error, "this model's chat format is not supported");
         return GEISTR_FORMAT;
     }
-    if (o.reasoning == GEISTR_REASONING_THINK_OFF && !tpl_think_off(m->family)) {
+    if (o.reasoning > GEISTR_REASONING_AUTO || o.effort > GEISTR_EFFORT_HIGH) {
+        snprintf(m->error, sizeof m->error, "chat options: unknown reasoning or effort");
+        return GEISTR_INVALID;
+    }
+    if (o.reasoning == GEISTR_REASONING_THINK_OFF && !m->think.off) {
         snprintf(m->error, sizeof m->error, "this model's chat format cannot turn thinking off");
         return GEISTR_FORMAT;
     }
@@ -842,7 +857,15 @@ geistr_status geistr_chat_open(geistr_model *m, const geistr_chat_opts *opts, ge
     c->opts.stop = nullptr;
     c->stops     = stops;
     atomic_init(&c->cancel, false);
-    tpl_init(&c->tpl, m->family);
+    const struct tpl_thinking *t = &m->think;
+    c->mode = o.reasoning == GEISTR_REASONING_THINK_TAGS ? THINK_ON
+              : o.reasoning == GEISTR_REASONING_THINK_OFF ? THINK_OFF
+              : o.reasoning == GEISTR_REASONING_AUTO && t->thinks ? (t->default_on ? THINK_ON : THINK_OFF)
+                                                                  : THINK_RAW;
+    c->gen   = c->mode == THINK_ON ? t->on : c->mode == THINK_OFF ? t->off : "";
+    if (c->mode != THINK_RAW)
+        c->extra = tpl_thinking_extra(t, c->mode == THINK_ON, o.effort);
+    tpl_init_extra(&c->tpl, m->family, &c->extra);
     c->stats = (geistr_stats) {.size = sizeof c->stats, .prefill_ms = -1, .first_answer_ms = -1};
     *out     = c;
     return GEISTR_OK;
@@ -1069,19 +1092,18 @@ static char *render_all(geistr_chat     *c,
         msgs[k++] = (geistr_message) {c->turns[i].role, c->turns[i].content};
     for (size_t i = 0; i < n_extra; i++)
         msgs[k++] = extra[i];
-    tpl_init(st, c->model->family);
+    tpl_init_extra(st, c->model->family, &c->extra);
     spans->n   = 0;
     char *text = tpl_render_send_spans(st, k, msgs, spans);
     free(msgs);
     if (text && !answer_follows) { /* drop the generation prompt */
         const size_t g = strlen(tpl_generation_prompt(c->model->family)), n = strlen(text);
         text[n >= g ? n - g : 0] = 0;
-    } else if (text && c->opts.reasoning == GEISTR_REASONING_THINK_OFF) {
-        const char *off  = tpl_think_off(c->model->family); /* known at chat open */
-        char       *more = realloc(text, strlen(text) + strlen(off) + 1);
+    } else if (text && *c->gen) { /* thinking on or off (#212, #266): part of the prompt */
+        char *more = realloc(text, strlen(text) + strlen(c->gen) + 1);
         if (!more)
             free(text);
-        text = more ? strcat(more, off) : nullptr;
+        text = more ? strcat(more, c->gen) : nullptr;
     }
     return text;
 }
@@ -1213,6 +1235,21 @@ static bool to_stops(void *c, const char *text) {
     return str_stops_feed(&((geistr_chat *) c)->stop, text, queue_answer, c);
 }
 
+/* a + b and c + d are the same text. */
+static bool concat_equal(const char *a, const char *b, const char *c, const char *d) {
+    const char *p[2] = {a, b}, *q[2] = {c, d};
+    for (size_t i = 0, j = 0;;) {
+        while (i < 2 && !*p[i])
+            i++;
+        while (j < 2 && !*q[j])
+            j++;
+        if (i == 2 || j == 2)
+            return i == 2 && j == 2;
+        if (*p[i]++ != *q[j]++)
+            return false;
+    }
+}
+
 static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_message messages[]) {
     atomic_store(&c->cancel, false);
     if (!count || !messages)
@@ -1226,26 +1263,38 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
         return fail(c, GEISTR_INVALID, "a message with an image cannot contain U+001F");
     /* A thinking model's earlier reasoning is not part of its history: the
      * templates of Qwen3, QwQ and DeepSeek-R1 drop it, and the models are
-     * trained so; kept, Qwen3's next answer is empty or wrong (#96). So
-     * before the next turn the last answer leaves the context and comes back
-     * without its reasoning: back to its start, then again with the new
-     * messages (a small prefill). Unfinished reasoning leaves nothing. */
-    if (c->opts.reasoning == GEISTR_REASONING_THINK_TAGS && (c->answering || c->open) && c->raw &&
-        (strstr(c->raw, "<think>") || strstr(c->raw, "</think>"))) {
-        const char     *end   = strstr(c->raw, "</think>");
-        const char     *after = end ? end + strlen("</think>") : "";
-        char           *plain = strdup(after + strspn(after, " \t\r\n"));
-        geistr_message *again = plain ? calloc(count + 1, sizeof *again) : nullptr;
-        geistr_status   s     = again ? geistr_chat_rewind(c, c->answer_turn) : GEISTR_NO_MEMORY;
-        if (s == GEISTR_OK) {
-            again[0] = (geistr_message) {"assistant", plain};
-            memcpy(again + 1, messages, count * sizeof *again);
-            s = chat_send(c, count + 1, again);
-        } else if (s == GEISTR_NO_MEMORY)
-            s = fail(c, s, "out of memory");
-        free(again);
-        free(plain);
-        return s;
+     * trained so; kept, Qwen3's next answer is empty or wrong (#96). The
+     * runtime keeps no reasoning, so an earlier answer is what the template
+     * renders for an assistant message without reasoning_content: its text,
+     * after Qwen3.6+'s empty block (#266). Where the context holds something
+     * else (the reasoning, or the empty block of thinking off before Qwen3's
+     * and Qwen3.5's answers), the last answer leaves the context before the
+     * next turn and comes back as the template has it: back to its start,
+     * then again with the new messages (a small prefill). Unfinished
+     * reasoning leaves nothing. */
+    if (c->mode != THINK_RAW && (c->answering || c->open) && c->raw) {
+        const char *open = c->model->think.open, *close = c->model->think.close;
+        const char *lead = c->raw + strspn(c->raw, " \t\r\n");
+        const bool  inside = (c->mode == THINK_ON && *c->gen) || !strncmp(lead, open, strlen(open));
+        const char *end    = inside ? strstr(c->raw, close) : nullptr;
+        const char *after  = !inside ? c->raw : end ? end + strlen(close) : "";
+        if (inside)
+            after += strspn(after, " \t\r\n");
+        /* the context holds gen + raw; the template has history + after */
+        if (!concat_equal(c->gen, c->raw, c->extra.history ? c->extra.history : "", after)) {
+            char           *plain = strdup(after);
+            geistr_message *again = plain ? calloc(count + 1, sizeof *again) : nullptr;
+            geistr_status   s     = again ? geistr_chat_rewind(c, c->answer_turn) : GEISTR_NO_MEMORY;
+            if (s == GEISTR_OK) {
+                again[0] = (geistr_message) {"assistant", plain};
+                memcpy(again + 1, messages, count * sizeof *again);
+                s = chat_send(c, count + 1, again);
+            } else if (s == GEISTR_NO_MEMORY)
+                s = fail(c, s, "out of memory");
+            free(again);
+            free(plain);
+            return s;
+        }
     }
     if (!answer_commit(c) || !turns_reserve(c, count + 1))
         return fail(c, GEISTR_NO_MEMORY, "out of memory");
@@ -1254,7 +1303,7 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
     const size_t len0  = session_length(c);
     /* The previous answer's turn close, the new turns, the generation
      * prompt: tokenized apart, so their boundaries are known. */
-    struct tpl_state st = {.family = c->tpl.family, .started = c->tpl.started};
+    struct tpl_state st = {.family = c->tpl.family, .started = c->tpl.started, .extra = c->tpl.extra};
     if (c->tpl.folded && !(st.folded = strdup(c->tpl.folded)))
         return fail(c, GEISTR_NO_MEMORY, "out of memory");
     /* An image (#92) opens the last message: rendered with a U+001F where
@@ -1283,10 +1332,9 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
      * not the client's: its body starts after them. */
     if (c->image && spans.n)
         spans.v[spans.n - 1].begin += strlen(IMAGE_OPEN "\x1f" IMAGE_CLOSE);
-    /* Thinking off (#212): the empty <think></think> belongs to the prompt. */
+    /* Thinking on or off (#212, #266): "<think>\n" or the empty block belongs to the prompt. */
     char gen[96];
-    snprintf(gen, sizeof gen, "%s%s", tpl_generation_prompt(c->model->family),
-             c->opts.reasoning == GEISTR_REASONING_THINK_OFF ? tpl_think_off(c->model->family) : "");
+    snprintf(gen, sizeof gen, "%s%s", tpl_generation_prompt(c->model->family), c->gen);
     const size_t t_len = strlen(text), g_len = strlen(tpl_generation_prompt(c->model->family));
     text[t_len - g_len] = 0; /* the turns; gen follows */
     char *after_image   = c->image ? strrchr(text, '\x1f') : nullptr;
@@ -1461,7 +1509,8 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
     const uint32_t room = used + 1 < c->model->context ? (uint32_t) (c->model->context - used - 1) : 0;
     c->limit            = c->opts.max_tokens && c->opts.max_tokens < room ? c->opts.max_tokens : room;
     c->utf8             = (struct str_utf8) {};
-    str_output_init(&c->output, c->opts.reasoning != GEISTR_REASONING_NONE);
+    str_output_init(&c->output, c->mode != THINK_RAW);
+    str_output_markers(&c->output, c->model->think.open, c->model->think.close, c->mode == THINK_ON && *c->gen);
     str_output_thinking(&c->output, c->opts.thinking ? queue_thinking : nullptr);
     str_stops_free(&c->stop);
     str_stops_init(&c->stop, c->opts.n_stop, (const char *const *) c->stops);
@@ -1608,7 +1657,7 @@ geistr_status geistr_chat_probe_set(geistr_chat *c, const geistr_chat_probe *p) 
         return fail(c, GEISTR_INVALID, "probe: interval, threshold, temperature or options out of range");
     if (c->draft)
         return fail(c, GEISTR_INVALID, "probe: not with a draft model");
-    if (c->opts.reasoning != GEISTR_REASONING_THINK_TAGS || !c->model->thinks)
+    if (c->mode != THINK_ON || !c->model->thinks)
         return fail(c, GEISTR_FORMAT, "probe: only a chat that thinks in <think> tags can be probed");
     geist_token_t close[4];
     const size_t  n_close = tokens_of(c, "</think>", 4, close);

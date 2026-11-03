@@ -36,14 +36,49 @@ enum tpl_family tpl_family_detect(const char *tpl, const char *arch);
 const char     *tpl_family_name(enum tpl_family family); /* "chatml", …, "unknown" */
 enum tpl_family tpl_family_from_name(const char *name);  /* the inverse; TPL_UNKNOWN otherwise */
 
+/* What a chat template does with thinking (#266), read from its text
+ * (tokenizer.chat_template). The strings are static template text. */
+struct tpl_thinking {
+    bool        thinks;     /* the template knows reasoning: Qwen3.x <think>, Gemma 4 <|think|> */
+    bool        default_on; /* without enable_thinking it thinks: Qwen3, Qwen3.6+; not Qwen3.5, Gemma 4 */
+    bool        effort;     /* reasoning_effort: an instruction leads the system turn (Qwen3.6+) */
+    const char *on;         /* after the generation prompt, thinking: "" or "<think>\n" (Qwen3.5+) */
+    const char *off;        /* after it, not thinking: the empty block; nullptr: no switch */
+    const char *history;    /* before an earlier answer: Qwen3.6+'s preserve_thinking keeps an
+                               empty block there (the runtime keeps no reasoning); else "" */
+    const char *system_on;  /* Gemma 4: opens the system turn while thinking; else nullptr */
+    const char *open, *close; /* the reasoning's markers in the output */
+};
+
+/* family, and the template's text (nullptr: no thinking). Recognised by the
+ * Jinja conditions of Qwen3, Qwen3.5, Qwen3.6+ (Qwen3.8, Bonsai 2) and Gemma 4;
+ * any other ChatML template with <think> thinks by default, without a switch. */
+struct tpl_thinking tpl_thinking_of(enum tpl_family family, const char *tpl);
+
+/* Qwen3.6+'s system instruction for an effort; nullptr for MEDIUM (none). */
+const char *tpl_effort_text(geistr_effort effort);
+
+/* Template text a thinking chat adds to the turns (#266): lead opens the
+ * system turn (a system turn of its own without a system message), joined to
+ * a system message by join; history precedes every assistant message. */
+struct tpl_extra {
+    const char *lead, *join, *history; /* static; nullptr or "": none */
+};
+
+/* A chat's extra text with thinking on or off (enable_thinking), at effort. */
+struct tpl_extra tpl_thinking_extra(const struct tpl_thinking *thinking, bool on, geistr_effort effort);
+
 /* What a conversation's rendering depends on beyond the current send. */
 struct tpl_state {
-    enum tpl_family family;
-    bool            started; /* a send was rendered: a system message no longer leads */
-    char           *folded;  /* Gemma 3: system text awaiting the first user turn (owned) */
+    enum tpl_family  family;
+    bool             started; /* a send was rendered: a system message no longer leads */
+    char            *folded;  /* Gemma 3: system text awaiting the first user turn (owned) */
+    struct tpl_extra extra;
 };
 
 void tpl_init(struct tpl_state *state, enum tpl_family family);
+/* tpl_init with a thinking chat's extra text (extra nullptr: none). */
+void tpl_init_extra(struct tpl_state *state, enum tpl_family family, const struct tpl_extra *extra);
 void tpl_free(struct tpl_state *state);
 
 /* Render msgs[0..n) as turns, then the generation prompt. A leading system
@@ -82,7 +117,8 @@ const char *tpl_generation_prompt(enum tpl_family family);
 
 /* What follows the generation prompt for a thinking model told not to
  * think (GEISTR_REASONING_THINK_OFF): Qwen3's template with
- * enable_thinking=false. nullptr where the family has no such switch. */
+ * enable_thinking=false. nullptr where the family has no such switch.
+ * The decision profiles' (one per family); a chat uses tpl_thinking_of. */
 const char *tpl_think_off(enum tpl_family family);
 
 /* Text that closes an answer turn, before the next send. If the model ended

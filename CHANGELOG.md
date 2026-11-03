@@ -20,6 +20,29 @@
 
 ### Features
 
+- Thinking on and off per request, as the model's chat template has it
+  (#266).
+  - `serve --http` takes what clients send: OpenAI `reasoning_effort`
+    (`none` turns it off), `chat_template_kwargs.enable_thinking` and
+    `.reasoning_effort` (vLLM, llama.cpp; the OpenAI SDK's `extra_body`),
+    Ollama `think` (`true`, `false`, `"low"`…; `ollama run --think=false`).
+    The socket protocol takes `"think"`, `"effort"` and, for the reasoning as
+    lines of its own, `"thinking": true`; `geistr chat --socket` sends
+    `/think on|off`.
+  - The reasoning comes apart from the answer: OpenAI
+    `message.reasoning_content` (streamed as `delta.reasoning_content`),
+    Ollama `message.thinking`. Before, it was dropped and the stream got
+    `: thinking` comments.
+  - `geistr serve --thinking=on|off` for requests that do not say.
+  - Library: `GEISTR_REASONING_AUTO` (the template's default),
+    `geistr_chat_opts.effort`, `geistr_model_info.thinking`,
+    `thinking_off`, `effort`. Python: `Model.chat(think=…, effort=…)`, the
+    same three in `Model.info`.
+  - Rendered as the templates render `enable_thinking` and
+    `reasoning_effort`, byte for byte (checked against transformers and
+    llama.cpp on the real templates of Qwen3, Qwen3.5, Qwen3.8, Bonsai 2
+    and Gemma 4). Gemma 4 can think now (`<|think|>`, its reasoning in
+    `<|channel>thought … <channel|>`).
 - Experimental: early exit from reasoning (geistlib#236).
   - `geistr decide ... --escalate chat --early-exit [--probe-interval N]
     [--exit-threshold P]` probes the thinking model's answer every N tokens
@@ -189,6 +212,22 @@
   processes a multiple of 32 new tokens and goes over up to 31 cached tokens
   again for that. The engine runs any other count on slower kernels
   (geistlib#35). P(yes) moves by 0.002 at most. The CPU is unchanged (#201).
+
+- Thinking follows the model's chat template by default (#266). Qwen3.5 and
+  Gemma 4 answer at once unless asked to think, as their templates do; on,
+  Qwen3.5 now really reasons: its generation prompt ends in `<think>\n`,
+  where before the model mostly wrote an empty block itself. Qwen3.8 and
+  Bonsai 2 get their template's effort instruction (`xhigh`) in the system
+  turn and `<think>\n` after the generation prompt, and earlier answers as
+  the template keeps them (an empty block before the text). The `thinking`
+  setting on means "as the template has it"; `geistr catalog --json` says
+  `default` where nothing set it. With thinking off, Qwen3's and Qwen3.5's
+  earlier answers leave the empty block behind (a small prefill per turn),
+  as the template renders them. `geistr` and the Python package open chats
+  with `GEISTR_REASONING_AUTO`, so a Qwen3 GGUF outside the catalog no
+  longer answers with `<think>…` in the text. `geistr decide --escalate
+  chat` keeps the prompt its early-exit evidence was measured with: no
+  effort instruction (Qwen3.6+'s `medium`).
 
 ### Decisions (EXPERIMENTAL)
 
