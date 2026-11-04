@@ -50,7 +50,8 @@ typedef struct geistr_catalog_entry {
     const char *group_id;           /* variants of one model share it (= id in schema 1) */
     const char *group_name;         /* (= name in schema 1) */
     const char *quantization;       /* e.g. "Q4_0"; optional (schema 1: absent) */
-    const char *reasoning_format;   /* "none" or "think_tags"; optional */
+    const char *reasoning_format;   /* "none", "think_tags" (<think>…</think>) or "channel_tags" (Gemma 4's
+                                       <|channel>thought…<channel|>, #270): the model thinks; optional */
     const char *unsupported_format; /* format this engine cannot run yet; then backends == 0 */
     const char *quality;            /* reference suite evidence, raw JSON object; optional */
     const char *reference;          /* speed on reference platforms, raw JSON array; optional */

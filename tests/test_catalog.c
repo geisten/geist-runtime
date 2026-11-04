@@ -83,6 +83,9 @@ static void shipped(const char *file) {
         CHECK(m->quality_passed <= m->quality_total);
         /* a vision tower (#92) comes whole or not at all */
         CHECK(!m->vision_url == !m->vision_sha256 && !m->vision_url == !m->vision_bytes);
+        /* Gemma 4 thinks when asked: <|think|>, its reasoning in channel tags (#270) */
+        if (!strncmp(m->id, "gemma4-", 7))
+            CHECK(m->reasoning_format && !strcmp(m->reasoning_format, "channel_tags"));
     }
     printf("catalog: %s, revision %u, %zu models\n", file, geistr_catalog_revision(c), geistr_catalog_count(c));
     geistr_catalog_free(c);

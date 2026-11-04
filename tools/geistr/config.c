@@ -254,17 +254,18 @@ int config(int n, const char **args) {
             puts(on < 0 ? "default" : on ? "on" : "off");
             return OK;
         }
-        /* Off only for a catalog model that thinks: its template has the switch. */
-        bool                        off = !strcmp(args[2], "off");
-        geistr_catalog             *c   = off ? load_catalog() : nullptr;
+        /* On and off only for a catalog model that thinks: its template has
+         * the switch (#270: Gemma 4 too). "" (back to the setting) for any. */
+        const bool                  set = *args[2] != 0;
+        geistr_catalog             *c   = set ? load_catalog() : nullptr;
         const geistr_catalog_entry *m   = nullptr;
         for (size_t i = 0; c && i < geistr_catalog_count(c); i++)
             if (!strcmp(geistr_catalog_get(c, i)->id, id))
                 m = geistr_catalog_get(c, i);
-        const char *why = !off ? nullptr
-                          : !m ? "is not a catalog model (geistr catalog lists them)"
-                          : !(m->reasoning_format && !strcmp(m->reasoning_format, "think_tags")) ? "does not think"
-                                                                                                 : nullptr;
+        const char *why = !set               ? nullptr
+                          : !m               ? "is not a catalog model (geistr catalog lists them)"
+                          : !catalog_thinks(m) ? "does not think"
+                                               : nullptr;
         geistr_catalog_free(c);
         if (why) {
             fprintf(stderr, "geistr: %s %s\n", id, why);

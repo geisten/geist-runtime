@@ -55,7 +55,7 @@ ref_file = os.path.basename(model_path)
 catalog = {'schema': 2, 'revision': 1, 'models': [
     entry('ref', ref_file, sha(model_path), os.path.getsize(model_path)),
     entry('tiny', 'tiny.gguf', hashlib.sha256(tiny).hexdigest(), len(tiny)),
-    entry('wrong', 'wrong.gguf', '0' * 64, len(tiny)),
+    entry('wrong', 'wrong.gguf', '0' * 64, len(tiny), reasoning_format='channel_tags'),  # thinks, as Gemma 4 (#270)
     entry('huge', 'huge.gguf', '1' * 64, 200 * 2**30)]}
 catalog_path = os.path.join(tmp, 'catalog.json')
 with open(catalog_path, 'w') as f:
@@ -258,6 +258,12 @@ def section_run():
     assert geistr_run('config', 'colour', 'blue').returncode == 2
     r = geistr_run('config', 'ref.thinking', 'off')  # #212: only a model that thinks can stop
     assert r.returncode == 2 and 'ref does not think' in r.stderr, r.stderr
+    r = geistr_run('config', 'ref.thinking', 'on')  # #270: or start
+    assert r.returncode == 2 and 'ref does not think' in r.stderr, r.stderr
+    assert listing()['wrong']['thinking'] == 'default' and listing()['ref']['thinking'] is None
+    for value in ('off', 'on', ''):  # #270: channel_tags (Gemma 4) thinks: both, and back to the setting
+        assert geistr_run('config', 'wrong.thinking', value).returncode == 0
+        assert listing()['wrong']['thinking'] == {'off': 'off', 'on': 'on', '': 'default'}[value]
     assert geistr_run('config', 'system', 'Answer', 'in', 'one', 'word.').returncode == 0
     assert geistr_run('config', 'system').stdout.strip() == 'Answer in one word.'
     assert geistr_run('config', 'stats', 'off').returncode == 0

@@ -2,7 +2,7 @@
 # count, file, check, message. Regenerate with --update.
 4	src/catalog.c	bugprone-assignment-in-if-condition	an assignment within an 'if' condition is bug-prone
 1	src/catalog.c	bugprone-implicit-widening-of-multiplication-result	result of multiplication in type 'int' is used as a pointer offset after an implicit widening conversion to type 'ptrdiff_t'
-9	src/catalog.c	bugprone-suspicious-string-compare	function 'strcmp' is called without explicitly comparing result
+8	src/catalog.c	bugprone-suspicious-string-compare	function 'strcmp' is called without explicitly comparing result
 2	src/catalog.c	bugprone-suspicious-string-compare	function 'strncmp' is called without explicitly comparing result
 1	src/common.h	bugprone-assignment-in-if-condition	an assignment within an 'if' condition is bug-prone
 1	src/common.h	bugprone-multi-level-implicit-pointer-conversion	multilevel pointer conversion from 'char **' to 'void *', please use explicit cast

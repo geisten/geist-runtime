@@ -17,6 +17,7 @@ evidence = {'suite': '0123456789ab', 'date': '2026-10-03', 'engine': '33db79d776
 ref = {'platform': 'Apple M1 Max', 'backend': 'gpu', 'answer_ms': 3200, 'tokens_per_s': 72, 'memory_mib': 1200, 'date': '2026-10-04', 'engine': '33db79d7764b'}
 good['models'][-1]['quality'] = evidence
 good['models'][-1]['reference'] = [ref]
+good['models'][-1]['reasoning_format'] = 'channel_tags'  # Gemma 4's (#270)
 assert accepts(good), 'extended catalog refused'
 
 invalid = []

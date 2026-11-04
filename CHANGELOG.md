@@ -24,6 +24,18 @@
     Jinja and llama.cpp's `/apply-template`): padded messages, Unicode
     whitespace, a blank system message, tool loops with and without
     reasoning.
+- The catalog marks Gemma 4 (`gemma4-e2b`, `gemma4-e4b`) as thinking models
+  (#270). They think when asked since #266, but the catalog listed them as
+  not thinking: `geistr config gemma4-e2b.thinking off` was refused while
+  `on` worked, and `catalog --json` gave `"thinking": null`.
+  - New `reasoning_format` value `channel_tags` (Gemma 4's
+    `<|channel>thought … <channel|>`), beside `think_tags`; catalog revision 14.
+    A geistr up to 0.4.0 refuses a catalog file with it (`--catalog`).
+  - `geistr config <id>.thinking on|off` now takes both values for every
+    thinking model and refuses both for the others (before, `on` was taken
+    for any id). A stored `on` for a model that does not think is ignored.
+  - `geistr decide` is unchanged: only `think_tags` models decide with
+    their reasoning on.
 
 ## 0.4.0
 

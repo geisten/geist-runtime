@@ -136,16 +136,16 @@ geistr catalog --json           # for scripts
 not think). The list shows `thinking off` or `thinking on` after a thinking
 model whose setting says so.
 
-The models in catalog revision 12:
+The models in catalog revision 14:
 
 | id | model | download | RAM | notes |
 |---|---|---|---|---|
 | `smollm2-360m` | SmolLM2 360M | 0.4 GB | 2 GB | |
 | `qwen3-0.6b` | Qwen3 0.6B | 0.6 GB | 4 GB | thinks; tool calling |
-| `qwen35-0.8b` | Qwen3.5 0.8B | 0.8 GB | 4 GB | thinks |
+| `qwen35-0.8b` | Qwen3.5 0.8B | 0.8 GB | 4 GB | thinks when asked |
 | `bitnet-2b` | BitNet b1.58 2B | 1.2 GB | 4 GB | |
-| `gemma4-e2b` | Gemma 4 E2B | 3.1 GB | 8 GB | images (over HTTP) |
-| `gemma4-e4b` | Gemma 4 E4B | 5.0 GB | 16 GB | |
+| `gemma4-e2b` | Gemma 4 E2B | 3.1 GB | 8 GB | thinks when asked; images (over HTTP) |
+| `gemma4-e4b` | Gemma 4 E4B | 5.0 GB | 16 GB | thinks when asked |
 | `bonsai2-27b-pq2` | Bonsai 2 27B (ternary) | 7.2 GB | 24 GB | thinks |
 | `qwen38-27b-q4` | Qwen3.8 27B, Q4_0 | 16 GB | 32 GB | thinks |
 | `qwen38-27b-q8` | Qwen3.8 27B, Q8_0 | 29 GB | 48 GB | thinks |
@@ -180,7 +180,7 @@ downloading qwen3-0.6b → ~/.local/share/geisten/models
 
 `geistr pull` without an id updates every installed model that is marked ⟳
 or ✗. The old file stays until the new one is verified. With nothing to do it
-says `✓ the installed models are current (catalog revision 12)`.
+says `✓ the installed models are current (catalog revision 14)`.
 
 geistr checks a file's SHA-256 once and then keeps a receipt (in `.verified/`
 in the model folder), so `catalog` and `run` do not hash large files every
@@ -420,8 +420,9 @@ off, none does. Off, the model does not reason at all (its template's
 answer), so the chat goes from `reading` straight to the answer. It applies
 to `chat`, `run` and `serve`. In a chat, `/think off` and `/think on` switch
 it, also over `geistr chat --socket` (for that chat); `/save` keeps it for the
-model. A model that does not think refuses it (`geistr: gemma4-e2b does not
-think`, for `config`, where the catalog decides)
+model. A model that does not think refuses it, on as off (`geistr:
+smollm2-360m does not think`, for `config`, where the catalog decides: its
+`reasoning_format`, `think_tags` or Gemma 4's `channel_tags`).
 
 ### Embedding models do not chat
 
