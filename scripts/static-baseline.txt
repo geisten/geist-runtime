@@ -1,0 +1,91 @@
+# scripts/check_static.py: known findings; this list only shrinks.
+# count, file, check, message. Regenerate with --update.
+4	src/catalog.c	bugprone-assignment-in-if-condition	an assignment within an 'if' condition is bug-prone
+1	src/catalog.c	bugprone-implicit-widening-of-multiplication-result	result of multiplication in type 'int' is used as a pointer offset after an implicit widening conversion to type 'ptrdiff_t'
+9	src/catalog.c	bugprone-suspicious-string-compare	function 'strcmp' is called without explicitly comparing result
+2	src/catalog.c	bugprone-suspicious-string-compare	function 'strncmp' is called without explicitly comparing result
+1	src/common.h	bugprone-assignment-in-if-condition	an assignment within an 'if' condition is bug-prone
+1	src/common.h	bugprone-multi-level-implicit-pointer-conversion	multilevel pointer conversion from 'char **' to 'void *', please use explicit cast
+1	src/common.h	bugprone-multi-level-implicit-pointer-conversion	multilevel pointer conversion from 'void *' to 'char **', please use explicit cast
+1	src/decision_batch.c	bugprone-casting-through-void	do not cast 'char *' to 'int32_t *' (aka 'int *') through 'void *'; use reinterpret_cast instead
+1	src/decision_batch.c	clang-analyzer-core.NullDereference	Access to field 'id' results in a dereference of a null pointer (loaded from variable 'q')
+1	src/decision_batch.c	clang-analyzer-core.NullDereference	Access to field 'n_questions' results in a dereference of a null pointer (loaded from variable 'batch')
+1	src/decision_config.c	bugprone-suspicious-string-compare	function 'memcmp' is called without explicitly comparing result
+1	src/decision_config.c	bugprone-suspicious-string-compare	function 'strcmp' is called without explicitly comparing result
+1	src/decision_config.c	clang-analyzer-optin.core.EnumCastOutOfRange	The value '3' provided to the cast expression is not in the valid range of values for 'geistr_decision_profile'
+2	src/decision_profile.c	bugprone-suspicious-string-compare	function 'memcmp' is called without explicitly comparing result
+10	src/jsmn.h	bugprone-narrowing-conversions	narrowing conversion from 'unsigned int' to signed type 'int' is implementation-defined
+5	src/runtime.c	bugprone-assignment-in-if-condition	an assignment within an 'if' condition is bug-prone
+1	src/runtime.c	bugprone-suspicious-string-compare	function 'strcmp' is called without explicitly comparing result
+1	src/runtime.c	clang-analyzer-security.VAList	va_end() is called on an uninitialized va_list
+1	src/template.c	bugprone-assignment-in-if-condition	an assignment within an 'if' condition is bug-prone
+1	tools/geistr/chat.c	bugprone-assignment-in-if-condition	an assignment within an 'if' condition is bug-prone
+1	tools/geistr/chat.c	bugprone-command-processor	calling 'popen' uses a command processor
+1	tools/geistr/chat.c	bugprone-implicit-widening-of-multiplication-result	performing an implicit widening conversion to type 'size_t' (aka 'unsigned long') of a multiplication performed in type 'int'
+2	tools/geistr/chat.c	bugprone-suspicious-string-compare	function 'strcmp' is called without explicitly comparing result
+2	tools/geistr/chat.c	clang-analyzer-optin.core.EnumCastOutOfRange	The value '3' provided to the cast expression is not in the valid range of values for 'geistr_decision_profile'
+2	tools/geistr/chat.c	clang-analyzer-optin.core.EnumCastOutOfRange	The value '4' provided to the cast expression is not in the valid range of values for 'geistr_decision_profile'
+4	tools/geistr/config.c	bugprone-suspicious-string-compare	function 'strcmp' is called without explicitly comparing result
+1	tools/geistr/config.c	clang-analyzer-security.ArrayBound	Potential out of bound access to 'line' with tainted index
+8	tools/geistr/conversation.c	bugprone-multi-level-implicit-pointer-conversion	multilevel pointer conversion from 'char **' to 'const void *', please use explicit cast
+8	tools/geistr/conversation.c	bugprone-multi-level-implicit-pointer-conversion	multilevel pointer conversion from 'char **' to 'void *', please use explicit cast
+2	tools/geistr/conversation.c	bugprone-multi-level-implicit-pointer-conversion	multilevel pointer conversion from 'void *' to 'char **', please use explicit cast
+4	tools/geistr/conversation.c	bugprone-suspicious-string-compare	function 'strcmp' is called without explicitly comparing result
+2	tools/geistr/decide.c	bugprone-assignment-in-if-condition	an assignment within an 'if' condition is bug-prone
+3	tools/geistr/decide.c	bugprone-suspicious-string-compare	function 'strcmp' is called without explicitly comparing result
+1	tools/geistr/decide.c	bugprone-suspicious-string-compare	function 'strncmp' is called without explicitly comparing result
+2	tools/geistr/decide.c	clang-analyzer-deadcode.DeadStores	Value stored to 'code' is never read
+1	tools/geistr/decide.c	clang-analyzer-deadcode.DeadStores	Value stored to 'status' is never read
+2	tools/geistr/decide.c	clang-analyzer-optin.core.EnumCastOutOfRange	The value '3' provided to the cast expression is not in the valid range of values for 'geistr_decision_profile'
+2	tools/geistr/decide.c	clang-analyzer-optin.core.EnumCastOutOfRange	The value '4' provided to the cast expression is not in the valid range of values for 'geistr_decision_profile'
+1	tools/geistr/decide.c	clang-analyzer-unix.Stream	Opened stream never closed. Potential resource leak
+2	tools/geistr/files.c	bugprone-assignment-in-if-condition	an assignment within an 'if' condition is bug-prone
+1	tools/geistr/files.c	bugprone-implicit-widening-of-multiplication-result	performing an implicit widening conversion to type 'size_t' (aka 'unsigned long') of a multiplication performed in type 'int'
+3	tools/geistr/files.c	bugprone-multi-level-implicit-pointer-conversion	multilevel pointer conversion from 'char **' to 'void *', please use explicit cast
+1	tools/geistr/files.c	bugprone-multi-level-implicit-pointer-conversion	multilevel pointer conversion from 'void *' to 'char **', please use explicit cast
+1	tools/geistr/files.c	bugprone-narrowing-conversions	narrowing conversion from 'int' to 'float'
+1	tools/geistr/files.c	bugprone-reserved-identifier	declaration uses identifier '_XOPEN_SOURCE', which is a reserved identifier
+2	tools/geistr/files.c	bugprone-unchecked-string-to-number-conversion	'sscanf' used to convert a string to an unsigned integer value, but function will not report conversion errors; consider using 'strtoul' instead
+1	tools/geistr/files.c	clang-analyzer-optin.taint.TaintedAlloc	realloc is called with a tainted (potentially attacker controlled) value. Make sure the value is bound checked
+1	tools/geistr/files.c	clang-analyzer-security.ArrayBound	Potential out of bound access to 'dir' with tainted index
+2	tools/geistr/files.c	clang-analyzer-security.ArrayBound	Potential out of bound access to the heap area with tainted index
+1	tools/geistr/files.c	clang-analyzer-unix.Stream	File position of the stream might be 'indeterminate' after a failed operation. Can cause undefined behavior
+1	tools/geistr/files.c	clang-analyzer-unix.Stream	Read function called when stream is in EOF state. Function has no effect
+2	tools/geistr/geistr.c	bugprone-assignment-in-if-condition	an assignment within an 'if' condition is bug-prone
+2	tools/geistr/geistr.c	bugprone-multi-level-implicit-pointer-conversion	multilevel pointer conversion from 'char **' to 'void *', please use explicit cast
+2	tools/geistr/geistr.c	bugprone-multi-level-implicit-pointer-conversion	multilevel pointer conversion from 'const geistr_fit **' (aka 'const struct geistr_fit **') to 'void *', please use explicit cast
+1	tools/geistr/geistr.c	bugprone-multi-level-implicit-pointer-conversion	multilevel pointer conversion from 'void *' to 'char **', please use explicit cast
+1	tools/geistr/geistr.c	bugprone-multi-level-implicit-pointer-conversion	multilevel pointer conversion from 'void *' to 'const geistr_fit **' (aka 'const struct geistr_fit **'), please use explicit cast
+1	tools/geistr/geistr.c	bugprone-suspicious-string-compare	function 'strcmp' is called without explicitly comparing result
+1	tools/geistr/geistr.c	clang-analyzer-core.UndefinedBinaryOperatorResult	The left operand of '==' is a garbage value
+1	tools/geistr/geistr.c	clang-analyzer-security.ArrayBound	Potential out of bound access to 'selected' with tainted index
+1	tools/geistr/geistr.c	clang-analyzer-unix.Stream	File position of the stream might be 'indeterminate' after a failed operation. Can cause undefined behavior
+1	tools/geistr/geistr.c	clang-analyzer-unix.Stream	Read function called when stream is in EOF state. Function has no effect
+4	tools/geistr/http.c	bugprone-assignment-in-if-condition	an assignment within an 'if' condition is bug-prone
+1	tools/geistr/http.c	bugprone-casting-through-void	do not cast 'const struct sockaddr *' to 'const struct sockaddr_in *' through 'const void *'; use reinterpret_cast instead
+1	tools/geistr/http.c	bugprone-casting-through-void	do not cast 'const struct sockaddr *' to 'const struct sockaddr_in6 *' through 'const void *'; use reinterpret_cast instead
+1	tools/geistr/http.c	bugprone-multi-level-implicit-pointer-conversion	multilevel pointer conversion from 'void *' to 'char **', please use explicit cast
+1	tools/geistr/http.c	bugprone-suspicious-string-compare	function 'strcmp' is called without explicitly comparing result
+2	tools/geistr/http.c	clang-analyzer-core.NullPointerArithm	Subtraction of a non-null pointer (from variable 'at') and a null pointer (from variable 'answer') results in undefined behavior
+1	tools/geistr/http.c	clang-analyzer-security.ArrayBound	Potential out of bound access to the region with tainted index
+1	tools/geistr/http.c	clang-analyzer-security.ArrayBound	Potential out of bound access to the region with tainted offset
+2	tools/geistr/http.c	clang-analyzer-unix.StdCLibraryFunctions	The 1st argument to 'strndup' is NULL but should not be NULL
+2	tools/geistr/json.c	bugprone-assignment-in-if-condition	an assignment within an 'if' condition is bug-prone
+1	tools/geistr/json.c	bugprone-narrowing-conversions	narrowing conversion from 'int' to signed type 'char' is implementation-defined
+3	tools/geistr/json.c	clang-analyzer-security.ArrayBound	Out of bound access to memory after the end of the heap area
+2	tools/geistr/lineedit.c	bugprone-multi-level-implicit-pointer-conversion	multilevel pointer conversion from 'char **' to 'const void *', please use explicit cast
+3	tools/geistr/lineedit.c	bugprone-multi-level-implicit-pointer-conversion	multilevel pointer conversion from 'char **' to 'void *', please use explicit cast
+1	tools/geistr/lineedit.c	bugprone-multi-level-implicit-pointer-conversion	multilevel pointer conversion from 'void *' to 'char **', please use explicit cast
+1	tools/geistr/lineedit.c	bugprone-reserved-identifier	declaration uses identifier '_XOPEN_SOURCE', which is a reserved identifier
+1	tools/geistr/lineedit.c	bugprone-signed-char-misuse	'signed char' to 'size_t' (aka 'unsigned long') conversion; consider casting to 'unsigned char' first.
+1	tools/geistr/lineedit.c	clang-analyzer-security.ArrayBound	Out of bound access to memory after the end of the field 'esc'
+4	tools/geistr/pull.c	bugprone-assignment-in-if-condition	an assignment within an 'if' condition is bug-prone
+1	tools/geistr/render.c	bugprone-narrowing-conversions	narrowing conversion from 'int' to signed type 'char' is implementation-defined
+1	tools/geistr/render.c	bugprone-reserved-identifier	declaration uses identifier '_XOPEN_SOURCE', which is a reserved identifier
+1	tools/geistr/render.c	bugprone-signed-char-misuse	'signed char' to 'int' conversion; consider casting to 'unsigned char' first.
+2	tools/geistr/render.c	bugprone-suspicious-string-compare	function 'strcmp' is called without explicitly comparing result
+1	tools/geistr/render.c	bugprone-suspicious-string-compare	function 'strncmp' is called without explicitly comparing result
+1	tools/geistr/render.c	bugprone-switch-missing-default-case	switching on non-enum value without default case may not cover all cases
+4	tools/geistr/service.c	bugprone-multi-level-implicit-pointer-conversion	multilevel pointer conversion from 'char **' to 'void *', please use explicit cast
+2	tools/geistr/service.c	bugprone-multi-level-implicit-pointer-conversion	multilevel pointer conversion from 'void *' to 'char **', please use explicit cast
+4	tools/geistr/speed.c	bugprone-suspicious-string-compare	function 'strcmp' is called without explicitly comparing result

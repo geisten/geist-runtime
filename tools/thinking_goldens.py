@@ -7,7 +7,12 @@ Each template in tests/fixtures/templates/*.jinja (tokenizer.chat_template of
 the catalog's GGUF: qwen3-0.6b, qwen35-0.8b, qwen38-27b, bonsai2-27b-pq2,
 gemma4-e2b) renders a few conversations with enable_thinking unset (the
 template's default), true and false, and where the template has
-reasoning_effort also with low, medium and xhigh. jinja2's sandbox with
+reasoning_effort also with low, medium and xhigh. Since #269 also
+whitespace-padded messages (the templates' |trim, also Unicode whitespace),
+a blank system message, and tool loops: tool results as role "tool" messages,
+an assistant's reasoning in its content (<think>...</think>, which Qwen3.5
+keeps after the last user query and drops before it). TEMPLATES_OF says which
+template renders which conversation. jinja2's sandbox with
 trim_blocks and lstrip_blocks, as transformers renders; bos_token is empty
 (the runtime adds BOS apart). tests/test_template.c checks that the runtime
 renders the same bytes.
@@ -16,7 +21,10 @@ renders the same bytes.
 engine (llama-server's /apply-template, on PATH; one small GGUF per template
 from GEISTR_MODELS) and fail on any difference. llama.cpp passes
 enable_thinking=true unless told otherwise, so the template's default is
-compared with transformers only. Needs jinja2 (pip install jinja2)."""
+compared with transformers only. llama.cpp's trim removes ASCII whitespace
+only (Python's str.strip all of Unicode's), so it differs on 'padded_unicode':
+reported, not failed; the runtime trims as transformers does (#269). Needs
+jinja2 (pip install jinja2)."""
 import json
 import os
 import subprocess
@@ -32,6 +40,10 @@ ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES = ROOT / 'tests/fixtures/templates'
 NAMES = ['qwen3', 'qwen35', 'qwen38', 'bonsai2', 'gemma4']
 VOCAB = {'qwen3': 'Qwen3-0.6B-Q8_0.gguf', 'gemma4': 'gemma-4-E2B-it-Q4_K_M.gguf'}  # others: Qwen3.5 0.8B
+CALL = '<tool_call>\n<function=get_weather>\n<parameter=city>\nParis\n</parameter>\n</function>\n</tool_call>'
+CALL2 = CALL.replace('Paris', 'Lyon')
+THINK = '<think>\nThe user wants the weather in Paris.\n</think>\n\n'
+Q = {'role': 'user', 'content': 'What is the weather in Paris?'}
 CONVS = {
     'user': [{'role': 'user', 'content': 'Hi'}],
     'system': [{'role': 'system', 'content': 'Be brief.'}, {'role': 'user', 'content': 'Hi'}],
@@ -39,7 +51,33 @@ CONVS = {
               {'role': 'assistant', 'content': 'Hello!'}, {'role': 'user', 'content': 'Bye'}],
     'turns_nosys': [{'role': 'user', 'content': 'Hi'}, {'role': 'assistant', 'content': 'Hello!'},
                     {'role': 'user', 'content': 'Bye'}],
+    # #269: |trim, Unicode whitespace too (Python's str.strip)
+    'padded': [{'role': 'system', 'content': '  Be brief.\n'}, {'role': 'user', 'content': '\n Hi \t'},
+               {'role': 'assistant', 'content': ' Hello! \n\n'}, {'role': 'user', 'content': 'Bye\n'}],
+    'padded_unicode': [{'role': 'user', 'content': '\u00a0Hi\u3000'},
+                       {'role': 'assistant', 'content': '\u2003Hello!\r\n'}, {'role': 'user', 'content': ' Bye\u2028'}],
+    'blank_system': [{'role': 'system', 'content': ' \n '}, {'role': 'user', 'content': 'Hi'}],
+    # #269: tool loops (Qwen3.x: results as <tool_response> in a user turn)
+    'tool': [Q, {'role': 'assistant', 'content': CALL}, {'role': 'tool', 'content': '{"temperature": 21}'}],
+    'tool_two': [Q, {'role': 'assistant', 'content': CALL + '\n' + CALL2},
+                 {'role': 'tool', 'content': '{"temperature": 21}'}, {'role': 'tool', 'content': '{"temperature": 24}'}],
+    'tool_padded': [{'role': 'user', 'content': ' What is the weather in Paris? '},
+                    {'role': 'assistant', 'content': '\n' + CALL + ' '}, {'role': 'tool', 'content': ' 21 \n'}],
+    'tool_think': [Q, {'role': 'assistant', 'content': THINK + CALL}, {'role': 'tool', 'content': '{"temperature": 21}'}],
+    'tool_steps': [Q, {'role': 'assistant', 'content': THINK + CALL}, {'role': 'tool', 'content': '{"temperature": 21}'},
+                   {'role': 'assistant', 'content': '<think>\nNow Lyon.\n</think>\n\n' + CALL2},
+                   {'role': 'tool', 'content': '{"temperature": 24}'}],
+    'tool_done': [Q, {'role': 'assistant', 'content': THINK + CALL}, {'role': 'tool', 'content': '{"temperature": 21}'},
+                  {'role': 'assistant', 'content': '<think>\nWarm.\n</think>\n\nIt is 21 degrees.'},
+                  {'role': 'user', 'content': 'Thanks!'}],
 }
+BASE = ['user', 'system', 'turns', 'turns_nosys', 'padded', 'padded_unicode', 'blank_system']
+TOOLS = ['tool', 'tool_two', 'tool_padded', 'tool_think', 'tool_steps', 'tool_done']
+# Qwen3's own split of an assistant's <think> (dropped before the last query) is not rendered:
+# the runtime gives its earlier answers without reasoning; Gemma 4's tool format is not rendered.
+TEMPLATES_OF = {'qwen3': BASE + ['tool', 'tool_two', 'tool_padded'], 'qwen35': BASE + TOOLS,
+                'qwen38': BASE + TOOLS, 'bonsai2': BASE + TOOLS, 'gemma4': BASE}
+ASCII_TRIM = ['padded_unicode']  # llama.cpp's |trim keeps Unicode whitespace
 MODES = {'default': {}, 'on': {'enable_thinking': True}, 'off': {'enable_thinking': False}}
 EFFORTS = {'low': 'low', 'medium': 'medium', 'high': 'xhigh'}
 
@@ -62,14 +100,15 @@ def cases():
         modes = dict(MODES)
         if 'reasoning_effort' in text:
             modes.update({e: {'enable_thinking': True, 'reasoning_effort': v} for e, v in EFFORTS.items()})
-        for conv, messages in CONVS.items():
+        for conv in TEMPLATES_OF[name]:
+            messages = CONVS[conv]
             for mode, kwargs in modes.items():
                 yield name, conv, mode, messages, kwargs, render_hf(text, messages, kwargs)
 
 
 def llama_check(all_cases):
     models = Path(os.environ.get('GEISTR_MODELS', Path.home() / 'Library/Application Support/geisten/models'))
-    bad = 0
+    bad = known = 0
     for name in NAMES:
         server = subprocess.Popen(['llama-server', '-m', models / VOCAB.get(name, 'Qwen3.5-0.8B-Q8_0.gguf'),
                                    '--chat-template-file', TEMPLATES / f'{name}.jinja', '--jinja', '-ngl', '0', '-t',
@@ -88,19 +127,28 @@ def llama_check(all_cases):
                 body = json.dumps({'messages': messages, 'chat_template_kwargs': kwargs}).encode()
                 req = urllib.request.Request('http://127.0.0.1:18799/apply-template', body)
                 got = json.load(urllib.request.urlopen(req, timeout=30))['prompt']
-                if got != want:
+                if got != want and conv in ASCII_TRIM:
+                    known += 1
+                elif got != want:
                     bad += 1
                     print(f'llama.cpp differs: {name} {conv} {mode}\n  llama.cpp: {got!r}\n  hf:        {want!r}',
                           file=sys.stderr)
         finally:
             server.terminate()
             server.wait()
-    print(f'llama.cpp /apply-template: {bad} differences', file=sys.stderr)
+    print(f'llama.cpp /apply-template: {bad} differences; {known} known (its trim is ASCII only: '
+          f'{", ".join(ASCII_TRIM)})', file=sys.stderr)
     return bad == 0
 
 
 def c_string(s):
-    return '"' + s.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n') + '"'
+    """A C string literal: escapes for quotes, backslash and control bytes, octal for every non-ASCII byte."""
+    out = []
+    for b in s.encode():
+        c = chr(b)
+        out.append({'\\': '\\\\', '"': '\\"', '\n': '\\n', '\t': '\\t', '\r': '\\r'}.get(c) or
+                   (c if 0x20 <= b < 0x7f else f'\\{b:03o}'))
+    return '"' + ''.join(out) + '"'
 
 
 def main():
@@ -108,6 +156,12 @@ def main():
     if '--llama-server' in sys.argv and not llama_check(all_cases):
         sys.exit(1)
     print('/* Generated by tools/thinking_goldens.py (transformers-style Jinja rendering): do not edit. */')
+    print('static const struct thinking_conv {\n    const char *name;\n    size_t n;\n    geistr_message m[6];\n'
+          '} THINKING_CONVS[] = {')
+    for conv, messages in CONVS.items():
+        ms = ', '.join(f'{{{c_string(m["role"])}, {c_string(m["content"])}}}' for m in messages)
+        print(f'    {{"{conv}", {len(messages)}, {{{ms}}}}},')
+    print('};')
     print('static const struct thinking_golden {\n    const char *template, *conv, *mode, *text;\n} THINKING_GOLDENS[] = {')
     for name, conv, mode, _, _, text in all_cases:
         print(f'    {{"{name}", "{conv}", "{mode}",\n     {c_string(text)}}},')

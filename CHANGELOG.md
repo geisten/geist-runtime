@@ -4,6 +4,26 @@
 
 ### Fixes
 
+- Messages render as the templates of Qwen3.5, Qwen3.6+ and Gemma 4 have
+  them, also padded with whitespace and in tool loops (#269):
+  - Message contents are trimmed where the template trims them (`|trim`,
+    as Python's `str.strip()`, Unicode whitespace included), still
+    tokenized with special tokens off (#261). An answer ending in
+    whitespace comes back trimmed before the next turn. Qwen3.6+ renders no
+    system turn for a blank system message.
+  - Qwen3.5 keeps an answer's reasoning (`<think>\n` reasoning
+    `\n</think>\n\n` answer) while tool results follow, as its template
+    renders the assistant turns after the last user query; the next query
+    takes it out of the loop's answers again. With thinking off the context
+    keeps the empty block it has, instead of a rewind and prefill per tool
+    step.
+  - Role `tool` messages are `<tool_response>` blocks in one user turn in
+    the Qwen3 family, as the templates have them; before, each was a user
+    turn of its own text. `serve --http` sends tool results this way already.
+  - Checked byte for byte against the real templates (transformers-style
+    Jinja and llama.cpp's `/apply-template`): padded messages, Unicode
+    whitespace, a blank system message, tool loops with and without
+    reasoning.
 - The catalog marks Gemma 4 (`gemma4-e2b`, `gemma4-e4b`) as thinking models
   (#270). They think when asked since #266, but the catalog listed them as
   not thinking: `geistr config gemma4-e2b.thinking off` was refused while

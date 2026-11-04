@@ -189,7 +189,7 @@ the templates' own Jinja conditions) and renders what the template renders:
 | template | default | on (`THINK_TAGS`) | off (`THINK_OFF`) | earlier answers |
 |---|---|---|---|---|
 | Qwen3 | on | generation prompt as it is | + `<think>\n\n</think>\n\n` | text only |
-| Qwen3.5 | off | + `<think>\n` | + `<think>\n\n</think>\n\n` | text only |
+| Qwen3.5 | off | + `<think>\n` | + `<think>\n\n</think>\n\n` | text only; in a tool loop `<think>\n` reasoning `\n</think>\n\n` text |
 | Qwen3.6+ (Qwen3.8, Bonsai 2) | on, effort `xhigh` | + `<think>\n`; the effort's instruction leads the system turn (a turn of its own without a system message) | + `<think>\n\n</think>\n\n`, no instruction | `<think>\n\n</think>\n\n` + text (`preserve_thinking`) |
 | Gemma 4 | off | `<\|think\|>\n` opens the system turn (a turn of its own without one) | as it is | text only |
 | other ChatML with `<think>` | on | as it is | `GEISTR_FORMAT` | text only |
@@ -226,12 +226,30 @@ the templates' own Jinja conditions) and renders what the template renders:
   at `low`, default) the context before a second answer has as many tokens
   as `llama-tokenize` gives for the template's text of the conversation;
   `test_real` checks that a continued chat's context equals a fresh chat's
-  built from the plain messages, in each mode.
-- **Not rendered.** Qwen3.5+ and Gemma 4 trim message contents (`|trim`);
-  the runtime does not, so a message with leading or trailing whitespace
-  differs from the template there. Qwen3.5's tool-call turns after the last
-  user message (`<think>` blocks in a tool loop) are not rendered: tool
-  calling is Qwen3's format only.
+  built from the plain messages, in each mode, also through a tool loop
+  with padded messages. Since #269 the goldens include messages padded with
+  whitespace, a blank system message and tool loops.
+- **Trimmed messages (#269).** Where the template trims message contents
+  (`|trim`: Qwen3.5, Qwen3.6+, Gemma 4), the runtime does too, as Python's
+  `str.strip()` does (Unicode whitespace included). Only the body is
+  trimmed, so it is still tokenized with special tokens off (#261). An
+  answer that ends in whitespace comes back trimmed before the next turn,
+  as the other differences do (not with `GEISTR_REASONING_NONE`, which keeps
+  the generated text, and leaves out the tool loop below too). Qwen3.6+
+  renders no system turn for an empty (or blank) system message, as its
+  template does.
+- **Tool messages (#269).** In the Qwen3 family a message with role `tool`
+  is a `<tool_response>` block in a user turn, consecutive ones in one turn,
+  as the templates have it (before, a user turn of its own text).
+- **Qwen3.5's tool loop (#269).** After the last user query (a user message
+  that is not a `<tool_response>` block) Qwen3.5's template keeps each
+  answer's reasoning: `<think>\n` reasoning `\n</think>\n\n` answer. So while
+  tool results follow, the chat keeps the reasoning in the context (with
+  thinking off, the empty block it already holds); the next query takes it
+  out of every answer of the loop again (a rewind to the loop's first answer
+  and a prefill, #96). An assistant message sent by the caller is split at
+  `</think>` as the template splits it. Qwen3 and Qwen3.6+ need none of this:
+  without reasoning, Qwen3 renders text and Qwen3.6+ the empty block.
 
 ## The runtime on geistlib (#4)
 

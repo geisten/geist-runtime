@@ -388,8 +388,9 @@ explaining everything again.
 Qwen3, Qwen3.5, Qwen3.8, Bonsai 2 and Gemma 4 can reason before they answer.
 While they do, the chat shows `⠋ thinking · N s`. The reasoning itself is
 not shown, not kept in the conversation and not sent back to the model; only
-the answer is. Over HTTP it comes apart from the answer
-([HTTP](#http)).
+the answer is. (One exception, as its template has it: Qwen3.5 keeps its
+reasoning while tool results follow, until the next question, #269.) Over
+HTTP it comes apart from the answer ([HTTP](#http)).
 
 Unless a setting or a request says otherwise, each model does what its chat
 template does by default (#266):

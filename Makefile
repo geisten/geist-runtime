@@ -123,6 +123,7 @@ test: all $(BUILD)/test_decide_driver
 	python3 tests/test_decision_evidence.py
 	python3 tests/test_retrieval_bench.py
 	python3 tests/test_agent_gate_py.py
+	python3 tests/test_check_static_py.py
 	python3 tests/test_catalog.py $(BUILD)/test_catalog models/catalog.json
 	$(BUILD)/test_fit
 	$(BUILD)/test_render
@@ -374,4 +375,12 @@ clean:
 	rm -rf $(BUILD)
 
 PREVIOUS ?= latest
-.PHONY: fuzz fuzzers fuzz-run test-clients test-upgrade install uninstall core all test sanitize coverage clean runtime test-real test-embed fetch-embed-model chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python FORCE
+# clang-tidy over src/ and tools/ with a findings ratchet
+# (scripts/check_static.py, ported from geistlib #342). Syncs the pinned
+# engine for its headers, builds nothing of it.
+CLANG_TIDY ?= clang-tidy
+check-static: $(BUILD)/catalog_json.h
+	@CLANG_TIDY=$(CLANG_TIDY) python3 scripts/check_static.py --selftest
+	@CLANG_TIDY=$(CLANG_TIDY) python3 scripts/check_static.py
+
+.PHONY: check-static fuzz fuzzers fuzz-run test-clients test-upgrade install uninstall core all test sanitize coverage clean runtime test-real test-embed fetch-embed-model chat-real fetch-model geistr test-geistr shared wheel test-python test-decision-real test-decision-cli test-decision-python FORCE
