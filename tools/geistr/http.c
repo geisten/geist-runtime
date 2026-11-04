@@ -772,6 +772,7 @@ static void openai_done(void *ctx, const geistr_stats *st, const char *answer, c
     struct text body;
     FILE       *f = text_open(&body);
     if (!f) {
+        calls_free(&calls);
         error_json(a->out, 500, true, "out of memory", nullptr);
         return;
     }
@@ -1143,6 +1144,8 @@ static void embeddings(const struct svc_options *o, FILE *out, const struct json
     FILE       *f      = why ? nullptr : text_open(&t);
     uint32_t    total  = 0;
     int         status = 200;
+    if (!f && !why) /* open_memstream failed: answer, do not print to null */
+        why = "out of memory", status = 500;
     static float vec[EMBED_DIMS];
     if (f) {
         fputs(openai ? "{\"object\":\"list\",\"model\":" : "{\"model\":", f), json_write(f, o->name);
