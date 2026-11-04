@@ -109,6 +109,25 @@ jobs:
             build/*.txt
           if-no-files-found: ignore
 
+  # clang-tidy over src/ and tools/ with a findings ratchet
+  # (scripts/check_static.py, ported from geistlib #342): a new finding
+  # fails, a fixed one must leave scripts/static-baseline.txt. macOS arm64,
+  # where the baseline was taken (it depends on platform #ifs); the engine is
+  # synced for its headers, not built.
+  static-analysis:
+    name: static analysis (clang-tidy, macOS arm64)
+    needs: hold
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: clang-tidy, pinned like geistlib's
+        run: |
+          python3 -m venv "$RUNNER_TEMP/tidy"
+          "$RUNNER_TEMP/tidy/bin/pip" install clang-tidy==22.1.8
+      - name: check
+        run: make check-static CLANG_TIDY="$RUNNER_TEMP/tidy/bin/clang-tidy"
+
   # #4: the real runtime on the pinned geistlib, against the reference model.
   real:
     needs: hold

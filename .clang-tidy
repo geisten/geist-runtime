@@ -1,0 +1,15 @@
+# scripts/check_static.py runs this (ported from geistlib #342). Left out, each
+# for a reason:
+#  - bugprone-easily-swappable-parameters: lengths before the arrays they
+#    describe put adjacent size_t on purpose; style, not a bug.
+#  - DeprecatedOrUnsafeBufferHandling: asks for C11 Annex K, which no toolchain
+#    here ships; it flags every fprintf and memcpy.
+#  - optin.performance.Padding: field order follows meaning, not size.
+Checks: >-
+  -*,
+  clang-analyzer-*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+  -clang-analyzer-optin.performance.Padding
+HeaderFilterRegex: '(src|include|tools)/.*'
