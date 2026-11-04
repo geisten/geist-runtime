@@ -291,7 +291,7 @@ static int catalog(bool installed_only, bool available_only, bool json) {
                 printf(",\"gpu\":");
                 local[i].gpu.rate > 0 ? (void) printf("%.1f", local[i].gpu.rate) : (void) printf("null");
                 printf("}");
-                bool      thinks = m->reasoning_format && !strcmp(m->reasoning_format, "think_tags");
+                bool      thinks = catalog_thinks(m);
                 const int on     = thinking_choice(m->id); /* default: as its template has it (#266) */
                 printf(",\"thinking\":%s", !thinks ? "null" : on < 0 ? "\"default\"" : on ? "\"on\"" : "\"off\"");
                 if (decision_config_file) {
@@ -322,7 +322,7 @@ static int catalog(bool installed_only, bool available_only, bool json) {
                 else if (f->resource != GEISTR_RESOURCE_FITS)
                     printf("  %s %s", f->resource == GEISTR_RESOURCE_UNAVAILABLE ? "✗" : "⚠",
                            limit_text(f->resource_reason));
-                if (m->reasoning_format && !strcmp(m->reasoning_format, "think_tags") && thinking_choice(m->id) >= 0)
+                if (catalog_thinks(m) && thinking_choice(m->id) >= 0)
                     printf("  thinking %s", thinking_choice(m->id) ? "on" : "off");
                 if (permission && permission->enabled)
                     printf("  decision configured (%s; support not loaded)", geistr_decision_profile_name(permission->profile));
@@ -373,8 +373,8 @@ int resolve(const char *model, char *path, size_t cap, geistr_reasoning *reasoni
         if (is_path ? strcmp(base, m->file) : strcmp(model, m->id))
             continue;
         const int on = thinking_choice(m->id); /* geistr config (#212): on, off, or the template's default */
-        const bool thinks = m->reasoning_format && !strcmp(m->reasoning_format, "think_tags");
-        if (on == 1 || (on == 0 && thinks))
+        const bool thinks = catalog_thinks(m);
+        if (thinks && on >= 0) /* only a model that thinks has the switch (#270) */
             *reasoning = on ? GEISTR_REASONING_THINK_TAGS : GEISTR_REASONING_THINK_OFF;
         if (embedding)
             *embedding = m->embedding;

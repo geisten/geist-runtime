@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "revision": 13,
+  "revision": 14,
   "models": [
     {
       "id": "bitnet-2b",
@@ -328,6 +328,7 @@
       "group_id": "gemma4-e2b",
       "group_name": "Gemma 4 E2B",
       "quantization": "Q4_K_M",
+      "reasoning_format": "channel_tags",
       "quality": {
         "suite": "e6c9808edde3",
         "date": "2026-10-03",
@@ -404,6 +405,7 @@
       "group_id": "gemma4-e4b",
       "group_name": "Gemma 4 E4B",
       "quantization": "Q4_K_M",
+      "reasoning_format": "channel_tags",
       "quality": {
         "suite": "e6c9808edde3",
         "date": "2026-10-03",

@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 #ifndef GEISTR_ENGINE
@@ -141,5 +142,9 @@ int  chat(const char *name, const char *processor, const char *remote, bool fres
 
 extern const char *models_dir;
 geistr_catalog    *load_catalog(void);
+/* The catalog says the model thinks: think_tags, or Gemma 4's channel_tags (#270). */
+static inline bool catalog_thinks(const geistr_catalog_entry *m) {
+    return m->reasoning_format && strcmp(m->reasoning_format, "none") != 0;
+}
 /* *embedding: the catalog's kind, 0 chat, 1 embedding, 2 reranker (geistr_catalog_entry). */
 int                resolve(const char *model, char *path, size_t cap, geistr_reasoning *reasoning, int *embedding);

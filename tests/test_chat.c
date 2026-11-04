@@ -190,13 +190,24 @@ int main(void) {
 
     /* Thinking per model (#212): geistr config <id>.thinking off persists for
      * that model only; the others follow the thinking setting; a model that
-     * does not think, or no catalog model, is refused. */
+     * does not think, or no catalog model, is refused, on as off. Gemma 4
+     * thinks when asked (#270): both work. */
     CHECK(setenv("GEISTEN_HOME", tmp, 1) == 0 && data_folder());
     CHECK(thinking_choice("qwen3-0.6b") == -1 && thinking_choice("qwen38-27b-q4") == -1); /* the template's default (#266) */
     CHECK(config(3, (const char *[]) {"config", "qwen3-0.6b.thinking", "off"}) == OK);
     CHECK(thinking_choice("qwen3-0.6b") == 0 && thinking_choice("qwen38-27b-q4") == -1);
-    CHECK(config(3, (const char *[]) {"config", "gemma4-e2b.thinking", "off"}) == USAGE); /* does not think */
+    CHECK(config(3, (const char *[]) {"config", "smollm2-360m.thinking", "off"}) == USAGE); /* does not think */
+    CHECK(config(3, (const char *[]) {"config", "smollm2-360m.thinking", "on"}) == USAGE);
     CHECK(config(3, (const char *[]) {"config", "nope.thinking", "off"}) == USAGE);
+    CHECK(config(3, (const char *[]) {"config", "nope.thinking", "on"}) == USAGE);
+    for (size_t i = 0; i < 2; i++) { /* every thinking model: on and off (#270) */
+        const char *id = i ? "gemma4-e4b" : "gemma4-e2b";
+        char        key[64];
+        snprintf(key, sizeof key, "%s.thinking", id);
+        CHECK(config(3, (const char *[]) {"config", key, "on"}) == OK && thinking_choice(id) == 1);
+        CHECK(config(3, (const char *[]) {"config", key, "off"}) == OK && thinking_choice(id) == 0);
+        CHECK(config(3, (const char *[]) {"config", key, ""}) == OK && thinking_choice(id) == -1);
+    }
     CHECK(config(3, (const char *[]) {"config", "qwen3-0.6b.thinking", "maybe"}) == USAGE);
     CHECK(config(3, (const char *[]) {"config", "thinking", "off"}) == OK);
     CHECK(thinking_choice("qwen38-27b-q4") == 0);
