@@ -293,8 +293,8 @@ static const char *entry(geistr_catalog *c, const struct json *j, int i, uint64_
         return "bad url";
     if (get(j, i, "reasoning_format") >= 0) {
         m->reasoning_format = string(c, j, i, "reasoning_format", 24);
-        if (!m->reasoning_format || (strcmp(m->reasoning_format, "none") && strcmp(m->reasoning_format, "think_tags") &&
-                                     strcmp(m->reasoning_format, "channel_tags")))
+        const char *f = m->reasoning_format; /* channel_tags: Gemma 4's (#270) */
+        if (!f || (strcmp(f, "none") != 0 && strcmp(f, "think_tags") != 0 && strcmp(f, "channel_tags") != 0))
             return "bad reasoning_format";
     }
     if (get(j, i, "quality") >= 0 && !(m->quality = quality(c, j, get(j, i, "quality"), m)))
