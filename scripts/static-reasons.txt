@@ -1,0 +1,21 @@
+# scripts/check_static.py: why an analyzer finding in the baseline stays.
+# file, check, reason. Other checks need no reason; they are style-level.
+src/decision_batch.c	clang-analyzer-core.NullDereference	fail() returns its status argument (never OK at its call sites); a NULL batch or questions takes that branch, so scoring and the answer loop are skipped
+src/decision_config.c	clang-analyzer-optin.core.EnumCastOutOfRange	deliberate end-of-table probe: decision_profile_get bounds-checks and returns NULL past the table, ending the loop; only valid profiles are stored
+src/runtime.c	clang-analyzer-security.VAList	va_start precedes va_end on every path; under -std=c23 va_start is __builtin_c23_va_start, which the checker does not model (inferred)
+tools/geistr/config.c	clang-analyzer-security.ArrayBound	strcspn on an fgets-terminated buffer is <= strlen(line) < sizeof line
+tools/geistr/http.c	clang-analyzer-security.ArrayBound	GEISTR_ORIGINS (operator env, not client input): every index is below strcspn(a, ",") <= strlen(a), and the loop stops at the NUL
+tools/geistr/http.c	clang-analyzer-core.NullPointerArithm	answer is never null (service.c passes text ? text : ""), and calls.n > 0 means strstr(answer, "<tool_call>") matched, so at is non-null
+tools/geistr/http.c	clang-analyzer-unix.StdCLibraryFunctions	answer is never null (service.c passes text ? text : ""), so strndup(answer, n) never gets NULL
+tools/geistr/json.c	clang-analyzer-security.ArrayBound	j->n <= the allocated token count (jsmn's second pass returns NOMEM past num_tokens); json_field and json_next only return indices < j->n or -1
+tools/geistr/lineedit.c	clang-analyzer-security.ArrayBound	n_esc stays in 0..sizeof esc (guarded increments, reset when full); escape() runs only with 3 <= n_esc <= 8
+tools/geistr/decide.c	clang-analyzer-unix.Stream	the path assumes a stream fopen() just returned equals stdin, which is impossible; the opened stream is closed on every path
+tools/geistr/decide.c	clang-analyzer-deadcode.DeadStores	the catalog parse failure is caught by !l->catalog (the parser nulls *out first); code = 1 after load() is a default every goto done overwrites
+tools/geistr/decide.c	clang-analyzer-optin.core.EnumCastOutOfRange	deliberate end-of-table probe as in decision_config.c: the bounds-checked getter returns "" past the table and the loop stops before the value is used
+tools/geistr/chat.c	clang-analyzer-optin.core.EnumCastOutOfRange	the same end-of-table probe; .profile is assigned only on a SHA match, so only valid profiles are stored
+tools/geistr/files.c	clang-analyzer-unix.Stream	a plain fread loop: a read after EOF or an error returns 0 and ends it; the stream position is never used
+tools/geistr/files.c	clang-analyzer-optin.taint.TaintedAlloc	the guard len + got <= FILE_MAX (8 MiB) with got <= 64 KiB bounds the realloc to about 16 MiB
+tools/geistr/files.c	clang-analyzer-security.ArrayBound	cap >= len + 1 whenever text is non-null; strspn/strcspn run on NUL-terminated buffers (fgets into the zeroed dir[4096], read_text always terminates)
+tools/geistr/geistr.c	clang-analyzer-unix.Stream	a plain fread loop: a read after EOF or an error returns 0 and ends it; the stream position is never used
+tools/geistr/geistr.c	clang-analyzer-core.UndefinedBinaryOperatorResult	the catalog holds 1..1024 models (catalog.c refuses others) and the ranking has exactly its entries (fit.c), so i < n and state[i] is set
+tools/geistr/geistr.c	clang-analyzer-security.ArrayBound	selected[256] is static and filled by fgets(sizeof selected), so strcspn < 256
