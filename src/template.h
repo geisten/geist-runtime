@@ -58,14 +58,46 @@ struct tpl_thinking tpl_thinking_of(enum tpl_family family, const char *tpl);
 /* Qwen3.6+'s system instruction for an effort; nullptr for MEDIUM (none). */
 const char *tpl_effort_text(geistr_effort effort);
 
-/* Template text a thinking chat adds to the turns (#266): lead opens the
- * system turn (a system turn of its own without a system message), joined to
- * a system message by join; history precedes every assistant message. */
-struct tpl_extra {
-    const char *lead, *join, *history; /* static; nullptr or "": none */
+/* How a chat template renders the messages themselves (#269), read from its
+ * text by the templates' own Jinja (tpl_style_of):
+ *   trim:  message contents are |trim'med, as Python's str.strip() does
+ *          (Qwen3.5, Qwen3.6+, Gemma 4)
+ *   tools: a "tool" message is a <tool_response> block in a user turn,
+ *          consecutive ones share it (Qwen3, Qwen3.5, Qwen3.6+)
+ *   bare:  an empty system message renders no system turn (Qwen3.6+)
+ *   loop:  Qwen3.5's tool loop: an assistant message is split at </think>
+ *          into reasoning and answer; after the last user query (a user
+ *          message that is not a <tool_response>) it renders as
+ *          "<think>\n" reasoning "\n</think>\n\n" answer, before it the
+ *          answer alone. */
+struct tpl_style {
+    bool trim, tools, bare, loop;
 };
 
-/* A chat's extra text with thinking on or off (enable_thinking), at effort. */
+struct tpl_style tpl_style_of(enum tpl_family family, const char *tpl); /* tpl nullptr: none */
+
+/* A user query in loop's sense: not a system, assistant or tool message, and
+ * its trimmed content not a <tool_response> block. */
+bool tpl_is_query(const geistr_message *m);
+bool tpl_has_query(size_t n, const geistr_message msgs[]); /* one of them is */
+
+/* Template text a thinking chat adds to the turns (#266): lead opens the
+ * system turn (a system turn of its own without a system message), joined to
+ * a system message by join; history precedes every assistant message. style:
+ * how messages render (#269). */
+struct tpl_extra {
+    const char      *lead, *join, *history; /* static; nullptr or "": none */
+    struct tpl_style style;
+};
+
+/* What an assistant message with content renders as between its turn's
+ * opening and close: after the last user query (in_loop) or before it. A
+ * malloc'd string, nullptr when out of memory. The chat compares it with what
+ * the context holds after an answer (#266, #269). */
+char *tpl_render_answer(const struct tpl_extra *extra, const char *content, bool in_loop);
+
+/* A chat's extra text with thinking on or off (enable_thinking), at effort.
+ * The style is left empty: the chat sets it (tpl_style_of). */
 struct tpl_extra tpl_thinking_extra(const struct tpl_thinking *thinking, bool on, geistr_effort effort);
 
 /* What a conversation's rendering depends on beyond the current send. */
@@ -84,7 +116,9 @@ void tpl_free(struct tpl_state *state);
 /* Render msgs[0..n) as turns, then the generation prompt. A leading system
  * message of the conversation is rendered per family; later system messages
  * count as user text (BitNet writes every one as "System: "); unknown roles
- * count as user. Returns a malloc'd
+ * count as user, and so do tool messages unless the style has tools. The
+ * state's extra.style applies (#269); an assistant message is in loop when no
+ * user query follows it in this send. Returns a malloc'd
  * string, or nullptr for TPL_UNKNOWN or out of memory (state unchanged).
  * After a rewind, the caller rebuilds the state by rendering the kept
  * messages again into a fresh state and discarding the text. */

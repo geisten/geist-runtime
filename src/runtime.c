@@ -112,6 +112,7 @@ struct geistr_model {
     bool                  add_bos;
     bool                  thinks; /* the chat template has <think>: decisions render thinking off */
     struct tpl_thinking   think;  /* what the template does with thinking (#266) */
+    struct tpl_style      style;  /* how it renders the messages (#269) */
     uint32_t              context;
     geistr_decision_policy decision;
     atomic_size_t decision_allocations, decision_bytes;
@@ -233,6 +234,7 @@ static geistr_status model_describe(geistr_model *m, struct geist_model *gm, str
     const char *chat_template = geist_model_metadata_str(gm, "tokenizer.chat_template", nullptr);
     m->thinks    = chat_template && strstr(chat_template, "<think>");
     m->think     = tpl_thinking_of(m->family, chat_template);
+    m->style     = tpl_style_of(m->family, chat_template);
     m->vision    = m->family == TPL_GEMMA4 && (geist_model_modalities(gm) & GEIST_MOD_VISION);
     m->n_stops   = tpl_stop_ids(token_lookup, gm, geist_model_eos_token(gm), MAX_STOPS, m->stops);
     m->bos       = geist_model_bos_token(gm);
@@ -865,6 +867,8 @@ geistr_status geistr_chat_open(geistr_model *m, const geistr_chat_opts *opts, ge
     c->gen   = c->mode == THINK_ON ? t->on : c->mode == THINK_OFF ? t->off : "";
     if (c->mode != THINK_RAW)
         c->extra = tpl_thinking_extra(t, c->mode == THINK_ON, o.effort);
+    c->extra.style      = m->style; /* the template's messages, in every mode (#269) */
+    c->extra.style.loop = m->style.loop && c->mode != THINK_RAW; /* RAW keeps the generated text */
     tpl_init_extra(&c->tpl, m->family, &c->extra);
     c->stats = (geistr_stats) {.size = sizeof c->stats, .prefill_ms = -1, .first_answer_ms = -1};
     *out     = c;
@@ -1266,35 +1270,88 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
      * trained so; kept, Qwen3's next answer is empty or wrong (#96). The
      * runtime keeps no reasoning, so an earlier answer is what the template
      * renders for an assistant message without reasoning_content: its text,
-     * after Qwen3.6+'s empty block (#266). Where the context holds something
-     * else (the reasoning, or the empty block of thinking off before Qwen3's
-     * and Qwen3.5's answers), the last answer leaves the context before the
-     * next turn and comes back as the template has it: back to its start,
-     * then again with the new messages (a small prefill). Unfinished
-     * reasoning leaves nothing. */
-    if (c->mode != THINK_RAW && (c->answering || c->open) && c->raw) {
-        const char *open = c->model->think.open, *close = c->model->think.close;
-        const char *lead = c->raw + strspn(c->raw, " \t\r\n");
-        const bool  inside = (c->mode == THINK_ON && *c->gen) || !strncmp(lead, open, strlen(open));
-        const char *end    = inside ? strstr(c->raw, close) : nullptr;
-        const char *after  = !inside ? c->raw : end ? end + strlen(close) : "";
-        if (inside)
-            after += strspn(after, " \t\r\n");
-        /* the context holds gen + raw; the template has history + after */
-        if (!concat_equal(c->gen, c->raw, c->extra.history ? c->extra.history : "", after)) {
-            char           *plain = strdup(after);
-            geistr_message *again = plain ? calloc(count + 1, sizeof *again) : nullptr;
-            geistr_status   s     = again ? geistr_chat_rewind(c, c->answer_turn) : GEISTR_NO_MEMORY;
-            if (s == GEISTR_OK) {
-                again[0] = (geistr_message) {"assistant", plain};
-                memcpy(again + 1, messages, count * sizeof *again);
-                s = chat_send(c, count + 1, again);
-            } else if (s == GEISTR_NO_MEMORY)
-                s = fail(c, s, "out of memory");
-            free(again);
-            free(plain);
-            return s;
+     * after Qwen3.6+'s empty block (#266), trimmed where the template trims
+     * (#269). Where the context holds something else (the reasoning, or the
+     * empty block of thinking off before Qwen3's and Qwen3.5's answers), the
+     * last answer leaves the context before the next turn and comes back as
+     * the template has it: back to its start, then again with the new
+     * messages (a small prefill). Unfinished reasoning leaves nothing.
+     *
+     * Qwen3.5's tool loop (#269): while no user query follows (tool results),
+     * its answers keep their reasoning, "<think>\n" reasoning "\n</think>\n\n"
+     * answer, as its template renders the assistant messages after the last
+     * query; the next query takes the reasoning out of all of them again. */
+    if (c->mode != THINK_RAW) {
+        const bool answer = (c->answering || c->open) && c->raw;
+        const bool query  = tpl_has_query(count, messages);
+        size_t     from   = c->n_turns; /* the first held turn to render again */
+        char      *kept   = nullptr;    /* the answer's content as the template has it */
+        if (answer) {
+            const char *open = c->model->think.open, *close = c->model->think.close;
+            const char *lead   = c->raw + strspn(c->raw, " \t\r\n");
+            const bool  opened = c->mode == THINK_ON && *c->gen; /* the prompt opened the reasoning */
+            const bool  inside = opened || !strncmp(lead, open, strlen(open));
+            const char *end    = inside ? strstr(c->raw, close) : nullptr;
+            const char *after  = !inside ? c->raw : end ? end + strlen(close) : "";
+            if (inside)
+                after += strspn(after, " \t\r\n");
+            const bool  loop = c->extra.style.loop && !query;
+            const char *r    = !inside ? "" : opened ? c->raw : lead + strlen(open);
+            const int   r_n  = (int) (!inside ? 0 : end ? (size_t) (end - r) : strlen(r));
+            const size_t n   = (loop ? strlen("<think>\n\n</think>\n\n") + (size_t) r_n : 0) + strlen(after) + 1;
+            char        *want = nullptr;
+            kept              = malloc(n);
+            if (kept) {
+                if (loop) /* Qwen3.5: markers are <think> */
+                    snprintf(kept, n, "<think>\n%.*s\n</think>\n\n%s", r_n, r, after);
+                else
+                    snprintf(kept, n, "%s", after);
+                want = tpl_render_answer(&c->extra, kept, loop);
+            }
+            if (!want) {
+                free(kept);
+                return fail(c, GEISTR_NO_MEMORY, "out of memory");
+            }
+            /* the context holds gen + raw; the template has want */
+            if (!concat_equal(c->gen, c->raw, want, ""))
+                from = c->answer_turn;
+            free(want);
         }
+        /* a query after a tool loop: its earlier answers lose their reasoning too */
+        const size_t held = answer ? c->answer_turn : c->n_turns;
+        if (c->extra.style.loop && query) {
+            size_t q = held;
+            while (q > 0 && !tpl_is_query(&(geistr_message) {c->turns[q - 1].role, c->turns[q - 1].content}))
+                q--;
+            for (size_t i = q; i < held && i < from; i++)
+                if (is_role(c->turns[i].role, "assistant"))
+                    from = i;
+        }
+        if (from < c->n_turns) {
+            const size_t    k     = c->n_turns - from;
+            geistr_message *again = calloc(k + count, sizeof *again); /* again[0, k): copies, freed below */
+            bool            ok    = again != nullptr;
+            for (size_t i = 0; ok && i < k; i++) {
+                const bool is_answer = answer && from + i == c->answer_turn;
+                again[i]             = (geistr_message) {strdup(c->turns[from + i].role),
+                                                         strdup(is_answer ? kept : c->turns[from + i].content)};
+                ok                   = again[i].role && again[i].content;
+            }
+            geistr_status st = ok ? geistr_chat_rewind(c, from) : GEISTR_NO_MEMORY;
+            if (st == GEISTR_OK) {
+                memcpy(again + k, messages, count * sizeof *again);
+                st = chat_send(c, k + count, again);
+            } else if (st == GEISTR_NO_MEMORY)
+                st = fail(c, st, "out of memory");
+            for (size_t i = 0; again && i < k; i++) {
+                free((char *) again[i].role);
+                free((char *) again[i].content);
+            }
+            free(again);
+            free(kept);
+            return st;
+        }
+        free(kept);
     }
     if (!answer_commit(c) || !turns_reserve(c, count + 1))
         return fail(c, GEISTR_NO_MEMORY, "out of memory");
@@ -1330,8 +1387,11 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
     }
     /* The image markers in front of the last message are the template's,
      * not the client's: its body starts after them. */
-    if (c->image && spans.n)
-        spans.v[spans.n - 1].begin += strlen(IMAGE_OPEN "\x1f" IMAGE_CLOSE);
+    if (c->image && spans.n) { /* (a trimmed empty text ends the body before them: none) */
+        struct tpl_span *last = &spans.v[spans.n - 1];
+        const size_t     at   = last->begin + strlen(IMAGE_OPEN "\x1f" IMAGE_CLOSE);
+        last->begin           = at < last->end ? at : last->end;
+    }
     /* Thinking on or off (#212, #266): "<think>\n" or the empty block belongs to the prompt. */
     char gen[96];
     snprintf(gen, sizeof gen, "%s%s", tpl_generation_prompt(c->model->family), c->gen);

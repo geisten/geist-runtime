@@ -15,6 +15,9 @@
  *    their text, render as transformers' apply_chat_template does for
  *    enable_thinking unset, true, false and each reasoning_effort
  *    (tools/thinking_goldens.py, checked against llama.cpp's Jinja engine).
+ *    Since #269 also messages padded with whitespace (the templates' |trim),
+ *    a blank system message and tool loops (role "tool", Qwen3.5's reasoning
+ *    kept after the last user query); message_style() the pieces of it.
  */
 #include "template.h"
 #include "decision_profile.h"
@@ -377,16 +380,6 @@ static char *slurp(const char *path) {
 /* As a chat renders a whole conversation: the template's switch, the extra
  * text, the turns, the generation prompt and what follows it. */
 static void thinking_goldens(void) {
-    static const struct {
-        const char    *name;
-        geistr_message m[4];
-        size_t         n;
-    } convs[] = {
-            {"user", {{"user", "Hi"}}, 1},
-            {"system", {{"system", "Be brief."}, {"user", "Hi"}}, 2},
-            {"turns", {{"system", "Be brief."}, {"user", "Hi"}, {"assistant", "Hello!"}, {"user", "Bye"}}, 4},
-            {"turns_nosys", {{"user", "Hi"}, {"assistant", "Hello!"}, {"user", "Bye"}}, 3},
-    };
     size_t checked = 0;
     for (size_t i = 0; i < sizeof THINKING_GOLDENS / sizeof *THINKING_GOLDENS; i++) {
         const struct thinking_golden *g = &THINKING_GOLDENS[i];
@@ -399,6 +392,7 @@ static void thinking_goldens(void) {
             continue;
         const enum tpl_family     f = tpl_family_detect(tpl, nullptr);
         const struct tpl_thinking t = tpl_thinking_of(f, tpl);
+        const struct tpl_style    y = tpl_style_of(f, tpl);
         free(tpl);
         const bool on = !strcmp(g->mode, "default") ? t.default_on : strcmp(g->mode, "off") != 0;
         const geistr_effort e = !strcmp(g->mode, "low")      ? GEISTR_EFFORT_LOW
@@ -406,13 +400,14 @@ static void thinking_goldens(void) {
                                 : !strcmp(g->mode, "high")   ? GEISTR_EFFORT_HIGH
                                                              : GEISTR_EFFORT_DEFAULT;
         check(t.thinks && t.off != nullptr, name);
-        const struct tpl_extra x = tpl_thinking_extra(&t, on, e);
-        for (size_t c = 0; c < sizeof convs / sizeof *convs; c++) {
-            if (strcmp(convs[c].name, g->conv))
+        struct tpl_extra x = tpl_thinking_extra(&t, on, e);
+        x.style            = y; /* as a thinking chat has it (#269) */
+        for (size_t c = 0; c < sizeof THINKING_CONVS / sizeof *THINKING_CONVS; c++) {
+            if (strcmp(THINKING_CONVS[c].name, g->conv))
                 continue;
             struct tpl_state st;
             tpl_init_extra(&st, f, &x);
-            char *text = tpl_render_send(&st, convs[c].n, convs[c].m);
+            char *text = tpl_render_send(&st, THINKING_CONVS[c].n, THINKING_CONVS[c].m);
             tpl_free(&st);
             append(&text, on ? t.on : t.off);
             eq(name, g->text, text);
@@ -454,6 +449,85 @@ static void thinking_goldens(void) {
           "effort: medium has no instruction, high is the default xhigh");
 }
 
+/* How the templates render the messages themselves (#269): read from their
+ * text; trimmed bodies keep their spans on the trimmed text; Qwen3.5's tool
+ * loop; what an answer renders as. The bytes are checked by the goldens. */
+static void message_style(void) {
+    static const struct {
+        const char *file;
+        bool        trim, tools, bare, loop;
+    } want[] = {
+            {"qwen3", false, true, false, false},  {"qwen35", true, true, false, true},
+            {"qwen38", true, true, true, false},   {"bonsai2", true, true, true, false},
+            {"gemma4", true, false, false, false},
+    };
+    for (size_t i = 0; i < sizeof want / sizeof *want; i++) {
+        char path[256];
+        snprintf(path, sizeof path, "tests/fixtures/templates/%s.jinja", want[i].file);
+        char *tpl = slurp(path);
+        check(tpl != nullptr, path);
+        if (!tpl)
+            continue;
+        const struct tpl_style y = tpl_style_of(tpl_family_detect(tpl, nullptr), tpl);
+        free(tpl);
+        check(y.trim == want[i].trim && y.tools == want[i].tools && y.bare == want[i].bare && y.loop == want[i].loop,
+              want[i].file);
+    }
+    const struct tpl_style none = tpl_style_of(TPL_CHATML, "{{ '<|im_start|>' + message.role }}");
+    check(!none.trim && !none.tools && !none.bare && !none.loop, "style: SmolLM2's ChatML renders messages as they are");
+    check(!tpl_style_of(TPL_CHATML, nullptr).trim, "style: no template");
+
+    /* user queries, as Qwen3.5's template finds the last one */
+    check(tpl_is_query(&(geistr_message) {"user", "Hi"}), "query: a user message");
+    check(!tpl_is_query(&(geistr_message) {"user", " <tool_response>\n21\n</tool_response>\n"}), "query: results");
+    check(tpl_is_query(&(geistr_message) {"user", "<tool_response>21"}), "query: an unclosed result is a query");
+    check(!tpl_is_query(&(geistr_message) {"tool", "21"}) && !tpl_is_query(&(geistr_message) {"assistant", "Hi"}) &&
+                  !tpl_is_query(&(geistr_message) {"system", "Hi"}),
+          "query: tool, assistant and system messages are none");
+
+    /* trimmed bodies: their spans hold the trimmed text; the split keeps reasoning and answer apart */
+    const struct tpl_extra x = {.style = {.trim = true, .tools = true, .loop = true}};
+    static const char      call[] = "<tool_call>\n<function=f>\n</function>\n</tool_call>";
+    const geistr_message   msgs[] = {
+            {"system", "  Be brief.\n"},  {"user", "\n Hi \t"},          {"assistant", " Hello! \n"},
+            {"user", "\u00a0Weather?\u3000"}, {"assistant", "<think>\nR\n</think>\n\n<tool_call>\n<function=f>\n</function>\n</tool_call>"},
+            {"tool", " 21 "},
+    };
+    const char *bodies[] = {"Be brief.", "Hi", "Hello!", "Weather?", "R", call, "21"};
+    struct tpl_state st;
+    struct tpl_spans sp = {};
+    tpl_init_extra(&st, TPL_CHATML, &x);
+    char *text = tpl_render_send_spans(&st, sizeof msgs / sizeof *msgs, msgs, &sp);
+    tpl_free(&st);
+    check(text && sp.n == sizeof bodies / sizeof *bodies, "style: one span per trimmed body");
+    for (size_t i = 0; text && i < sp.n && i < sizeof bodies / sizeof *bodies; i++)
+        check(sp.v[i].end - sp.v[i].begin == strlen(bodies[i]) &&
+                      !memcmp(text + sp.v[i].begin, bodies[i], strlen(bodies[i])),
+              bodies[i]);
+    eq("style: the tool loop",
+       "<|im_start|>system\nBe brief.<|im_end|>\n<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\nHello!<|im_end|>\n"
+       "<|im_start|>user\nWeather?<|im_end|>\n<|im_start|>assistant\n<think>\nR\n</think>\n\n<tool_call>\n"
+       "<function=f>\n</function>\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\n21\n</tool_response>"
+       "<|im_end|>\n<|im_start|>assistant\n",
+       text);
+    free(text);
+    tpl_spans_free(&sp);
+
+    /* an answer, as the chat compares it with the context */
+    char *a = tpl_render_answer(&x, "R\n</think>\n\nA ", true), *b = tpl_render_answer(&x, "R\n</think>\n\nA ", false);
+    eq("answer in the loop", "<think>\nR\n</think>\n\nA", a);
+    eq("answer before a query", "A", b);
+    free(a), free(b);
+    const struct tpl_extra q36 = {.history = "<think>\n\n</think>\n\n", .style = {.trim = true}};
+    a = tpl_render_answer(&q36, " A\n", false);
+    eq("answer after Qwen3.6+'s empty block, trimmed", "<think>\n\n</think>\n\nA", a);
+    free(a);
+    const struct tpl_extra plain = {};
+    a = tpl_render_answer(&plain, " A\n", false);
+    eq("answer as it is", " A\n", a);
+    free(a);
+}
+
 int main(void) {
     goldens();
     incremental_equals_whole();
@@ -464,10 +538,11 @@ int main(void) {
     detection();
     stops();
     thinking_goldens();
+    message_style();
     if (failures) {
         fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;
     }
-    puts("templates: geist-serve goldens, incremental = whole for 5 families, body spans, generation prompts, thinking off, closes, detection, stops, thinking on/off for 5 templates passed");
+    puts("templates: geist-serve goldens, incremental = whole for 5 families, body spans, generation prompts, thinking off, closes, detection, stops, thinking on/off, trim and tool loops for 5 templates, message styles passed");
     return 0;
 }
