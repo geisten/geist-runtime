@@ -1300,7 +1300,8 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
             const int   r_n  = (int) (!inside ? 0 : end ? (size_t) (end - r) : strlen(r));
             const size_t n   = (loop ? strlen("<think>\n\n</think>\n\n") + (size_t) r_n : 0) + strlen(after) + 1;
             char        *want = nullptr;
-            if ((kept = malloc(n))) {
+            kept              = malloc(n);
+            if (kept) {
                 if (loop) /* Qwen3.5: markers are <think> */
                     snprintf(kept, n, "<think>\n%.*s\n</think>\n\n%s", r_n, r, after);
                 else
@@ -1328,15 +1329,13 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
         }
         if (from < c->n_turns) {
             const size_t    k     = c->n_turns - from;
-            geistr_message *again = calloc(k + count, sizeof *again);
-            char          **owned = calloc(2 * k, sizeof *owned);
-            bool            ok    = again && owned;
+            geistr_message *again = calloc(k + count, sizeof *again); /* again[0, k): copies, freed below */
+            bool            ok    = again != nullptr;
             for (size_t i = 0; ok && i < k; i++) {
                 const bool is_answer = answer && from + i == c->answer_turn;
-                owned[2 * i]         = strdup(c->turns[from + i].role);
-                owned[2 * i + 1]     = strdup(is_answer ? kept : c->turns[from + i].content);
-                ok                   = owned[2 * i] && owned[2 * i + 1];
-                again[i]             = (geistr_message) {owned[2 * i], owned[2 * i + 1]};
+                again[i]             = (geistr_message) {strdup(c->turns[from + i].role),
+                                                         strdup(is_answer ? kept : c->turns[from + i].content)};
+                ok                   = again[i].role && again[i].content;
             }
             geistr_status st = ok ? geistr_chat_rewind(c, from) : GEISTR_NO_MEMORY;
             if (st == GEISTR_OK) {
@@ -1344,9 +1343,10 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
                 st = chat_send(c, k + count, again);
             } else if (st == GEISTR_NO_MEMORY)
                 st = fail(c, st, "out of memory");
-            for (size_t i = 0; owned && i < 2 * k; i++)
-                free(owned[i]);
-            free(owned);
+            for (size_t i = 0; again && i < k; i++) {
+                free((char *) again[i].role);
+                free((char *) again[i].content);
+            }
             free(again);
             free(kept);
             return st;
