@@ -95,8 +95,7 @@ struct out {
     struct tpl_extra  extra;
 };
 
-static void put(struct out *o, const char *s) {
-    size_t n = strlen(s);
+static void put_n(struct out *o, const char *s, size_t n) {
     if (o->oom)
         return;
     if (o->len + n + 1 > o->cap) {
@@ -111,14 +110,19 @@ static void put(struct out *o, const char *s) {
         o->p   = np;
         o->cap = cap;
     }
-    memcpy(o->p + o->len, s, n + 1);
+    memcpy(o->p + o->len, s, n);
     o->len += n;
+    o->p[o->len] = 0;
 }
 
-/* A message body: put, and its range into o->spans. */
-static void put_body(struct out *o, const char *s) {
+static void put(struct out *o, const char *s) {
+    put_n(o, s, strlen(s));
+}
+
+/* A message body s[0, n): put, and its range into o->spans. */
+static void put_body_n(struct out *o, const char *s, size_t n) {
     const size_t at = o->len;
-    put(o, s);
+    put_n(o, s, n);
     if (o->oom || o->spans == nullptr || o->len == at)
         return;
     struct tpl_spans *sp = o->spans;
@@ -133,6 +137,58 @@ static void put_body(struct out *o, const char *s) {
         sp->cap = cap;
     }
     sp->v[sp->n++] = (struct tpl_span) {at, o->len};
+}
+
+/* ---- Jinja's trim: Python's str.strip(), on UTF-8 (#269) ------------------ */
+
+/* Whether code point u is whitespace to str.isspace(). */
+static bool py_space(uint32_t u) {
+    return (u >= 0x09 && u <= 0x0d) || (u >= 0x1c && u <= 0x20) || u == 0x85 || u == 0xa0 || u == 0x1680 ||
+           (u >= 0x2000 && u <= 0x200a) || u == 0x2028 || u == 0x2029 || u == 0x202f || u == 0x205f || u == 0x3000;
+}
+
+/* The bytes of a whitespace code point starting at s[0, n), else 0. */
+static size_t space_at(const char *s, size_t n) {
+    const unsigned char *p = (const unsigned char *) s;
+    if (n >= 1 && p[0] < 0x80)
+        return py_space(p[0]) ? 1 : 0;
+    if (n >= 2 && (p[0] & 0xe0) == 0xc0 && (p[1] & 0xc0) == 0x80)
+        return py_space((uint32_t) (p[0] & 0x1f) << 6 | (p[1] & 0x3f)) ? 2 : 0;
+    if (n >= 3 && (p[0] & 0xf0) == 0xe0 && (p[1] & 0xc0) == 0x80 && (p[2] & 0xc0) == 0x80)
+        return py_space((uint32_t) (p[0] & 0x0f) << 12 | (uint32_t) (p[1] & 0x3f) << 6 | (p[2] & 0x3f)) ? 3 : 0;
+    return 0; /* no whitespace beyond U+FFFF */
+}
+
+/* The bytes of a whitespace code point ending at s[n), else 0. */
+static size_t space_before(const char *s, size_t n) {
+    for (size_t k = 1; k <= 3 && k <= n; k++)
+        if (space_at(s + n - k, k) == k)
+            return k;
+    return 0;
+}
+
+/* s[*b, *e) without leading and trailing whitespace. */
+static void trim_range(const char *s, size_t *b, size_t *e) {
+    for (size_t k; *b < *e && (k = space_at(s + *b, *e - *b));)
+        *b += k;
+    for (size_t k; *e > *b && (k = space_before(s + *b, *e - *b));)
+        *e -= k;
+}
+
+/* A body, trimmed if the style says so. */
+static void put_body(struct out *o, const char *s) {
+    size_t b = 0, e = strlen(s);
+    if (o->extra.style.trim)
+        trim_range(s, &b, &e);
+    put_body_n(o, s + b, e - b);
+}
+
+/* What put_body would write is empty. */
+static bool blank(const struct out *o, const char *s) {
+    size_t b = 0, e = strlen(s);
+    if (o->extra.style.trim)
+        trim_range(s, &b, &e);
+    return b == e;
 }
 
 void tpl_spans_free(struct tpl_spans *sp) {
@@ -172,6 +228,78 @@ static const struct turn_fmt *turn_fmt(enum tpl_family f) {
     }
 }
 
+/* Where s[b, e) holds needle, from the left (last false) or the right; e if nowhere. */
+static size_t find(const char *s, size_t b, size_t e, const char *needle, bool last) {
+    const size_t k = strlen(needle);
+    size_t       at = e;
+    for (size_t i = b; i + k <= e; i++)
+        if (!memcmp(s + i, needle, k)) {
+            at = i;
+            if (!last)
+                break;
+        }
+    return at;
+}
+
+/* An assistant message as Qwen3.5's template renders it (#269):
+ *   content = content|trim
+ *   if '</think>' in content:
+ *       reasoning = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n')
+ *       content = content.split('</think>')[-1].lstrip('\n')
+ *   in loop: '<think>\n' + reasoning|trim + '\n</think>\n\n' + content; else content */
+static void put_split_answer(struct out *o, const char *s, bool in_loop) {
+    size_t b = 0, e = strlen(s), rb = 0, re = 0;
+    trim_range(s, &b, &e);
+    const size_t close = find(s, b, e, "</think>", false);
+    if (close < e) {
+        re = close;
+        while (re > b && s[re - 1] == '\n')
+            re--;
+        const size_t open = find(s, b, re, "<think>", true);
+        rb                = open < re ? open + strlen("<think>") : b;
+        while (rb < re && s[rb] == '\n')
+            rb++;
+        trim_range(s, &rb, &re);
+        b = find(s, b, e, "</think>", true) + strlen("</think>");
+        while (b < e && s[b] == '\n')
+            b++;
+    }
+    if (in_loop) {
+        put(o, "<think>\n");
+        put_body_n(o, s + rb, re - rb);
+        put(o, "\n</think>\n\n");
+    }
+    put_body_n(o, s + b, e - b);
+}
+
+/* An assistant message's text after its role line, before the close. */
+static void put_answer(struct out *o, const char *content, bool in_loop) {
+    if (o->extra.style.loop) {
+        put_split_answer(o, content, in_loop);
+        return;
+    }
+    if (o->extra.history)
+        put(o, o->extra.history);
+    put_body(o, content);
+}
+
+bool tpl_is_query(const geistr_message *m) {
+    if (is_role(m, "system") || is_role(m, "assistant") || is_role(m, "tool"))
+        return false;
+    size_t b = 0, e = strlen(m->content);
+    trim_range(m->content, &b, &e);
+    static const char head[] = "<tool_response>", tail[] = "</tool_response>";
+    const size_t      h = sizeof head - 1, t = sizeof tail - 1;
+    return !(e - b >= h && !memcmp(m->content + b, head, h) && e - b >= t && !memcmp(m->content + e - t, tail, t));
+}
+
+bool tpl_has_query(size_t n, const geistr_message msgs[]) {
+    for (size_t i = 0; i < n; i++)
+        if (tpl_is_query(&msgs[i]))
+            return true;
+    return false;
+}
+
 /* *folded: the pending Gemma 3 system text on entry, what is still pending on return. */
 static void render_turns(struct out            *o,
                          const struct turn_fmt *f,
@@ -179,34 +307,52 @@ static void render_turns(struct out            *o,
                          const char           **folded,
                          size_t                 n,
                          const geistr_message   msgs[]) {
-    size_t       i       = 0;
-    const char  *lead    = f->sys_role ? o->extra.lead : nullptr, *history = o->extra.history;
-    const bool   system  = !started && n > 0 && is_role(&msgs[0], "system");
+    size_t                  i      = 0;
+    const char             *lead   = f->sys_role ? o->extra.lead : nullptr;
+    const struct tpl_style *y      = &o->extra.style;
+    const bool              system = !started && n > 0 && is_role(&msgs[0], "system");
     if (!started && lead && *lead) { /* a thinking chat's system turn (#266) */
         put(o, f->open);
         put(o, f->sys_role);
         put(o, f->role_end);
         put(o, lead);
-        if (system && *msgs[0].content) {
+        if (system && !blank(o, msgs[0].content)) {
             put(o, o->extra.join ? o->extra.join : "");
             put_body(o, msgs[0].content);
         }
         put(o, f->close);
         i = system ? 1 : 0;
     } else if (system) {
-        if (f->sys_role != nullptr) {
+        if (f->sys_role == nullptr) {
+            *folded = msgs[0].content;
+        } else if (!(y->bare && blank(o, msgs[0].content))) {
             put(o, f->open);
             put(o, f->sys_role);
             put(o, f->role_end);
             put_body(o, msgs[0].content);
             put(o, f->close);
-        } else {
-            *folded = msgs[0].content;
         }
         i = 1;
     }
+    /* Qwen3.5's tool loop (#269): the assistant messages after the last user query. */
+    size_t query = SIZE_MAX;
+    for (size_t k = i; y->loop && k < n; k++)
+        if (tpl_is_query(&msgs[k]))
+            query = k;
     for (; i < n; i++) {
-        bool asst = is_role(&msgs[i], "assistant");
+        const bool asst = is_role(&msgs[i], "assistant");
+        if (y->tools && is_role(&msgs[i], "tool")) { /* consecutive results share a user turn */
+            if (i == 0 || !is_role(&msgs[i - 1], "tool")) {
+                put(o, f->open);
+                put(o, f->user_role);
+            }
+            put(o, "\n<tool_response>\n");
+            put_body(o, msgs[i].content);
+            put(o, "\n</tool_response>");
+            if (i + 1 == n || !is_role(&msgs[i + 1], "tool"))
+                put(o, f->close);
+            continue;
+        }
         put(o, f->open);
         put(o, asst ? f->asst_role : f->user_role);
         put(o, f->role_end);
@@ -215,14 +361,26 @@ static void render_turns(struct out            *o,
             put(o, "\n\n");
             *folded = nullptr;
         }
-        if (asst && history)
-            put(o, history);
-        put_body(o, msgs[i].content);
+        if (asst)
+            put_answer(o, msgs[i].content, query == SIZE_MAX || i > query);
+        else
+            put_body(o, msgs[i].content);
         put(o, f->close);
     }
     put(o, f->open);
     put(o, f->asst_role);
     put(o, f->role_end);
+}
+
+char *tpl_render_answer(const struct tpl_extra *extra, const char *content, bool in_loop) {
+    struct out o = {.extra = *extra};
+    put(&o, "");
+    put_answer(&o, content, in_loop);
+    if (o.oom) {
+        free(o.p);
+        return nullptr;
+    }
+    return o.p;
 }
 
 /* BitNet b1.58 2B-4T (Llama-3 vocab): the turn format from the model card,
@@ -320,6 +478,29 @@ struct tpl_thinking tpl_thinking_of(enum tpl_family family, const char *tpl) {
     t.effort      = sw && strstr(tpl, "reasoning_effort") && strstr(tpl, "Reasoning effort is set to");
     t.history     = strstr(tpl, "preserve_thinking is undefined or preserve_thinking is true") ? THINK_EMPTY : "";
     return t;
+}
+
+/* The templates' own Jinja (#269), as the GGUFs carry them:
+ *   trim:  Qwen3.5+ "render_content(message.content, true)|trim",
+ *          Gemma 4 "message['content'] | trim"
+ *   tools: Qwen3.x "'\n<tool_response>\n'" in the tool branch
+ *   bare:  Qwen3.6+ "{%- elif reasoning_instructions %}": no turn for an empty system message
+ *   loop:  Qwen3.5 "'\n<think>\n' + reasoning_content + '\n</think>\n\n' + content" after
+ *          "loop.index0 > ns.last_query_index", with the split at </think> and
+ *          without preserve_thinking (Qwen3.6+ keeps the block everywhere: history) */
+struct tpl_style tpl_style_of(enum tpl_family family, const char *tpl) {
+    if (tpl == nullptr)
+        return (struct tpl_style) {};
+    const bool chatml = family == TPL_CHATML;
+    return (struct tpl_style) {
+            .trim  = (chatml && strstr(tpl, "render_content(message.content, true)|trim")) ||
+                     (family == TPL_GEMMA4 && strstr(tpl, "message['content'] | trim")),
+            .tools = chatml && strstr(tpl, "message.role == \"tool\"") && strstr(tpl, "'\\n<tool_response>\\n'"),
+            .bare  = chatml && strstr(tpl, "{%- elif reasoning_instructions %}"),
+            .loop  = chatml && strstr(tpl, "loop.index0 > ns.last_query_index") &&
+                    strstr(tpl, "content.split('</think>')") && !strstr(tpl, "preserve_thinking") &&
+                    strstr(tpl, "'\\n<think>\\n' + reasoning_content + '\\n</think>\\n\\n' + content"),
+    };
 }
 
 struct tpl_extra tpl_thinking_extra(const struct tpl_thinking *t, bool on, geistr_effort effort) {

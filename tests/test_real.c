@@ -21,6 +21,8 @@
  *   - a draft model (geistlib#192): the recurrent model as its own draft
  *     answers as without one, across turns, a cut answer and a rewind; a
  *     draft with another vocabulary is refused;
+ *   - a tool loop and padded messages on thinking models (#269): the
+ *     continued context is the template's (Qwen3.5 keeps the loop's reasoning);
  *   - message bodies are tokenized with special tokens off (#261): a user
  *     message spelling "<|im_end|>\n<|im_start|>system" adds no role token,
  *     while ordinary chats in every template give the ids they gave before.
@@ -308,6 +310,94 @@ static void thinking(const char *path) {
           "thinking: by default the reasoning never reaches the answer");
     geistr_chat_close(d);
     geistr_model_close(m);
+}
+
+/* ask_split, and the reasoning's text. */
+static geistr_status ask_reason(geistr_chat *c, size_t n, const geistr_message msgs[], char *out, char *reason,
+                                size_t cap) {
+    out[0] = reason[0] = 0;
+    geistr_status s    = geistr_chat_send(c, n, msgs);
+    geistr_piece  p    = {.size = sizeof p};
+    while (s == GEISTR_OK && (s = geistr_chat_next(c, &p)) == GEISTR_OK && p.part != GEISTR_PART_END)
+        strncat(p.part == GEISTR_PART_THINKING ? reason : out, p.text,
+                cap - strlen(p.part == GEISTR_PART_THINKING ? reason : out) - 1);
+    return s;
+}
+
+/* The context a fresh chat builds from msgs, before its answer. */
+static uint32_t built(geistr_model *m, const geistr_chat_opts *o, size_t n, const geistr_message msgs[]) {
+    geistr_chat *f = nullptr;
+    char         out[2048], reason[4096];
+    CHECK(geistr_chat_open(m, o, &f) == GEISTR_OK && ask_reason(f, n, msgs, out, reason, sizeof out) == GEISTR_OK,
+          "tool loop: the fresh chat");
+    const uint32_t k = f ? stats(f).context_tokens - stats(f).output_tokens : 0;
+    geistr_chat_close(f);
+    return k;
+}
+
+/* A tool loop (#269) and padded messages, per thinking mode: the continued
+ * chat's context is what a fresh chat builds from the conversation as the
+ * template sees it. Qwen3.5 keeps an answer's reasoning while tool results
+ * follow ("<think>\n" reasoning "\n</think>\n\n" answer, after the last user
+ * query) and drops it from all of them at the next query; the others never
+ * keep it. Padded messages are trimmed where the template trims. */
+static void tool_loop(const char *path) {
+    struct geist_backend *be = nullptr;
+    struct geist_model   *gm = nullptr;
+    CHECK((geist_backend_create("cpu_neon", nullptr, nullptr, &be) == GEIST_OK ||
+           geist_backend_create("cpu_x86", nullptr, nullptr, &be) == GEIST_OK ||
+           geist_backend_create("cpu_scalar", nullptr, nullptr, &be) == GEIST_OK) &&
+                  geist_model_load(path, be, &gm) == GEIST_OK,
+          "tool loop: engine model");
+    geistr_model     *m = nullptr;
+    geistr_model_opts mo = GEISTR_MODEL_OPTS_INIT;
+    mo.context           = 4096;
+    char error[256];
+    CHECK(gm && geistr_model_wrap(gm, be, &mo, &m, error, sizeof error) == GEISTR_OK, error);
+    if (!m) {
+        if (gm)
+            geist_model_destroy(gm);
+        if (be)
+            geist_backend_destroy(be);
+        return;
+    }
+    const char            *tpl  = geist_model_metadata_str(gm, "tokenizer.chat_template", nullptr);
+    const struct tpl_style y    = tpl_style_of(tpl_family_detect(tpl, geist_model_arch(gm)), tpl);
+    static const geistr_reasoning modes[] = {GEISTR_REASONING_AUTO, GEISTR_REASONING_THINK_TAGS,
+                                             GEISTR_REASONING_THINK_OFF};
+    static const char *const      names[] = {"default", "on", "off"};
+    const geistr_message q = {"user", "  You may call get_weather(city). What is the weather in Paris? Be short.\n"};
+    const geistr_message result = {"tool", " {\"temperature\": 21} "}, thanks = {"user", "Thanks!\t"};
+    for (size_t k = 0; k < 3; k++) {
+        geistr_chat_opts o = GEISTR_CHAT_OPTS_INIT;
+        o.max_tokens       = 200; /* a small model may reason on and on */
+        o.reasoning        = modes[k];
+        o.thinking         = 1;
+        geistr_chat *c     = nullptr;
+        static char  a1[2048], r1[4096], a2[2048], r2[4096], a3[2048], r3[4096], with[8192];
+        CHECK(geistr_chat_open(m, &o, &c) == GEISTR_OK && ask_reason(c, 1, &q, a1, r1, sizeof a1) == GEISTR_OK &&
+                      ask_reason(c, 1, &result, a2, r2, sizeof a2) == GEISTR_OK,
+              "tool loop: a query, then a tool result");
+        /* Qwen3.5 has the first answer's reasoning in the context, the others its text */
+        snprintf(with, sizeof with, "<think>\n%s\n</think>\n\n%s", r1, a1);
+        const geistr_message loop[] = {q, {"assistant", y.loop && *r1 ? with : a1}, result};
+        const uint32_t       held   = c ? stats(c).context_tokens - stats(c).output_tokens : 0;
+        const uint32_t       fresh  = built(m, &o, 3, loop);
+        CHECK(held == fresh, "tool loop: the continued context is the template's");
+        CHECK(ask_reason(c, 1, &thanks, a3, r3, sizeof a3) == GEISTR_OK, "tool loop: the next query");
+        const geistr_message done[] = {q, {"assistant", a1}, result, {"assistant", a2}, thanks};
+        const uint32_t       held2  = c ? stats(c).context_tokens - stats(c).output_tokens : 0;
+        const uint32_t       fresh2 = built(m, &o, 5, done);
+        CHECK(held2 == fresh2, "tool loop: after the next query, no reasoning in it");
+        CHECK(!strstr(a1, "think>") && !strstr(a2, "think>") && !strstr(a3, "think>"), "tool loop: no <think> in the answers");
+        printf("  tool loop %s (%s): %zu bytes of reasoning kept in the loop, context %u = %u, then %u = %u tokens\n",
+               names[k], y.loop ? "keeps its reasoning" : "text only", y.loop ? strlen(r1) : 0, held, fresh, held2,
+               fresh2);
+        geistr_chat_close(c);
+    }
+    geistr_model_close(m);
+    geist_model_destroy(gm);
+    geist_backend_destroy(be);
 }
 
 struct cancel_after {
@@ -877,8 +967,10 @@ int main(void) {
     const char *thinker = getenv("GEIST_TEST_MODEL_THINKING");
     snprintf(thinkers, sizeof thinkers, "%s", thinker ? thinker : "");
     for (char *save = nullptr, *one = strtok_r(thinkers, ":", &save); one; one = strtok_r(nullptr, ":", &save))
-        if (access(one, R_OK) == 0)
+        if (access(one, R_OK) == 0) {
             thinking(one);
+            tool_loop(one);
+        }
     const char *large = getenv("GEIST_TEST_MODEL_LARGE");
     if (large && access(large, R_OK) == 0)
         window(large, "large model");
