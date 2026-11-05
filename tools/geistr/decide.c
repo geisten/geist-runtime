@@ -99,6 +99,14 @@ static bool argument(size_t argc, size_t *index, const char *const *argv, const 
     return true;
 }
 
+bool geistr_decide_path_sha(const char *path, bool configured, char sha[static 65]) {
+    if (geistr_decide_receipt_sha(path, sha) || !configured)
+        return *sha != 0;
+    /* --config lists SHA-256s: an allow-list must match a file without a receipt too */
+    if (geistr_sha256_file(path, sha) != GEISTR_OK)
+        *sha = 0;
+    return *sha != 0;
+}
 bool geistr_decide_receipt_sha(const char *path, char sha[static 65]) {
     *sha = 0;
     const char *slash = strrchr(path, '/'), *file = slash ? slash + 1 : path;
@@ -135,8 +143,8 @@ struct loaded {
     geistr_catalog *catalog;
     geistr_model *model;
     const geistr_decision_policy *policy;
-    char sha[65];               /* "": a path without a receipt, unknown */
-    geistr_reasoning reasoning; /* the template's (#285): a thinking model thinks when escalated to chat */
+    char sha[65];               /* "": a path without a receipt (and no --config), unknown */
+    geistr_reasoning reasoning; /* the template's (#285): one that thinks in <think> tags thinks in the chat */
 };
 static void unload(struct loaded *l) {
     geistr_model_close(l->model);
@@ -181,8 +189,9 @@ static int load(struct loaded *l, const char *model, const char *config_file, co
             return failure(1, "model path too long");
         selected_path = path;
         memcpy(l->sha, entry->sha256, sizeof l->sha);
-    } else /* a path is never hashed here (#285): its receipt names it, else it is unverified */
-        geistr_decide_receipt_sha(model, l->sha);
+    } else if (!geistr_decide_path_sha(model, config_file != nullptr, l->sha) && config_file)
+        return failure(1, "model artifact unreadable");
+    /* Without --config a path is never hashed here (#285): its receipt names it, else it is unverified. */
     l->policy = geistr_decision_config_find(l->sha, l->config);
     static geistr_decision_policy unverified;
     if (!l->policy && !config_file) { /* no verified profile: the model's own chat template, unverified */
@@ -191,9 +200,6 @@ static int load(struct loaded *l, const char *model, const char *config_file, co
         snprintf(unverified.sha256, sizeof unverified.sha256, "%s", *l->sha ? l->sha : UNKNOWN_SHA);
         l->policy = &unverified;
     }
-    if (!l->policy && !*l->sha)
-        return failure(1, "decision permission unknown for this file: no receipt names its SHA-256 (#285; a model "
-                          "geistr pulled or verified has one)");
     if (!l->policy || !l->policy->enabled)
         return failure(1, "decision permission absent or disabled for this artifact");
     if (profile && strcmp(profile, geistr_decision_profile_name(l->policy->profile)))
@@ -205,9 +211,10 @@ static int load(struct loaded *l, const char *model, const char *config_file, co
     status = geistr_model_open(selected_path, &mo, &l->model, error, sizeof error);
     if (status != GEISTR_OK)
         return failure(1, error);
-    /* Whether it thinks: its chat template says, for a catalog id and a path alike (#266, #285). */
+    /* Whether the escalated chat thinks: only in <think> tags (Qwen3.x, Bonsai 2; not Gemma 4, #270), as its
+     * chat template has it, for a catalog id and a path alike (#285). */
     geistr_model_info info = {.size = sizeof info};
-    if (geistr_model_info_get(l->model, &info) == GEISTR_OK && info.thinking)
+    if (geistr_model_info_get(l->model, &info) == GEISTR_OK && info.think_tags)
         l->reasoning = GEISTR_REASONING_THINK_TAGS;
     return 0;
 }
@@ -667,7 +674,7 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
             asked_chat = true;
             if (ee.enabled && loaded.reasoning != GEISTR_REASONING_THINK_TAGS) {
                 if (ee.required) {
-                    code = failure(2, "--early-exit needs a model that thinks (its chat template has no thinking)");
+                    code = failure(2, "--early-exit needs a model that thinks in <think> tags");
                     goto done;
                 }
                 ee.enabled = false; /* the default: a model that does not think answers as before */
@@ -675,8 +682,7 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
             const char *id = ask_in_chat(model, loaded.reasoning, &request, (uint32_t)max_tokens, &ee, &chat_stats,
                                          answer, sizeof answer);
             if (ee.enabled && ee.set != GEISTR_OK) {
-                code = failure(2, "--early-exit: this chat cannot be probed (it needs thinking in <think> tags and "
-                                  "options that each start with their own token)");
+                code = failure(2, "--early-exit: the options cannot be probed (each must start with its own token)");
                 goto done;
             }
             if (!id) {

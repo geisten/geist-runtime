@@ -1,6 +1,7 @@
 """Offline frontend contract; real success/cancel cases use the same driver.
 The driver is a test dispatcher, not a second product CLI.
 """
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -136,10 +137,13 @@ def receipts(binary):
     """#285: a model given by path is identified by its receipt, never hashed at
     decide time. With the receipt of the Bonsai 2 profile's artifact it is that
     profile (early exit by default); without one, or once the file changed, it
-    is unverified (no profile, no early-exit default). Thinking is the chat
-    template's, the same for a catalog id and a path (the real-model test)."""
-    def resolve(path):
-        out = subprocess.run([str(binary), 'receipt', str(path)], capture_output=True, timeout=20, check=True)
+    is unverified (no profile, no early-exit default). With --config (a list
+    of SHA-256s) a file without a receipt is hashed, so the list matches it.
+    Thinking is the chat template's, the same for a catalog id and a path (the
+    real-model test)."""
+    def resolve(path, configured=False):
+        out = subprocess.run([str(binary), 'receipt-config' if configured else 'receipt', str(path)],
+                             capture_output=True, timeout=20, check=True)
         return out.stdout.decode().split()
     unverified = ['-', 'none', '0']
     with tempfile.TemporaryDirectory() as directory:
@@ -149,8 +153,11 @@ def receipts(binary):
         model.write_bytes(b'GGUF' + bytes(60))
         assert resolve(model) == unverified
         assert resolve(models / 'missing.gguf') == unverified
+        assert resolve(model, True) == [hashlib.sha256(model.read_bytes()).hexdigest(), 'none', '0']  # hashed
+        assert resolve(models / 'missing.gguf', True) == unverified
         (models / '.verified' / BONSAI2).write_text(stamp(model, BONSAI2))
         assert resolve(model) == [BONSAI2, 'bonsai2-27b-pq2-v1', '1']
+        assert resolve(model, True) == [BONSAI2, 'bonsai2-27b-pq2-v1', '1']  # the receipt, not a hash
         other = 'ab' * 32  # a receipt of another artifact: no profile
         (models / '.verified' / BONSAI2).unlink()
         (models / '.verified' / other).write_text(stamp(model, other))
@@ -174,6 +181,7 @@ def receipts(binary):
         with open(model, 'r+b') as f:  # changed after its receipt: unverified until checked again
             f.write(b'GGUX')
         assert resolve(model) == unverified
+        assert resolve(model, True)[0] == hashlib.sha256(model.read_bytes()).hexdigest()
 
 
 def main():

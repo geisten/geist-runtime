@@ -94,7 +94,8 @@ with geistr.open(model) as m:
     info = m.info
     assert info["context"] > 0 and info["backend"] in ("cpu", "metal", "vulkan"), info
     assert info["vision"] is False, info
-    assert info["thinking"] is None and not info["thinking_off"] and not info["effort"], info  # #266: SmolLM2
+    assert info["thinking"] is None and not info["thinking_off"] and not info["effort"] \
+        and not info["think_tags"], info  # #266: SmolLM2
     assert "Paris" in m.chat(think=False).ask("What is the capital of France? One word.")  # nothing to turn off
     try:  # #91: a model that generates text does not embed, and says so
         m.embed("hi")

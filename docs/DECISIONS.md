@@ -338,18 +338,21 @@ geistr catalog --decision-config decisions.json --json
 same model behave identically:
 
 - **Thinking** (for `--escalate chat`) comes from the loaded model's chat
-  template (`geistr_model_info.thinking`, #266), not from the catalog.
+  template, not from the catalog: the chat thinks when the template thinks
+  in `<think>` tags (`geistr_model_info.think_tags`: Qwen3, Qwen3.5,
+  Qwen3.6+, Bonsai 2). Gemma 4 (`<|think|>`) answers at once there (#270).
 - **The artifact's SHA-256** selects the policy. A catalog id names it (the
-  file is checked against it, through its receipt). A path is never hashed
-  by `decide`: the receipt `geistr pull` or a catalog check left next to the
-  file (`<dir>/.verified/<sha256>`, bound to the file's identity, size and
-  change time) names it. A file without a matching receipt (copied
-  elsewhere, changed, never pulled or checked) has no known SHA-256: it is
-  decided unverified, thinks if its template does, but gets no profile
-  defaults (no early exit by default). Its `artifact_sha256` in the
-  diagnostics is `null`; with `--config` (a list of SHA-256s) it has no
-  permission. Loading a verified profile still has the runtime hash the file
-  (see above).
+  file is checked against it, through its receipt). For a path, the receipt
+  `geistr pull` or a catalog check left next to the file
+  (`<dir>/.verified/<sha256>`, bound to the file's identity, size and change
+  time) names it; `decide` does not hash the file for this. A file without
+  a matching receipt (copied elsewhere, changed, never pulled or checked)
+  has no known SHA-256: it is decided unverified, thinks if its template
+  does, but gets no profile defaults (no early exit by default); its
+  `artifact_sha256` in the diagnostics is `null`. With `--config` (a list of
+  SHA-256s) such a file is hashed once, so the list matches custom GGUFs
+  too. Loading a verified profile still has the runtime hash the file (see
+  above).
 
 Without `--config`, a model with a verified profile (the registry in
 `src/decision_profile.c`) uses it; every other model is decided unverified,
@@ -372,7 +375,8 @@ chosen option's probability with P. At or above P nothing changes. Below P:
 - without `--escalate`: exit 3, nothing on stdout, a message on stderr (the
   caller decides what happens, e.g. a person looks at it);
 - `--escalate chat`: the same model answers in chat mode with the options as
-  allowed labels (thinking on for a model whose chat template thinks). The
+  allowed labels (thinking on for a model whose chat template thinks in
+  `<think>` tags). The
   answer, thinking included, is limited to `--max-tokens N` tokens (default
   4096, 1–28672); the model is opened with a context of 4096 + N tokens. The
   answer is read exactly (the trimmed answer is an ID, any case) or as the

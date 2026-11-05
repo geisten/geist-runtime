@@ -64,8 +64,9 @@ with tempfile.TemporaryDirectory() as directory:
     assert c['answer_index'] == [b'left\n', b'right\n'].index(chat.stdout), c
     assert c['chat']['max_tokens'] == 4096 and c['chat']['output_tokens'] > 0 and c['chat']['input_tokens'] > 0, c
     assert c['escalation_ms'] >= c['chat']['total_ms'] > 0, c
-    # Whether the chat thinks is its template's, for a catalog id and a path alike (#285): Bonsai 2 does.
-    assert profile != 'bonsai2' or c['chat']['thinking'] is True, c
+    # Whether the chat thinks is its template's, for a catalog id and a path alike (#285): only in <think>
+    # tags, so Bonsai 2 does and Gemma 4 (<|think|>) does not (#270).
+    assert c['chat']['thinking'] is (profile == 'bonsai2'), c
     # Early exit is the default of --escalate chat for the Bonsai 2 27B profile only (geistlib#286): it is
     # probed every 128 tokens and may answer at a confident probe; every other model reasons to the end.
     # By path the profile comes from the file's receipt (#285); MODEL may be either.

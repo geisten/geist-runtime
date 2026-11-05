@@ -45,7 +45,8 @@ class _ModelOpts(C.Structure):
 
 class _ModelInfo(C.Structure):
     _fields_ = [("size", C.c_size_t), ("arch", _str), ("chat_format", _str), ("backend", _str), ("context", C.c_uint32),
-                ("vision", C.c_int), ("thinking", C.c_int), ("thinking_off", C.c_int), ("effort", C.c_int)]
+                ("vision", C.c_int), ("thinking", C.c_int), ("thinking_off", C.c_int), ("effort", C.c_int),
+                ("think_tags", C.c_int)]
 
 
 class _ChatOpts(C.Structure):
@@ -294,7 +295,8 @@ class Model:
                 "vision": bool(i.vision),
                 # #266: None (no thinking), "on" (thinks unless told not to), "off" (only when asked)
                 "thinking": [None, "on", "off"][i.thinking] if 0 <= i.thinking <= 2 else None,
-                "thinking_off": bool(i.thinking_off), "effort": bool(i.effort)}
+                "thinking_off": bool(i.thinking_off), "effort": bool(i.effort),
+                "think_tags": bool(i.think_tags)}  # #285: thinks in <think> tags
 
     def embed(self, text: str) -> list[float]:
         """The text's unit-length embedding, by an embedding model (BitNet-embedding, #91). A query
