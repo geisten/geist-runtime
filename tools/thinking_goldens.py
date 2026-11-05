@@ -26,7 +26,11 @@ from GEISTR_MODELS) and fail on any difference. llama.cpp passes
 enable_thinking=true unless told otherwise, so the template's default is
 compared with transformers only. llama.cpp's trim removes ASCII whitespace
 only (Python's str.strip all of Unicode's), so it differs on 'padded_unicode':
-reported, not failed; the runtime trims as transformers does (#269). Needs
+reported, not failed; the runtime trims as transformers does (#269). Since
+#282 also: llama.cpp takes an empty reasoning_content as none (and splits
+the content at </think>), so it differs on 'tool_rc_empty' where the
+content holds a block; it refuses a null one ('tool_rc_null', not sent).
+Both reported, not failed; the runtime follows transformers there too. Needs
 jinja2 (pip install jinja2)."""
 import json
 import os
@@ -121,6 +125,8 @@ TEMPLATES_OF = {'qwen3': BASE + TOOLS + ['turns_rc'] + RC, 'qwen35': BASE + TOOL
                 'qwen38': BASE + TOOLS + ['turns_rc'] + RC, 'bonsai2': BASE + TOOLS + ['turns_rc'] + RC,
                 'gemma4': BASE + ['turns_rc']}
 ASCII_TRIM = ['padded_unicode']  # llama.cpp's |trim keeps Unicode whitespace
+EMPTY_RC = ['tool_rc_empty']  # llama.cpp drops an empty reasoning_content (#282)
+NULL_RC = ['tool_rc_null']  # llama.cpp refuses a null reasoning_content (500)
 MODES = {'default': {}, 'on': {'enable_thinking': True}, 'off': {'enable_thinking': False}}
 EFFORTS = {'low': 'low', 'medium': 'medium', 'high': 'xhigh'}
 
@@ -165,12 +171,12 @@ def llama_check(all_cases):
                 except Exception:
                     time.sleep(0.5)
             for n, conv, mode, messages, kwargs, want in all_cases:
-                if n != name or mode == 'default':
+                if n != name or mode == 'default' or conv in NULL_RC:
                     continue
                 body = json.dumps({'messages': messages, 'chat_template_kwargs': kwargs}).encode()
                 req = urllib.request.Request('http://127.0.0.1:18799/apply-template', body)
                 got = json.load(urllib.request.urlopen(req, timeout=30))['prompt']
-                if got != want and conv in ASCII_TRIM:
+                if got != want and conv in ASCII_TRIM + EMPTY_RC:
                     known += 1
                 elif got != want:
                     bad += 1
@@ -180,7 +186,8 @@ def llama_check(all_cases):
             server.terminate()
             server.wait()
     print(f'llama.cpp /apply-template: {bad} differences; {known} known (its trim is ASCII only: '
-          f'{", ".join(ASCII_TRIM)})', file=sys.stderr)
+          f'{", ".join(ASCII_TRIM)}; an empty reasoning_content is none: {", ".join(EMPTY_RC)}); not sent: '
+          f'{", ".join(NULL_RC)}', file=sys.stderr)
     return bad == 0
 
 

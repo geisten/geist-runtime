@@ -270,8 +270,10 @@ the templates' own Jinja conditions) and renders what the template renders:
   messages:
   - Qwen3 and Qwen3.5 render it in the tool loop and drop it before the
     last query; the content is then not split at `</think>`, also for an
-    empty string. Qwen3 strips only line breaks from it and renders no
-    block for empty reasoning; Qwen3.5 trims it.
+    empty string (as transformers renders it; llama.cpp takes an empty one
+    as none, which differs only where the content holds `</think>`). Qwen3
+    strips only line breaks from it and renders no block for empty
+    reasoning; Qwen3.5 trims it.
   - Qwen3.6+ renders it, trimmed, in every earlier answer
     (`preserve_thinking`), in place of the empty block.
   - Gemma 4 renders it only after the last user message, which needs its

@@ -125,8 +125,8 @@ static bool held_push(struct held *c, const char *role, const char *content, con
     c->thought         = rs;
     c->role[c->n]      = strdup(role);
     c->content[c->n]   = strdup(content);
-    c->thought[c->n] = reasoning && *reasoning ? strdup(reasoning) : nullptr;
-    if (!c->role[c->n] || !c->content[c->n] || (reasoning && *reasoning && !c->thought[c->n])) {
+    c->thought[c->n] = reasoning ? strdup(reasoning) : nullptr;
+    if (!c->role[c->n] || !c->content[c->n] || (reasoning && !c->thought[c->n])) {
         free(c->role[c->n]), free(c->content[c->n]), free(c->thought[c->n]);
         return false;
     }
@@ -181,12 +181,18 @@ static bool same_role(const char *a, const char *b) {
     return sa == sb && aa == ab; /* anything else counts as user, as in the runtime */
 }
 
+/* Both none, or the same text: an empty one is reasoning too (the templates
+ * then do not split the content at </think>). */
+static bool same_reasoning(const char *a, const char *b) {
+    return a && b ? !strcmp(a, b) : a == b;
+}
+
 /* How many of the request's messages (all but the last) this conversation
- * holds, reasoning included (#282): an empty one counts as none. */
+ * holds, reasoning included (#282). */
 static size_t common(const struct held *c, const geistr_message *m, char *const *reasoning, size_t n) {
     size_t k = 0;
     while (k < c->n && k + 1 < n && same_role(c->role[k], m[k].role) && !strcmp(c->content[k], m[k].content) &&
-           !strcmp(c->thought[k] ? c->thought[k] : "", reasoning && reasoning[k] ? reasoning[k] : ""))
+           same_reasoning(c->thought[k], reasoning ? reasoning[k] : nullptr))
         k++;
     return k;
 }
