@@ -24,6 +24,19 @@ int main(int argc, char **argv) {
                    geistr_decide_early_exit_default((geistr_decision_profile)p));
         return 0;
     }
+    /* #285: a path's SHA (receipt; with --config, else hashed), and what it gets */
+    if (argc == 3 && (!strcmp(argv[1], "receipt") || !strcmp(argv[1], "receipt-config"))) {
+        char sha[65];
+        const bool found = geistr_decide_path_sha(argv[2], !strcmp(argv[1], "receipt-config"), sha);
+        geistr_decision_profile profile = GEISTR_DECISION_PROFILE_NONE;
+        for (int p = GEISTR_DECISION_PROFILE_NONE + 1; found && p < GEISTR_DECISION_MAX_POLICIES; ++p)
+            if (*geistr_decision_profile_sha256((geistr_decision_profile)p) &&
+                !strcmp(sha, geistr_decision_profile_sha256((geistr_decision_profile)p)))
+                profile = (geistr_decision_profile)p;
+        printf("%s %s %d\n", found ? sha : "-", geistr_decision_profile_name(profile),
+               geistr_decide_early_exit_default(profile));
+        return 0;
+    }
     if (argc > 1 && !strcmp(argv[1], "decide-batch"))
         return geistr_decide_batch_command((size_t)(argc - 2), (const char *const *)(argv + 2), &host);
     return geistr_decide_command((size_t)(argc - 1), (const char *const *)(argv + 1), &host);

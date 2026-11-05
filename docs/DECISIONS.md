@@ -334,6 +334,26 @@ geistr decide model.gguf --config decisions.json --question-file - \
 geistr catalog --decision-config decisions.json --json
 ```
 
+**Which model, which profile (#285).** A catalog id and a file path of the
+same model behave identically:
+
+- **Thinking** (for `--escalate chat`) comes from the loaded model's chat
+  template, not from the catalog: the chat thinks when the template thinks
+  in `<think>` tags (`geistr_model_info.think_tags`: Qwen3, Qwen3.5,
+  Qwen3.6+, Bonsai 2). Gemma 4 (`<|think|>`) answers at once there (#270).
+- **The artifact's SHA-256** selects the policy. A catalog id names it (the
+  file is checked against it, through its receipt). For a path, the receipt
+  `geistr pull` or a catalog check left next to the file
+  (`<dir>/.verified/<sha256>`, bound to the file's identity, size and change
+  time) names it; `decide` does not hash the file for this. A file without
+  a matching receipt (copied elsewhere, changed, never pulled or checked)
+  has no known SHA-256: it is decided unverified, thinks if its template
+  does, but gets no profile defaults (no early exit by default); its
+  `artifact_sha256` in the diagnostics is `null`. With `--config` (a list of
+  SHA-256s) such a file is hashed once, so the list matches custom GGUFs
+  too. Loading a verified profile still has the runtime hash the file (see
+  above).
+
 Without `--config`, a model with a verified profile (the registry in
 `src/decision_profile.c`) uses it; every other model is decided unverified,
 and on a terminal the command says so. With
@@ -355,7 +375,8 @@ chosen option's probability with P. At or above P nothing changes. Below P:
 - without `--escalate`: exit 3, nothing on stdout, a message on stderr (the
   caller decides what happens, e.g. a person looks at it);
 - `--escalate chat`: the same model answers in chat mode with the options as
-  allowed labels (thinking on for a model the catalog marks as thinking). The
+  allowed labels (thinking on for a model whose chat template thinks in
+  `<think>` tags). The
   answer, thinking included, is limited to `--max-tokens N` tokens (default
   4096, 1–28672); the model is opened with a context of 4096 + N tokens. The
   answer is read exactly (the trimmed answer is an ID, any case) or as the
@@ -380,8 +401,8 @@ option's probability after T, in option order), `answered_by` (`direct`,
 (null for none). After an escalation it adds `escalation_ms`; after a chat
 escalation a `chat` object with `max_tokens`, `finish` (`stop`, `length`,
 `context`, `repetition`, `cancelled`, `error` or `none`), `input_tokens`,
-`output_tokens` (thinking included), `prefill_ms`, `generation_ms` and
-`total_ms`; after `--escalate MODEL`, `second_top_probability`. A caller can
+`output_tokens` (thinking included), `prefill_ms`, `generation_ms`,
+`total_ms` and `thinking` (whether the chat thought, #285); after `--escalate MODEL`, `second_top_probability`. A caller can
 add up the cost of both stages from these fields: one decision call
 (`scoring_ms`, `prompt_tokens`), plus, when escalated, the chat's tokens and
 time. There is no cap on the escalated share: a single command cannot see
@@ -396,9 +417,8 @@ Both work for every model.
   (`bonsai2-27b-pq2-v1`, the exact artifact its evidence was measured on).
   Every other model, verified or not, reasons to the end unless asked with
   `--early-exit`. The evidence is Bonsai 2 only; another model gets the
-  default only after its own declared validation. Probing needs a chat that
-  thinks, which `decide` knows from the catalog: give the model by its
-  catalog id (`bonsai2-27b-pq2`), not by file path.
+  default only after its own declared validation. A catalog id and a file
+  path get the same default (#285, see "Which model, which profile" above).
 - **What the default costs:** on Bonsai 2, early exit is non-inferior to
   full reasoning overall, but the gain comes from answers that full
   reasoning loses to the cap. **On questions that full reasoning finishes
@@ -627,7 +647,7 @@ reported by the engine), `mode`, `prefill_chunk`, `max_prompt_tokens`,
 question, `prepared_questions` and `restores` counts, `failed_index` and
 `failed_id`, and per question `prompt_tokens` and `uncached_tokens` (the
 suffix after the restore). Times in ms, each ending at a synchronous return:
-`load_ms` (configuration, catalog SHA check or hashing, model load),
+`load_ms` (configuration, catalog SHA check or a path's receipt, model load),
 `context_ms` (context open: tokenizing, prefix prefill, snapshot),
 `preparation_ms`, `scoring_ms`, `batch_ms`, `until_result_ms` (command start to
 the batch result), `output_ms`, `teardown_ms` and `total_ms` (command start to

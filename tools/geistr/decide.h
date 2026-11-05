@@ -25,6 +25,14 @@ int geistr_decide_batch_command(size_t argc, const char *const *argv, const geis
 /* Whether --escalate chat exits early by default for a verified decision
  * profile: only where a declared validation established it (geistlib#286). */
 bool geistr_decide_early_exit_default(geistr_decision_profile profile);
+/* A model given by path (#285): its SHA-256 from the receipt geistr pull or a
+ * catalog check left next to it (<dir>/.verified/<sha256>, bound to the
+ * file's identity), never by hashing it. false and "" when no receipt matches
+ * the file as it is now: decide treats it as unverified. */
+bool geistr_decide_receipt_sha(const char *path, char sha[static 65]);
+/* decide's SHA-256 for a path: the receipt's; without one, configured (a
+ * --config allow-list must match it) hashes the file, else "" (unverified). */
+bool geistr_decide_path_sha(const char *path, bool configured, char sha[static 65]);
 /* Shared bounded reader for catalog inspection and execution. */
 [[nodiscard]] geistr_status geistr_decide_config_read(size_t error_cap, const char *path,
                                                       geistr_decision_config **out, char *error);

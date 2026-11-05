@@ -120,8 +120,8 @@
   - `geistr config <id>.thinking on|off` now takes both values for every
     thinking model and refuses both for the others (before, `on` was taken
     for any id). A stored `on` for a model that does not think is ignored.
-  - `geistr decide` is unchanged: only `think_tags` models decide with
-    their reasoning on.
+  - `geistr decide` is unchanged: only models that think in `<think>` tags
+    decide with their reasoning on (since #285 read from the chat template).
 
 - `install.sh` runs only once it has been downloaded completely (a `curl | sh`
   that breaks off installs nothing), retries downloads and works with `wget`
@@ -138,6 +138,25 @@
   (2.8 s of CPU). A build without OpenSSL keeps the portable code (#254).
 
 ### Changed
+
+- `geistr decide` resolves a model the same way for a catalog id and a
+  file path (#285). Before, Bonsai 2 27B given by path answered its
+  `--escalate chat` without reasoning (no option named), and the early-exit
+  default (geistlib#286) applied only to the catalog id.
+  - Whether the escalated chat thinks comes from the model's chat template
+    (new `geistr_model_info.think_tags`, Python `Model.info["think_tags"]`:
+    it thinks in `<think>` tags), not the catalog's `reasoning_format`. The
+    models are the same as before: Qwen3, Qwen3.5, Qwen3.6+ and Bonsai 2
+    think there, Gemma 4 does not.
+  - Without `--config`, a path is no longer hashed by `decide`. Its
+    SHA-256, and with it the verified profile and its defaults, comes from
+    the receipt `geistr pull` or a catalog check left next to the file
+    (`.verified/`). A file without a matching receipt is decided unverified
+    (no early-exit default), with `"artifact_sha256": null` in the
+    diagnostics. With `--config` such a file is hashed as before, so the
+    list still matches custom GGUFs.
+  - The chat record says whether the chat thought (`"thinking"`).
+  - `--early-exit` / `--no-early-exit` are unchanged.
 
 - `geistr decide --escalate chat` exits early by default for the verified
   Bonsai 2 27B profile (`bonsai2-27b-pq2-v1`) only (geistlib#286).

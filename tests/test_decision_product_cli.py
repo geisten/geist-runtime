@@ -64,10 +64,13 @@ with tempfile.TemporaryDirectory() as directory:
     assert c['answer_index'] == [b'left\n', b'right\n'].index(chat.stdout), c
     assert c['chat']['max_tokens'] == 4096 and c['chat']['output_tokens'] > 0 and c['chat']['input_tokens'] > 0, c
     assert c['escalation_ms'] >= c['chat']['total_ms'] > 0, c
+    # Whether the chat thinks is its template's, for a catalog id and a path alike (#285): only in <think>
+    # tags, so Bonsai 2 does and Gemma 4 (<|think|>) does not (#270).
+    assert c['chat']['thinking'] is (profile == 'bonsai2'), c
     # Early exit is the default of --escalate chat for the Bonsai 2 27B profile only (geistlib#286): it is
     # probed every 128 tokens and may answer at a confident probe; every other model reasons to the end.
-    # (Probing needs a chat that thinks; a model given by path, not catalog id, is not marked as thinking.)
-    assert profile == 'bonsai2' or 'early_exit' not in c, c
+    # By path the profile comes from the file's receipt (#285); MODEL may be either.
+    assert (profile == 'bonsai2') == ('early_exit' in c), c
     if 'early_exit' in c:
         e = c['early_exit']
         assert e['interval'] == 128 and abs(e['threshold'] - 0.8) < 1e-9, c
@@ -148,9 +151,15 @@ with tempfile.TemporaryDirectory() as directory:
         time.sleep(0.5)
         os.write(fd, b'\r')
     home = Path(directory) / 'home'
+    # The chat's own folder is new; a catalog id is found in the models folder it would use otherwise.
+    data = os.environ.get('GEISTEN_HOME') or os.environ.get('GEIST_HOME')
+    models = (Path(data) / 'models' if data else Path.home() / 'Library/Application Support/geisten/models'
+              if sys.platform == 'darwin' else Path(os.environ.get('XDG_DATA_HOME') or Path.home() / '.local/share')
+              / 'geisten/models')
+    where = [] if '/' in model or model.endswith('.gguf') else ['--models', str(models)]
     pid, fd = pty.fork()
     if pid == 0:
-        os.execve(binary, [binary, 'chat', model, '--new', '--' + processor],
+        os.execve(binary, [binary, *where, 'chat', model, '--new', '--' + processor],
                   {**os.environ, 'TERM': 'xterm', 'GEISTEN_HOME': str(home)})
     until(fd, 'Ctrl-C twice exits')
     send(fd, b'/decide Which option equals 4? | four | five')

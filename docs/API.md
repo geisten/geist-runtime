@@ -197,7 +197,9 @@ the templates' own Jinja conditions) and renders what the template renders:
 - `GEISTR_REASONING_AUTO` is the template's default; on a model without
   thinking it is `NONE`. `geistr_model_info.thinking` says which (1: thinks
   unless told not to, 2: only when asked), `thinking_off` whether off
-  works, `effort` whether `geistr_chat_opts.effort` changes anything.
+  works, `effort` whether `geistr_chat_opts.effort` changes anything,
+  `think_tags` whether it thinks in `<think>…</think>` (the tags answer
+  probes need; not Gemma 4, #285).
 - `geistr_chat_opts.effort` (`LOW`, `MEDIUM`, `HIGH`; `DEFAULT` the
   template's `xhigh`) is Qwen3.6+'s `reasoning_effort`: `low` and `xhigh`
   put an instruction into the system turn, `medium` none. Only with

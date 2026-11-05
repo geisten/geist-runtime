@@ -264,7 +264,7 @@ static void thinking(const char *path) {
     if (!m)
         return;
     geistr_model_info info = {.size = sizeof info};
-    CHECK(geistr_model_info_get(m, &info) == GEISTR_OK && info.thinking && info.thinking_off,
+    CHECK(geistr_model_info_get(m, &info) == GEISTR_OK && info.thinking && info.thinking_off && info.think_tags,
           "thinking: the template has the switch");
     static const geistr_reasoning modes[] = {GEISTR_REASONING_AUTO, GEISTR_REASONING_THINK_TAGS,
                                              GEISTR_REASONING_THINK_OFF};

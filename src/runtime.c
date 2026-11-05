@@ -523,6 +523,7 @@ geistr_status geistr_model_info_get(const geistr_model *m, geistr_model_info *in
                .thinking     = !m->think.thinks ? 0 : m->think.default_on ? 1 : 2,
                .thinking_off = m->think.off != nullptr,
                .effort       = m->think.effort,
+               .think_tags   = m->thinks,
     };
     size_t size = info->size;
     if (size < sizeof size || size > sizeof full)

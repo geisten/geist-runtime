@@ -140,6 +140,8 @@ typedef struct geistr_model_info {
                                 2 it thinks only when asked (Qwen3.5, Gemma 4) */
     int         thinking_off; /* 1: GEISTR_REASONING_THINK_OFF works (the template has the switch) */
     int         effort;       /* 1: geistr_chat_opts.effort changes the prompt (Qwen3.6+ reasoning_effort) */
+    int         think_tags;   /* 1: it thinks in <think>…</think> (Qwen3, Qwen3.5, Qwen3.6+, Bonsai 2), the
+                                 tags answer probes need; 0 for Gemma 4's <|think|> (#285) */
 } geistr_model_info;
 
 /* Fill *info. Its strings are borrowed until the model is released.

@@ -210,7 +210,8 @@ static void test_thinking(void) {
     /* #266: AUTO, the template's default, is the default; the stub's template has no thinking. */
     CHECK(((geistr_chat_opts) GEISTR_CHAT_OPTS_INIT).reasoning == GEISTR_REASONING_AUTO, "AUTO is the default");
     geistr_model_info info = {.size = sizeof info};
-    CHECK(geistr_model_info_get(model, &info) == GEISTR_OK && info.thinking == 0 && !info.thinking_off && !info.effort,
+    CHECK(geistr_model_info_get(model, &info) == GEISTR_OK && info.thinking == 0 && !info.thinking_off && !info.effort &&
+              !info.think_tags,
           "the stub's template does nothing with thinking");
     opts.reasoning      = GEISTR_REASONING_AUTO;
     opts.effort         = GEISTR_EFFORT_LOW;
