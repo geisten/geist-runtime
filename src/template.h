@@ -65,21 +65,29 @@ const char *tpl_effort_text(geistr_effort effort);
  *   tools: a "tool" message is a <tool_response> block in a user turn,
  *          consecutive ones share it (Qwen3, Qwen3.5, Qwen3.6+)
  *   bare:  an empty system message renders no system turn (Qwen3.6+)
- *   loop:  Qwen3.5's tool loop: an assistant message is split at </think>
- *          into reasoning and answer; after the last user query (a user
- *          message that is not a <tool_response>) it renders as
- *          "<think>\n" reasoning "\n</think>\n\n" answer, before it the
- *          answer alone. */
+ *   loop:  the tool loop of Qwen3.5 and Qwen3 (#276): an assistant message
+ *          is split at </think> into reasoning and answer; after the last
+ *          user query (a user message that is not a <tool_response>) it
+ *          renders as "<think>\n" reasoning "\n</think>\n\n" answer,
+ *          before it the answer alone
+ *   lean:  Qwen3's loop (with loop): an answer without reasoning renders as
+ *          the answer alone in the loop too, the reasoning loses only its
+ *          line breaks at the ends, and a user message is a query unless it
+ *          contains both <tool_response> and </tool_response> (Qwen3.5: it
+ *          is one block, trimmed). The template also renders the block for
+ *          an assistant message that ends the conversation; a send never
+ *          ends with one. */
 struct tpl_style {
-    bool trim, tools, bare, loop;
+    bool trim, tools, bare, loop, lean;
 };
 
 struct tpl_style tpl_style_of(enum tpl_family family, const char *tpl); /* tpl nullptr: none */
 
 /* A user query in loop's sense: not a system, assistant or tool message, and
- * its trimmed content not a <tool_response> block. */
-bool tpl_is_query(const geistr_message *m);
-bool tpl_has_query(size_t n, const geistr_message msgs[]); /* one of them is */
+ * its trimmed content not a <tool_response> block (style lean: its content
+ * not holding both <tool_response> and </tool_response>). */
+bool tpl_is_query(const struct tpl_style *style, const geistr_message *m);
+bool tpl_has_query(const struct tpl_style *style, size_t n, const geistr_message msgs[]); /* one of them is */
 
 /* Template text a thinking chat adds to the turns (#266): lead opens the
  * system turn (a system turn of its own without a system message), joined to

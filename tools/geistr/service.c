@@ -393,7 +393,21 @@ void svc_chat(const struct svc_options *o, struct held *pool, const struct svc_r
         fclose(thought);
     for (size_t k = thinking ? strlen(thinking) : 0; k && strchr(" \t\r\n", thinking[k - 1]); k--)
         thinking[k - 1] = 0;
-    (void) held_push(c, "assistant", text ? text : "");
+    /* The answer as the chat holds it: with its reasoning, which the chat
+     * keeps in a tool loop (Qwen3, Qwen3.5: #269, #276). A client that sends
+     * the answer back without it (the OpenAI and Ollama SDKs do) matches only
+     * up to here, so the answer comes back without reasoning, as the
+     * template renders that request. */
+    char *held = nullptr;
+    if (thinking && *thinking) {
+        const size_t len = strlen("<think>\n\n</think>\n\n") + strlen(thinking) + (text ? strlen(text) : 0) + 1;
+        held = malloc(len);
+        if (held)
+            snprintf(held, len, "<think>\n%s\n</think>\n\n%s", thinking, text ? text : "");
+    }
+    if (!held_push(c, "assistant", held ? held : text ? text : "") || (thinking && *thinking && !held))
+        held_keep(c, 0), (void) geistr_chat_rewind(c->chat, 0); /* out of memory: match anew next time */
+    free(held);
     geistr_stats st = {.size = sizeof st};
     (void) geistr_chat_stats(c->chat, &st);
     if (st.dropped_messages) /* the runtime's conversation is shorter now: match anew next time */

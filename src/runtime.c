@@ -1277,13 +1277,15 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
      * the template has it: back to its start, then again with the new
      * messages (a small prefill). Unfinished reasoning leaves nothing.
      *
-     * Qwen3.5's tool loop (#269): while no user query follows (tool results),
-     * its answers keep their reasoning, "<think>\n" reasoning "\n</think>\n\n"
-     * answer, as its template renders the assistant messages after the last
-     * query; the next query takes the reasoning out of all of them again. */
+     * The tool loop of Qwen3.5 (#269) and Qwen3 (#276): while no user query
+     * follows (tool results), its answers keep their reasoning, "<think>\n"
+     * reasoning "\n</think>\n\n" answer, as the templates render the
+     * assistant messages after the last query (Qwen3: an answer without
+     * reasoning as its text alone); the next query takes the reasoning out of
+     * all of them again. */
     if (c->mode != THINK_RAW) {
         const bool answer = (c->answering || c->open) && c->raw;
-        const bool query  = tpl_has_query(count, messages);
+        const bool query  = tpl_has_query(&c->extra.style, count, messages);
         size_t     from   = c->n_turns; /* the first held turn to render again */
         char      *kept   = nullptr;    /* the answer's content as the template has it */
         if (answer) {
@@ -1302,7 +1304,7 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
             char        *want = nullptr;
             kept              = malloc(n);
             if (kept) {
-                if (loop) /* Qwen3.5: markers are <think> */
+                if (loop) /* Qwen3, Qwen3.5: markers are <think> */
                     snprintf(kept, n, "<think>\n%.*s\n</think>\n\n%s", r_n, r, after);
                 else
                     snprintf(kept, n, "%s", after);
@@ -1321,7 +1323,8 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
         const size_t held = answer ? c->answer_turn : c->n_turns;
         if (c->extra.style.loop && query) {
             size_t q = held;
-            while (q > 0 && !tpl_is_query(&(geistr_message) {c->turns[q - 1].role, c->turns[q - 1].content}))
+            while (q > 0 &&
+                   !tpl_is_query(&c->extra.style, &(geistr_message) {c->turns[q - 1].role, c->turns[q - 1].content}))
                 q--;
             for (size_t i = q; i < held && i < from; i++)
                 if (is_role(c->turns[i].role, "assistant"))

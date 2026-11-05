@@ -84,6 +84,17 @@
     Jinja and llama.cpp's `/apply-template`): padded messages, Unicode
     whitespace, a blank system message, tool loops with and without
     reasoning.
+- Qwen3 keeps an answer's reasoning in a tool loop, as its template does
+  (#276): with thinking on (Qwen3's default), the answers after the last user
+  query stay `<think>\n` reasoning `\n</think>\n\n` answer while tool
+  results follow; the next query takes the reasoning out again. Before, the
+  runtime dropped it, so inside a loop the context differed from the
+  template's (64 vs 158 tokens on Qwen3 0.6B). It is #269's mechanism for
+  Qwen3.5, with Qwen3's details: an answer without reasoning stays its text
+  alone, the reasoning loses only its line breaks at the ends, and a user
+  message holding both `<tool_response>` and `</tool_response>` is no query.
+  An assistant message sent with `<think>…</think>` before the last query
+  now renders as its text alone, as the template splits it.
 - The catalog marks Gemma 4 (`gemma4-e2b`, `gemma4-e4b`) as thinking models
   (#270). They think when asked since #266, but the catalog listed them as
   not thinking: `geistr config gemma4-e2b.thinking off` was refused while
