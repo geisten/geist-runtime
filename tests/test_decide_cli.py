@@ -184,6 +184,80 @@ def receipts(binary):
         assert resolve(model, True)[0] == hashlib.sha256(model.read_bytes()).hexdigest()
 
 
+def options(binary):
+    """#288: what decide does without options, and the removed options as
+    aliases. The driver parses as decide does and applies what a profile
+    brings (threshold, early exit), as decide does after loading."""
+    def parsed(profile, *argv, warns=None):
+        out = subprocess.run([str(binary), 'args', profile, 'model.gguf', *argv], capture_output=True, timeout=20)
+        assert out.returncode == 0, (argv, out.stderr)
+        if warns is None:
+            assert out.stderr == b'', (argv, out.stderr)  # the current options warn about nothing
+        else:
+            assert b'deprecated and goes away in the next release' in out.stderr and warns.encode() in out.stderr, \
+                (argv, out.stderr)
+        return json.loads(out.stdout)
+    short = ['Q?', 'yes', 'no']
+    # Without options, what the verified profile carries (src/decision_profile.c): Bonsai 2 27B escalates to chat
+    # below 0.78 (geistlib#204) with a cap of 8192 and early exit at 0.8 every 128 tokens (geistlib#286). Every
+    # other model, verified (Gemma 4) or not, has threshold 0: the direct answer, never an escalation; its chat
+    # cap, should --threshold ask for one, is 4096.
+    for profile, threshold, cap in [('none', 0, 4096), ('gemma4-e2b-q4-v1', 0, 4096),
+                                    ('bonsai2-27b-pq2-v1', 0.78, 8192)]:
+        assert parsed(profile, *short) == {
+            'threshold': threshold, 'escalate': 'chat', 'early_exit': profile == 'bonsai2-27b-pq2-v1',
+            'probe_interval': 128, 'exit_threshold': 0.8, 'max_tokens': cap, 'question': 'Q?',
+            'question_file': '', 'options': 2}, profile
+    bonsai = 'bonsai2-27b-pq2-v1'
+    assert parsed(bonsai, *short, '--escalate', 'chat') == parsed(bonsai, *short)  # the default, spelled out
+    # --no-escalate: below the threshold exit 3 (what no --escalate did); no chat, so no early exit
+    assert parsed(bonsai, *short, '--no-escalate')['escalate'] is None
+    assert parsed(bonsai, *short, '--no-escalate')['early_exit'] is False
+    other = parsed(bonsai, *short, '--escalate', 'other.gguf')
+    assert other['escalate'] == 'other.gguf' and other['early_exit'] is False and other['threshold'] == 0.78
+    # --threshold and --max-tokens override the profile's, in both directions
+    assert parsed('gemma4-e2b-q4-v1', *short, '--threshold', '0.9')['threshold'] == 0.9
+    assert parsed(bonsai, *short, '--threshold', '0')['threshold'] == 0
+    assert parsed(bonsai, *short, '--max-tokens', '2048')['max_tokens'] == 2048
+    assert parsed('none', *short, '--max-tokens', '8192')['max_tokens'] == 8192
+    # --threshold overrides the default; 0 never escalates (every answer direct, the old default)
+    for value, expected in [('0.9', 0.9), ('1', 1), ('0', 0), ('0.5', 0.5)]:
+        assert parsed('none', *short, '--threshold', value)['threshold'] == expected
+        assert parsed(bonsai, *short, '--threshold', value, '--no-escalate')['threshold'] == expected
+    # Early exit: --early-exit[=P] and --no-early-exit only
+    assert parsed('none', *short, '--early-exit')['early_exit'] is True
+    assert parsed('none', *short, '--early-exit=0.9')['exit_threshold'] == 0.9
+    assert parsed('none', *short, '--early-exit=0.9')['early_exit'] is True
+    assert parsed(bonsai, *short, '--early-exit=0.65')['exit_threshold'] == 0.65
+    assert parsed(bonsai, *short, '--no-early-exit')['early_exit'] is False
+    assert parsed('gemma4-e2b-q4-v1', *short, '--max-tokens', '1536')['max_tokens'] == 1536
+    # --question TEXT|@FILE|-
+    assert parsed('none', '--question', 'text', '--option', 'a', 'A')['question'] == 'text'
+    at = parsed('none', '--question', '@q.txt', '--option', 'a', 'A')
+    assert at['question'] == '' and at['question_file'] == 'q.txt'
+    assert parsed('none', '--question', '-', '--option', 'a', 'A')['question_file'] == '-'
+    assert parsed('none', '@literal', 'a')['question'] == '@literal'  # the short form's question is text
+    # The removed options, for one release: the same settings, with a warning on stderr
+    alias = parsed('none', '--question-file', 'q.txt', '--option', 'a', 'A', warns='--question @FILE')
+    assert alias == at, (alias, at)
+    assert parsed('none', '--question-file', '-', '--option', 'a', 'A', warns='--question @FILE') == \
+        parsed('none', '--question', '-', '--option', 'a', 'A')
+    assert parsed('none', *short, '--exit-threshold', '0.9', warns='--early-exit=P') == \
+        parsed('none', *short, '--early-exit=0.9')
+    assert parsed('none', *short, '--early-exit', '--exit-threshold', '0.9', warns='--early-exit=P') == \
+        parsed('none', *short, '--early-exit=0.9')
+    interval = parsed('none', *short, '--probe-interval', '64', warns='fixed at the validated 128')
+    assert interval == {**parsed('none', *short, '--early-exit'), 'probe_interval': 64}, interval
+    # Removed and conflicting: usage errors, as for any option
+    for argv in [['--no-escalate', '--early-exit'], ['--escalate', 'm.gguf', '--early-exit=0.9'],
+                 ['--no-escalate', '--max-tokens', '64'], ['--no-escalate', '--exit-threshold', '0.9'],
+                 ['--question', 'a', '--question-file', 'q.txt'], ['--early-exit=', '--threshold', '0.5'],
+                 ['--early-exit=1'], ['--threshold', '1.01'], ['--no-early-exit', '--exit-threshold', '0.9']]:
+        out = subprocess.run([str(binary), 'args', 'none', 'model.gguf', *short, *argv], capture_output=True,
+                             timeout=20)
+        assert out.returncode == 2 and out.stdout == b'' and out.stderr, (argv, out)
+
+
 def main():
     binary = Path(sys.argv[1]).resolve()
     base = ['stub:echo', '--question', 'Q?', '--config', 'missing.json',
@@ -204,76 +278,81 @@ def main():
     call(binary, ['stub:echo', '--question', 'Q?', 'second?', 'yes'], 1)  # positional after --question: options
     call(binary, ['stub:echo', 'Q?', '--question', 'again'], 2)  # two questions
     call(binary, ['stub:echo', 'Q?'] + [chr(65 + i) for i in range(27)], 2)  # 27 options
-    # --threshold and --escalate: checked before any model work.
-    for value in ['0', '-0.1', '1.5', 'abc', '', '0.5x']:
+    # --threshold, --escalate, --no-escalate: checked before any model work (#288: chat is the default).
+    for value in ['-0.1', '1.5', 'abc', '', '0.5x', 'nan']:
         call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--threshold', value], 2)
-    call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--escalate', 'chat'], 2)  # escalate needs a threshold
     call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--threshold', '0.9', '--threshold', '0.8'], 2)
-    call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--threshold', '1'], 1)
-    call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--threshold', '0.9', '--escalate', 'chat'], 1)
-    call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--threshold', '0.9', '--escalate', 'other.gguf'], 1)
+    for extra in [['--threshold', '1'], ['--threshold', '0'], ['--escalate', 'chat'], ['--no-escalate'],
+                  ['--threshold', '0.9', '--escalate', 'other.gguf'], ['--threshold', '0.9', '--no-escalate']]:
+        call(binary, ['stub:echo', 'Q?', 'yes', 'no', *extra], 1)
+    call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--escalate', 'chat', '--no-escalate'], 2)
+    call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--no-escalate', '--escalate', 'other.gguf'], 2)
+    call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--no-escalate', '--no-escalate'], 2)
     # --temperature (calibration) and --max-tokens (the chat escalation's cap, #210).
     for value in ['0', '0.001', '101', '-1', 'abc', '', '1x', 'nan', 'inf']:
         call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--temperature', value], 2)
     call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--temperature', '1.0546'], 1)
     call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--temperature', '2', '--temperature', '3'], 2)
-    chat = ['stub:echo', 'Q?', 'yes', 'no', '--threshold', '0.9', '--escalate', 'chat']
+    chat = ['stub:echo', 'Q?', 'yes', 'no']  # the chat escalation is the default
     for value in ['0', '-1', '+5', ' 5', '28673', '1e3', '12x', '', '99999999999999999999999']:
         call(binary, chat + ['--max-tokens', value], 2)
     call(binary, chat + ['--max-tokens', '1536'], 1)
     call(binary, chat + ['--max-tokens', '1', '--temperature', '1.0546'], 1)
-    call(binary, chat + ['--max-tokens', '28672'], 1)
+    call(binary, chat + ['--max-tokens', '28672', '--escalate', 'chat'], 1)
     call(binary, chat + ['--max-tokens', '512', '--max-tokens', '256'], 2)
-    call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--max-tokens', '512'], 2)  # needs --escalate chat
-    call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--threshold', '0.9', '--escalate', 'other.gguf',
-                  '--max-tokens', '512'], 2)
-    # Early exit (geistlib#236): --early-exit asks for it, --no-early-exit turns it off, for every model; all of
-    # them and the probe settings need --escalate chat. The default is on only for the profile geistlib#286
-    # validated (Bonsai 2 27B); every other model, verified or not, reasons to the end unless asked.
+    call(binary, chat + ['--max-tokens', '512', '--no-escalate'], 2)  # the chat's cap
+    call(binary, chat + ['--escalate', 'other.gguf', '--max-tokens', '512'], 2)
+    # Early exit (geistlib#236): --early-exit[=P] asks for it, --no-early-exit turns it off, for every model;
+    # both belong to the chat escalation. The default is on only for the profile geistlib#286 validated
+    # (Bonsai 2 27B); every other model, verified or not, reasons to the end unless asked.
     defaults = subprocess.run([str(binary), 'early-exit-default'], capture_output=True, timeout=20)
     assert defaults.returncode == 0, defaults
     rule = dict(line.split() for line in defaults.stdout.decode().splitlines())
     assert rule.pop('bonsai2-27b-pq2-v1') == '1' and rule and set(rule.values()) == {'0'}, defaults.stdout
-    call(binary, chat + ['--early-exit'], 1)
-    call(binary, chat + ['--no-early-exit'], 1)
-    call(binary, chat + ['--early-exit', '--probe-interval', '64', '--exit-threshold', '0.9'], 1)
-    call(binary, chat + ['--probe-interval', '64'], 1)  # a setting of the default
-    call(binary, chat + ['--exit-threshold', '0.9'], 1)
-    call(binary, chat + ['--early-exit', '--early-exit'], 2)
-    call(binary, chat + ['--no-early-exit', '--no-early-exit'], 2)
-    call(binary, chat + ['--early-exit', '--no-early-exit'], 2)
-    call(binary, chat + ['--no-early-exit', '--early-exit'], 2)
-    call(binary, chat + ['--no-early-exit', '--probe-interval', '64'], 2)
-    call(binary, chat + ['--exit-threshold', '0.9', '--no-early-exit'], 2)
-    for flag in ['--early-exit', '--no-early-exit']:
-        call(binary, ['stub:echo', 'Q?', 'yes', 'no', flag], 2)  # needs --escalate chat
-        call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--threshold', '0.9', '--escalate', 'other.gguf', flag], 2)
-    call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--probe-interval', '64'], 2)
-    call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--exit-threshold', '0.9'], 2)
+    for extra in [['--early-exit'], ['--no-early-exit'], ['--early-exit=0.9'], ['--early-exit', '--exit-threshold', '0.9'],
+                  ['--probe-interval', '64'], ['--exit-threshold', '0.9'], ['--early-exit=0.5', '--probe-interval', '64']]:
+        call(binary, chat + extra, 1)
+    for extra in [['--early-exit', '--early-exit'], ['--no-early-exit', '--no-early-exit'],
+                  ['--early-exit', '--no-early-exit'], ['--no-early-exit', '--early-exit=0.9'],
+                  ['--early-exit=0.9', '--early-exit'], ['--early-exit=0.9', '--exit-threshold', '0.8'],
+                  ['--no-early-exit', '--probe-interval', '64'], ['--exit-threshold', '0.9', '--no-early-exit']]:
+        call(binary, chat + extra, 2)
+    for flag in ['--early-exit', '--early-exit=0.9', '--no-early-exit']:
+        call(binary, chat + ['--no-escalate', flag], 2)  # the chat escalation's
+        call(binary, chat + ['--escalate', 'other.gguf', flag], 2)
+    for flag in [['--probe-interval', '64'], ['--exit-threshold', '0.9']]:
+        call(binary, chat + ['--no-escalate'] + flag, 2)
     for value in ['0', '-1', '28673', 'x', '']:
         call(binary, chat + ['--early-exit', '--probe-interval', value], 2)
         call(binary, chat + ['--probe-interval', value], 2)
     for value in ['0', '1', '-0.5', '1.5', 'x', '']:
         call(binary, chat + ['--early-exit', '--exit-threshold', value], 2)
         call(binary, chat + ['--exit-threshold', value], 2)
+        call(binary, chat + ['--early-exit=' + value], 2)
+    options(binary)
     for bad in ['bad\nID', 'bad\rID', '\x1b[31m', '\x7f', '\u0085', '\u2028', '\u2029', 'x' * 129]:
         call(binary, base + ['--option', bad, 'invalid'], 2)
     with tempfile.TemporaryDirectory() as directory:
         question = Path(directory) / 'question.txt'
-        args = ['stub:echo', '--question-file', str(question), '--config', 'missing.json', '--option', 'x', 'yes']
-        question.write_bytes(b'q' * 65536)
-        call(binary, args, 1)
-        question.write_bytes(b'q' * 65537)
-        call(binary, args, 2)
-        question.write_bytes(b'q\0q')
-        call(binary, args, 2)
-        question.write_bytes(b'\xc0\xaf')
-        call(binary, args, 2)
-        args[2] = '-'
-        call(binary, args, 2, b'q' * 65537)
-        call(binary, args, 2, b'q\0q')
+        # --question @FILE and - (stdin); --question-file, removed (#288), still reads them for one release
+        for form in [['--question', '@' + str(question)], ['--question-file', str(question)]]:
+            args = ['stub:echo', *form, '--config', 'missing.json', '--option', 'x', 'yes']
+            question.write_bytes(b'q' * 65536)
+            call(binary, args, 1)
+            question.write_bytes(b'q' * 65537)
+            call(binary, args, 2)
+            question.write_bytes(b'q\0q')
+            call(binary, args, 2)
+            question.write_bytes(b'\xc0\xaf')
+            call(binary, args, 2)
+            args[2] = '-'
+            call(binary, args, 1, b'q' * 65536)
+            call(binary, args, 2, b'q' * 65537)
+            call(binary, args, 2, b'q\0q')
+        call(binary, ['stub:echo', '--question', '@' + str(Path(directory) / 'absent.txt'), 'x'], 2)
+        call(binary, ['stub:echo', '--question', '@', 'x'], 2)
     receipts(binary)
-    print('decide CLI: usage, feature-off, IDs, duplicate options, early-exit flags (default on for the Bonsai 2 27B profile only), receipts of a path (#285) and bounded file/stdin input passed')
+    print('decide CLI: usage, feature-off, IDs, duplicate options, escalation, threshold and early-exit defaults and the aliases of the removed options (#288), receipts of a path (#285) and bounded file/stdin input passed')
     batch(binary)
     print('decide-batch CLI: flags, numeric bounds, request shape, IDs, limits, file/stdin and feature-off passed')
 

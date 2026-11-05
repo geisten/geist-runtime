@@ -10,6 +10,11 @@ struct decision_profile {
     const char *name, *artifact_sha256, *template_sha256;
     const char *bos, *system, *user, *assistant; /* native BOS/role markers */
     const char *thinking_off;              /* after the assistant role */
+    /* geistr decide's defaults (#288), each only from this profile's own
+     * evidence; 0 where there is none: no escalation below a threshold, and
+     * the chat escalation's default cap */
+    double decide_threshold;
+    uint32_t decide_max_tokens;
 };
 const struct decision_profile *decision_profile_get(geistr_decision_profile profile); /* nullptr: unknown */
 /* An unverified profile from a chat template family (enum tpl_family): the

@@ -29,6 +29,11 @@ with tempfile.TemporaryDirectory() as directory:
     assert d['schema'] == 1 and d['artifact_sha256'] == fixture['artifact_sha256']
     assert d['profile'] == profile_name and d['template_sha256'] == fixture['template_sha256']
     assert d['operation'] == 'decision' and d['model_calls'] == 1 and d['resolved_mode'] == 1
+    # #288: without --threshold the profile's threshold applies: 0.78 for Bonsai 2 27B (geistlib#204), below it
+    # the same model answers in chat; 0 for Gemma 4, whose answer is always the direct one.
+    threshold = 0.78 if profile == 'bonsai2' else 0
+    assert abs(d['threshold'] - threshold) < 1e-9 and d['answered_by'] == ('chat' if d['top_probability'] < threshold
+                                                                            else 'direct'), d
     pinned = re.search(r'^GEIST_REF\s*\?=\s*([0-9a-f]{40})', (Path(__file__).parents[1] / 'Makefile').read_text(), re.M)
     assert pinned and d['engine_revision'] == pinned.group(1), (d['engine_revision'], pinned)  # the Makefile's pin
     assert d['backend'] == 'metal' if processor == 'gpu' else d['backend'].startswith('cpu'), d['backend']
@@ -39,13 +44,13 @@ with tempfile.TemporaryDirectory() as directory:
                             '--processor', processor], capture_output=True, timeout=120)
     assert short.returncode == 0 and short.stdout in [b'four\n', b'five\n'], short
     # --threshold: a question without a right answer and a threshold no
-    # readout reaches. Without --escalate: exit 3, nothing on stdout, the
-    # diagnostics say "unsure". --escalate chat: the same model writes the
-    # answer, which must be one of the options. --escalate MODEL: the second
-    # model is asked, and below the threshold too, exit 3 again.
+    # readout reaches. --no-escalate: exit 3, nothing on stdout, the
+    # diagnostics say "unsure". By default (#288) the same model writes the
+    # answer in chat, which must be one of the options. --escalate MODEL: the
+    # second model is asked, and below the threshold too, exit 3 again.
     vague = [binary, 'decide', model, 'Pick one of the two words.', 'left', 'right', '--processor', processor,
              '--threshold', '1']
-    unsure = subprocess.run(vague, capture_output=True, timeout=120)
+    unsure = subprocess.run(vague + ['--no-escalate'], capture_output=True, timeout=120)
     records = [json.loads(line) for line in unsure.stderr.splitlines() if line.startswith(b'{')]
     assert unsure.returncode == 3 and not unsure.stdout, unsure
     assert records and records[0]['escalation'] == 'unsure' and records[0]['top_probability'] < 1, records
@@ -57,12 +62,12 @@ with tempfile.TemporaryDirectory() as directory:
     assert u['answered_by'] == 'none' and u['answer_index'] is None and 'chat' not in u, u
     assert len(u['direct_probabilities']) == 2 and abs(sum(u['direct_probabilities']) - 1) < 1e-5, u
     assert abs(u['direct_probabilities'][u['direct_index']] - u['top_probability']) < 1e-6 and u['temperature'] == 1, u
-    chat = subprocess.run(vague + ['--escalate', 'chat'], capture_output=True, timeout=300)
+    chat = subprocess.run(vague, capture_output=True, timeout=300)  # the default: the chat escalation
     assert chat.returncode == 0 and chat.stdout in [b'left\n', b'right\n'], chat
     c = record(chat)
     assert c['escalation'] == 'chat' and c['answered_by'] == 'chat', c
     assert c['answer_index'] == [b'left\n', b'right\n'].index(chat.stdout), c
-    assert c['chat']['max_tokens'] == 4096 and c['chat']['output_tokens'] > 0 and c['chat']['input_tokens'] > 0, c
+    assert c['chat']['max_tokens'] == (8192 if profile == 'bonsai2' else 4096) and c['chat']['output_tokens'] > 0 and c['chat']['input_tokens'] > 0, c
     assert c['escalation_ms'] >= c['chat']['total_ms'] > 0, c
     # Whether the chat thinks is its template's, for a catalog id and a path alike (#285): only in <think>
     # tags, so Bonsai 2 does and Gemma 4 (<|think|>) does not (#270).
@@ -79,12 +84,12 @@ with tempfile.TemporaryDirectory() as directory:
                                    and e['option_index'] == c['answer_index']), c
     else:
         assert c['chat']['finish'] == 'stop', c
-    full = subprocess.run(vague + ['--escalate', 'chat', '--no-early-exit'], capture_output=True, timeout=300)
+    full = subprocess.run(vague + ['--no-early-exit'], capture_output=True, timeout=300)
     f = record(full)
     assert full.returncode == 0 and f['chat']['finish'] == 'stop' and 'early_exit' not in f, f
     # --max-tokens: the caller's cap on the chat answer, thinking included. One
     # token either names an option or the answer is cut there (exit 3).
-    capped = subprocess.run(vague + ['--escalate', 'chat', '--max-tokens', '1'], capture_output=True, timeout=300)
+    capped = subprocess.run(vague + ['--max-tokens', '1'], capture_output=True, timeout=300)
     c = record(capped)
     assert c['chat']['max_tokens'] == 1 and c['chat']['output_tokens'] <= 1, c
     if capped.returncode == 3:
@@ -101,10 +106,12 @@ with tempfile.TemporaryDirectory() as directory:
     d = record(sure)
     assert d['escalation'] == 'decided' and d['answered_by'] == 'direct' and d['answer_index'] == d['direct_index']
     # --temperature: the threshold sees softmax(logits / T); the choice never changes.
+    # --threshold 0 never escalates: the direct answer, as without --threshold before #288.
     warm = subprocess.run([binary, 'decide', model, 'Which option equals 4?', 'four', 'five', '--processor', processor,
-                           '--temperature', '2'], capture_output=True, timeout=120)
+                           '--temperature', '2', '--threshold', '0'], capture_output=True, timeout=120)
     assert warm.returncode == 0 and warm.stdout == sure.stdout, warm
     w = record(warm)
+    assert w['answered_by'] == 'direct' and w['threshold'] == 0 and 'chat' not in w, w
     logs = [math.log(max(p, 1e-300)) / 2 for p in d['direct_probabilities']]
     expected = [math.exp(x - max(logs)) / sum(math.exp(y - max(logs)) for y in logs) for x in logs]
     assert w['temperature'] == 2 and w['direct_index'] == d['direct_index'], w
@@ -112,7 +119,7 @@ with tempfile.TemporaryDirectory() as directory:
     # On a terminal: the ID, then each option's probability; no diagnostics JSON.
     master, slave = os.openpty()
     shown = subprocess.Popen([binary, 'decide', model, 'Which option equals 4?', 'four', 'five',
-                              '--processor', processor], stdout=slave, stderr=slave)
+                              '--processor', processor, '--threshold', '0'], stdout=slave, stderr=slave)
     os.close(slave)
     output = b''
     while True:
@@ -196,8 +203,9 @@ with tempfile.TemporaryDirectory() as directory:
     config.write_text(json.dumps({'schema': 1, 'models': [{'sha256': fixture['artifact_sha256'],
         'enabled': True, 'profile': profile_name}]}))
     cancelled = subprocess.Popen(base + ['--question', 'Q'] + options, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    # Install handler before scoring; SIGINT is remembered during artifact load.
-    time.sleep(0.25)
+    # Install handler before scoring; SIGINT is remembered during artifact load. Since #287 a verified
+    # profile opens without hashing: Gemma 4 E2B at 512 tokens decides in about 0.23 s, so 0.25 s came too late.
+    time.sleep(0.1)
     cancelled.send_signal(signal.SIGINT)
     stdout, stderr = cancelled.communicate(timeout=120)
     assert cancelled.returncode == 130 and not stdout and b'cancelled' in stderr, (cancelled.returncode, stdout, stderr)

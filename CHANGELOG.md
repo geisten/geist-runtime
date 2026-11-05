@@ -139,6 +139,38 @@
 
 ### Changed
 
+- `geistr decide` needs fewer options (#288). For the verified Bonsai 2
+  27B profile, `geistr decide bonsai2-27b-pq2 "QUESTION" OPTION…` now does
+  what `--threshold 0.78 --escalate chat --early-exit --max-tokens 8192`
+  did; every other model answers directly as before.
+  - **The threshold comes from the profile.** Bonsai 2 27B
+    (`bonsai2-27b-pq2-v1`) carries 0.78: geistlib#204's precision-0.95
+    threshold, which kept always-reasoning's accuracy (78.8 % vs 79.0 % on
+    500 held-out MMLU questions) at 0.97× its time. Every other model,
+    verified (Gemma 4) or not, has 0: the direct answer, no escalation.
+    `--threshold P` (now 0–1; 0 never escalates) overrides it.
+  - **Escalating to chat is the default below the threshold.**
+    `--no-escalate` gives exit 3 instead; `--escalate MODEL` stays.
+    **Compatibility: scripts that relied on exit 3 (undecided) with
+    `--threshold` and without `--escalate` need `--no-escalate`; scripts
+    that relied on Bonsai 2 27B's direct answer without `--threshold` need
+    `--threshold 0`.**
+  - **`--max-tokens` defaults to 8192 for the Bonsai 2 27B profile,** the
+    cap its early-exit evidence was measured at (geistlib#286); 4096 for
+    every other model. The chat context is 4096 + that; a decision that
+    cannot escalate (threshold 0) opens 512 tokens as before.
+  - **Early exit:** `--early-exit[=P]` and `--no-early-exit` only. The
+    probe interval is fixed at the validated 128, and `--early-exit=P`
+    replaces `--exit-threshold P`. The default is unchanged: on for the
+    Bonsai 2 27B profile only.
+  - `--question TEXT|@FILE|-` replaces `--question-file FILE|-`.
+  - The context options are unchanged and listed under "Advanced" in
+    `--help`.
+  - `--question-file`, `--probe-interval` (its value is still used) and
+    `--exit-threshold` are still accepted until the next release, with a
+    warning on stderr.
+  - The diagnostics' `threshold` is the one applied.
+
 - Opening a model under a verified decision profile no longer hashes the
   file every time (#287). A matching pull receipt (`<dir>/.verified/`,
   bound to the file's identity, size and change times) stands for the

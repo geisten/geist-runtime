@@ -335,7 +335,7 @@ attempts a download:
 geistr decide gemma4-e2b "Which team handles this?" billing technical sales
 geistr decide gemma4-e2b --processor cpu \
   --question 'Which option equals 4?' --option four '4' --option five '5'
-geistr decide model.gguf --config decisions.json --question-file - \
+geistr decide model.gguf --config decisions.json --question - \
   --option yes 'Yes' --option no 'No'
 geistr catalog --decision-config decisions.json --json
 ```
@@ -343,7 +343,7 @@ geistr catalog --decision-config decisions.json --json
 **Which model, which profile (#285).** A catalog id and a file path of the
 same model behave identically:
 
-- **Thinking** (for `--escalate chat`) comes from the loaded model's chat
+- **Thinking** (for the chat escalation) comes from the loaded model's chat
   template, not from the catalog: the chat thinks when the template thinks
   in `<think>` tags (`geistr_model_info.think_tags`: Qwen3, Qwen3.5,
   Qwen3.6+, Bonsai 2). Gemma 4 (`<|think|>`) answers at once there (#270).
@@ -368,24 +368,79 @@ and on a terminal the command says so. With
 model; set a policy's enabled field to true explicitly. The short form takes
 the question as the first argument that is not a flag and every further one as
 an option ID that is also its description; it mixes with the flags.
-`--question` and `--question-file FILE|-` are alternatives.
+`--question TEXT|@FILE|-` takes the text, or reads it from FILE or stdin (at
+most 64 KiB); the short form's question is always text.
 `--context`, `--mode dense|selected_rows`, `--profile NAME`, `--models` and
 `--catalog` accept one value each. Repeated/conflicting flags are errors;
 `--option ID DESCRIPTION` is the only repeatable flag. Profile override must
-match the configured exact artifact. This first CLI limits model context to
-512 tokens and refuses overflow. C/Python callers may choose a checked larger
-capacity within the loaded model context.
+match the configured exact artifact. The model is opened with a context of
+4096 + `--max-tokens` tokens when a chat escalation can happen (a threshold
+above 0), else 512 (threshold 0, `--no-escalate`, `--escalate MODEL`). C/Python callers may choose a checked
+larger capacity within the loaded model context.
 
-**Threshold and escalation (a two-stage policy).** `--threshold P` (0 < P ≤ 1) compares the
-chosen option's probability with P. At or above P nothing changes. Below P:
+**The options (#288).** Without options, `geistr decide MODEL "QUESTION"
+OPTION…` scores the options and takes the defaults the model's verified
+profile carries (`src/decision_profile.c`). For Bonsai 2 27B
+(`bonsai2-27b-pq2-v1`) that is what `--threshold 0.78 --escalate chat
+--early-exit --max-tokens 8192` used to take: below 0.78 the same model
+answers in chat. Every other model, verified (Gemma 4) or not, carries no
+threshold: it answers directly, as before, unless `--threshold` is given.
 
-- without `--escalate`: exit 3, nothing on stdout, a message on stderr (the
+| option | default | |
+|---|---|---|
+| `--threshold P` (0–1) | Bonsai 2 27B: **0.78**; every other model: **0** | 0: never escalate, every answer direct |
+| `--no-escalate` | off | below the threshold: exit 3, nothing on stdout |
+| `--escalate MODEL` | `chat` | below the threshold MODEL decides; `--escalate chat` is the default spelled out |
+| `--max-tokens N` | Bonsai 2 27B: **8192**; every other model: 4096 | the chat answer's cap |
+| `--early-exit[=P]` / `--no-early-exit` | on (P 0.8) for the Bonsai 2 27B profile only | probes every 128 tokens |
+| `--temperature T` | 1 | calibration |
+| Advanced: `--context TEXT`; decide-batch's `--shared-context`, `--context-tokens`, `--snapshot-budget-mib` | | unchanged |
+
+**Where Bonsai 2 27B's 0.78 comes from** (owner decision, #288). It is
+geistlib#204's primary threshold (0.7809), fitted before the test: the
+smallest calibration confidence whose accepted questions keep a direct-answer
+precision of 0.95 on 250 calibration questions. On 500 held-out five-shot
+classic-MMLU questions it answered 31 % directly and routed 69 % to reasoning
+(cap 2048), and matched always-reasoning: 78.8 % vs 79.0 %, −0.2 pp
+[−2.36, +1.97] (the 2 pp margin narrowly not established), at **0.97× its
+time**. So the default keeps reasoning's accuracy and saves little time; it
+avoids reasoning on the questions the direct scores are sure of. Its limits:
+
+- **Fitted on geistlib's MMLU prompt, not this command's,** with a calibration
+  temperature of 1.0546; `geistr decide` compares at T 1 unless
+  `--temperature` says otherwise.
+- **One task family and one model.** On another task the trade sits
+  elsewhere: a lower threshold is faster and less accurate (geistlib#210's
+  curve below). Fit your own as in "Choosing the threshold and the cap".
+- **Measured with reasoning to the end,** at cap 2048; the default chat
+  additionally exits early (geistlib#286), whose evidence was measured at
+  cap 8192, hence that profile's `--max-tokens` default of 8192.
+
+Gemma 4 and unverified models have no threshold evidence, so they get none.
+A profile gains its own defaults (`decide_threshold`, `decide_max_tokens` in
+`src/decision_profile.c`, read by `geistr_decide_threshold` and
+`geistr_decide_max_tokens`) only from its own declared evidence.
+
+**Removed options, accepted until the next release** with a warning on
+stderr: `--question-file FILE|-` (now `--question @FILE` or `--question -`),
+`--exit-threshold P` (now `--early-exit=P`) and `--probe-interval N` (fixed at
+the validated 128; until it goes, the value is still used). Scripts that
+relied on exit 3 with `--threshold` and without `--escalate` need
+`--no-escalate`, and scripts that relied on Bonsai 2 27B's direct answer
+without `--threshold` need `--threshold 0`.
+
+**Threshold and escalation (a two-stage policy).** The threshold P
+(`--threshold P`, 0 ≤ P ≤ 1, default above) is compared with the chosen
+option's probability. At or above P nothing changes. Below P:
+
+- `--no-escalate`: exit 3, nothing on stdout, a message on stderr (the
   caller decides what happens, e.g. a person looks at it);
-- `--escalate chat`: the same model answers in chat mode with the options as
+- the chat escalation (the default, `--escalate chat`): the same model answers in chat mode with the options as
   allowed labels (thinking on for a model whose chat template thinks in
   `<think>` tags). The
   answer, thinking included, is limited to `--max-tokens N` tokens (default
-  4096, 1–28672); the model is opened with a context of 4096 + N tokens. The
+  8192 for the Bonsai 2 27B profile, else 4096; 1–28672); the model is opened
+  with a context of 4096 + N tokens. The
   answer is read exactly (the trimmed answer is an ID, any case) or as the
   only ID that occurs as a whole word; otherwise exit 3, also when the answer
   was cut at N before naming an option. The printed ID has no probability;
@@ -396,12 +451,12 @@ chosen option's probability with P. At or above P nothing changes. Below P:
 softmax(logits / T) over the options instead of the engine's
 temperature-1 selection probabilities. T is a calibration the caller fits on
 its own labelled calibration data (temperature scaling: the T that minimizes
-log-loss); the chosen option never changes. `--max-tokens` requires
-`--escalate chat`.
+log-loss); the chosen option never changes. `--max-tokens` belongs to the
+chat escalation: with `--no-escalate` or `--escalate MODEL` it is an error.
 
 The diagnostics JSON (one line, written after any escalation) gains
-`top_probability` (the first model's, after T), `threshold` (0 without the
-flag), `escalation` (`decided`, `unsure`, `chat` or `model`), `temperature`,
+`top_probability` (the first model's, after T), `threshold` (the one applied:
+`--threshold`, or the default), `escalation` (`decided`, `unsure`, `chat` or `model`), `temperature`,
 `direct_index` and `direct_probabilities` (the first stage's choice and every
 option's probability after T, in option order), `answered_by` (`direct`,
 `chat`, `model`, or `none` when nothing was printed) and `answer_index`
@@ -416,9 +471,10 @@ time. There is no cap on the escalated share: a single command cannot see
 one; callers that run many decisions should cap it themselves.
 
 **Early exit from the chat answer (experimental; geistlib#236, geistlib#286).**
-With `--escalate chat` and `--early-exit`, the thinking model's answer is
+In the chat escalation, with `--early-exit[=P]`, the thinking model's answer is
 probed while it reasons; with `--no-early-exit` the model reasons to the end.
-Both work for every model.
+Both work for every model; with `--no-escalate` or `--escalate MODEL` they are
+errors.
 
 - **Default:** on only for the verified Bonsai 2 27B profile
   (`bonsai2-27b-pq2-v1`, the exact artifact its evidence was measured on).
@@ -435,7 +491,7 @@ Both work for every model.
   probe. If your task's reasoning usually finishes within `--max-tokens`, or
   it resembles those tasks, use **`--no-early-exit`**.
 
-Every `--probe-interval N` generated tokens (default 128), while the model is
+Every 128 generated tokens (fixed; the interval the evidence validated), while the model is
 still thinking, a probe does four things:
 1. it saves the chat session's complete state;
 2. it prefills the thinking close (`\n</think>\n\n`);
@@ -443,15 +499,15 @@ still thinking, a probe does four things:
 4. it restores the state.
 
 The answer stops at the first probe whose top probability (softmax over the
-options) reaches `--exit-threshold P` (default 0.8), and that option is the
+options) reaches P of `--early-exit=P` (default 0.8), and that option is the
 answer. Without such a probe the chat answers as before.
 - **Probes are transparent:** a probe that does not exit leaves the generation
   token for token the same.
 - **Requirements:** each option ID must start with its own token, and the
   model must think in `<think>` tags. If they do not hold, the Bonsai
   default reasons to the end as without early exit (the diagnostics then
-  have no `early_exit`). Asked for explicitly, with `--early-exit`,
-  `--probe-interval` or `--exit-threshold`, it exits with 2 instead.
+  have no `early_exit`). Asked for explicitly, with `--early-exit[=P]`, it
+  exits with 2 instead.
 - **Library:** the probes are `geistr_chat_probe_set` /
   `geistr_chat_probe_result` and work with `geistr_chats_next`, where each
   probe runs on its chat between batched steps.

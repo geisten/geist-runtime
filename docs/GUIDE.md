@@ -940,4 +940,14 @@ with Ctrl-C.
 
 `geistr decide`, `geistr decide-batch` and `catalog --decision-config` belong to an experimental
 feature that is off by default and not in the release builds; see
-[DECISIONS.md](DECISIONS.md).
+[DECISIONS.md](DECISIONS.md). `geistr decide MODEL "QUESTION" OPTION…` needs
+no other option (#288): below the threshold (`--threshold P`; by default
+0.78 for Bonsai 2 27B, none for other models) the same model answers in
+chat, with early exit and a cap of 8192 tokens for Bonsai 2 27B.
+`--no-escalate` exits 3 instead (scripts that relied on exit 3 with
+`--threshold` and without `--escalate` need it), `--escalate MODEL` asks another model, `--early-exit[=P]` and
+`--no-early-exit` switch early exit, `--question TEXT|@FILE|-` reads the
+question from a file or stdin. `--question-file`, `--probe-interval` and
+`--exit-threshold` still work until the next release, with a warning.
+`geistr decide --help` lists the rest; the context options are under
+"Advanced".
