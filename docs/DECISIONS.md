@@ -15,9 +15,15 @@ that value: later edits or freeing the config cannot change a loaded model.
 
 An enabled policy is either **verified** or **unverified**:
 
-- **Verified** (a known profile): bound to the exact model SHA-256. The
-  runtime hashes file or borrowed-memory contents before loading the model; a
-  mismatch is an error. The profile's rendering is checked against native
+- **Verified** (a known profile): bound to the exact model SHA-256. Before
+  loading the model the runtime checks a file by its receipt
+  (`<dir>/.verified/<sha256>`, left by `geistr pull` or a catalog check and
+  bound to the file's device, inode, size, mode, owner, link count and change
+  times); a file without a matching receipt (changed, replaced, copied
+  elsewhere, never checked) is hashed, as is borrowed memory. A mismatch is
+  an error, and so is a file whose identity changes while it loads (#287).
+  The receipt is as trustworthy as the folder: whoever can write it can also
+  replace the model. The profile's rendering is checked against native
   fixtures and its scores against an independent llama.cpp reference. This is
   what makes the label "verified" true, not what makes the method work.
 - **Unverified** (enabled, no profile): the decision prompt is rendered from
@@ -351,8 +357,9 @@ same model behave identically:
   does, but gets no profile defaults (no early exit by default); its
   `artifact_sha256` in the diagnostics is `null`. With `--config` (a list of
   SHA-256s) such a file is hashed once, so the list matches custom GGUFs
-  too. Loading a verified profile still has the runtime hash the file (see
-  above).
+  too. Loading a verified profile then checks the file by the same receipt,
+  hashing it only without one (see above, #287); `/decide` in `geistr chat`
+  finds the SHA-256 the same way, hashing a path only without a receipt.
 
 Without `--config`, a model with a verified profile (the registry in
 `src/decision_profile.c`) uses it; every other model is decided unverified,

@@ -3,6 +3,7 @@
  * the line editor), the slash commands and the service mode. What was said
  * lives in conversation.c. */
 #include "cli.h"
+#include "decide.h"
 #include "files.h"
 #include "json.h"
 #include "lineedit.h"
@@ -699,7 +700,8 @@ static const char *clipboard(const char *text, size_t len) {
 /* /decide: the verified decision profile for the running model's file (the
  * registry in src/decision_profile.c), or else an unverified policy that
  * renders from the model's own chat template. A catalog model has its hash in
- * the catalog; a .gguf path is hashed. false: the file cannot be read. */
+ * the catalog; a .gguf path its receipt's (<dir>/.verified/, #287), and only
+ * a path without a matching receipt is hashed. false: the file cannot be read. */
 static bool decision_policy_for(const char *name, geistr_decision_policy *out) {
     char            sha[65] = "";
     geistr_catalog *c       = strchr(name, '/') || strstr(name, ".gguf") ? nullptr : load_catalog();
@@ -710,7 +712,7 @@ static bool decision_policy_for(const char *name, geistr_decision_policy *out) {
     if (!*sha) {
         char             path[4200];
         geistr_reasoning reasoning;
-        if (resolve(name, path, sizeof path, &reasoning, nullptr) != OK || geistr_sha256_file(path, sha) != GEISTR_OK)
+        if (resolve(name, path, sizeof path, &reasoning, nullptr) != OK || !geistr_decide_path_sha(path, true, sha))
             return false;
     }
     for (int p = GEISTR_DECISION_PROFILE_NONE + 1; p < GEISTR_DECISION_MAX_POLICIES; ++p) {
@@ -735,7 +737,7 @@ static int command(struct session *x, struct conversation *said, char *line, con
 /* /decide question | option | option …: the model's choice among the options,
  * read from one prefill (docs/DECISIONS.md); the conversation is not part of
  * it. The first /decide reopens the model with its verified profile (the
- * runtime hashes the file once); the conversation moves along. */
+ * runtime checks the file by its receipt, else its hash); the conversation moves along. */
 static int decide(struct session *x, struct conversation *said, char *arg, const char *remote) {
     if (remote) {
         usage("decisions need the model here: geistr chat <model>");

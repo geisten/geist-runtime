@@ -170,10 +170,13 @@ with tempfile.TemporaryDirectory() as directory:
     until(fd, 'Ctrl-C twice exits')
     send(fd, b'/decide Which option equals 4? | four | five')
     shown = until(fd, '  five ').decode(errors='replace').replace('\r', '')
-    assert 'loading' in shown and ('\nfour\n' in shown or '\nfive\n' in shown), shown[-600:]  # reopened once
+    # Reopened once: the status line names the model again. Not the loading spinner: a verified
+    # profile's file is checked by its receipt (#287), so the reopen can stay below the spinner's 0.3 s.
+    reopened = ' · ' + model
+    assert reopened in shown and ('\nfour\n' in shown or '\nfive\n' in shown), shown[-600:]
     send(fd, b'/decide Is 4 even? | yes | no')  # the second one needs no reopen
     second = until(fd, '  no ').decode(errors='replace')
-    assert 'loading' not in second, second[-600:]
+    assert reopened not in second and 'loading' not in second, second[-600:]
     send(fd, b'/decide only a question')
     until(fd, '/decide question | option')
     send(fd, b'/exit')

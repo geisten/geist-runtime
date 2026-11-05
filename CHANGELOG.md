@@ -139,22 +139,26 @@
 
 ### Changed
 
-- `geistr decide` needs fewer options (#288): `geistr decide MODEL
-  "QUESTION" OPTION…` now does what `--threshold P --escalate chat
-  --early-exit` did.
-  - **Escalating to chat is the default.** Below the threshold the same
-    model answers in chat. `--no-escalate` gives the old exit 3 instead;
-    `--escalate MODEL` stays.
-  - **Compatibility: scripts that relied on exit 3 (undecided) without
-    `--escalate` need `--no-escalate`.** Scripts that relied on a direct
-    answer without `--threshold` need `--threshold 0`, which now means
-    "never escalate".
-  - **The threshold** is the verified profile's. No profile carries a
-    calibrated one yet, so every model gets the documented default 0.78:
-    geistlib#204's precision-0.95 threshold for Bonsai 2 27B, which kept
-    always-reasoning's accuracy (78.8 % vs 79.0 % on 500 held-out MMLU
-    questions) at 0.97× its time. For other models it is a starting point,
-    not a calibration. `--threshold P` (0–1) overrides it.
+- `geistr decide` needs fewer options (#288). For the verified Bonsai 2
+  27B profile, `geistr decide bonsai2-27b-pq2 "QUESTION" OPTION…` now does
+  what `--threshold 0.78 --escalate chat --early-exit --max-tokens 8192`
+  did; every other model answers directly as before.
+  - **The threshold comes from the profile.** Bonsai 2 27B
+    (`bonsai2-27b-pq2-v1`) carries 0.78: geistlib#204's precision-0.95
+    threshold, which kept always-reasoning's accuracy (78.8 % vs 79.0 % on
+    500 held-out MMLU questions) at 0.97× its time. Every other model,
+    verified (Gemma 4) or not, has 0: the direct answer, no escalation.
+    `--threshold P` (now 0–1; 0 never escalates) overrides it.
+  - **Escalating to chat is the default below the threshold.**
+    `--no-escalate` gives exit 3 instead; `--escalate MODEL` stays.
+    **Compatibility: scripts that relied on exit 3 (undecided) with
+    `--threshold` and without `--escalate` need `--no-escalate`; scripts
+    that relied on Bonsai 2 27B's direct answer without `--threshold` need
+    `--threshold 0`.**
+  - **`--max-tokens` defaults to 8192 for the Bonsai 2 27B profile,** the
+    cap its early-exit evidence was measured at (geistlib#286); 4096 for
+    every other model. The chat context is 4096 + that; a decision that
+    cannot escalate (threshold 0) opens 512 tokens as before.
   - **Early exit:** `--early-exit[=P]` and `--no-early-exit` only. The
     probe interval is fixed at the validated 128, and `--early-exit=P`
     replaces `--exit-threshold P`. The default is unchanged: on for the
@@ -162,10 +166,19 @@
   - `--question TEXT|@FILE|-` replaces `--question-file FILE|-`.
   - The context options are unchanged and listed under "Advanced" in
     `--help`.
-  - `--question-file`, `--probe-interval` and `--exit-threshold` are
-    still accepted until the next release, with a warning on stderr.
-  - The diagnostics' `threshold` is the one applied (before: 0 without
-    `--threshold`).
+  - `--question-file`, `--probe-interval` (its value is still used) and
+    `--exit-threshold` are still accepted until the next release, with a
+    warning on stderr.
+  - The diagnostics' `threshold` is the one applied.
+
+- Opening a model under a verified decision profile no longer hashes the
+  file every time (#287). A matching pull receipt (`<dir>/.verified/`,
+  bound to the file's identity, size and change times) stands for the
+  hash; only a file without one is hashed. A Bonsai 2 27B `geistr decide`
+  took 4.1 s and now takes 0.8 s on an M1 Max, by catalog id and by path
+  alike. A changed, replaced or receipt-less file is still hashed and
+  refused if it is not the profile's artifact. `/decide` in `geistr chat`
+  takes a path's SHA-256 from its receipt too, hashing only without one.
 
 - `geistr decide` resolves a model the same way for a catalog id and a
   file path (#285). Before, Bonsai 2 27B given by path answered its

@@ -47,3 +47,11 @@ static inline geistr_status stops_copy(const geistr_chat_opts *o, char ***out) {
         }
     return GEISTR_OK;
 }
+
+/* Is the regular file at path the artifact sha256 (64 lowercase hex) names?
+ * A receipt next to it (<dir>/.verified/<sha256>, geistr_catalog_check's)
+ * that matches the file's identity, size and change times answers without
+ * hashing (#287); without one the file is hashed. Writes nothing. GEISTR_OK
+ * on a match, GEISTR_FORMAT on another hash, GEISTR_IO if unreadable,
+ * GEISTR_INVALID for a malformed sha256. (catalog.c) */
+[[nodiscard]] geistr_status artifact_verify(const char *path, const char *sha256);
