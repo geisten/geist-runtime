@@ -2,6 +2,7 @@
 The driver is a test dispatcher, not a second product CLI.
 """
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -121,6 +122,60 @@ def batch(binary):
                              '--processor', 'gpu', '--profile', 'gemma4-e2b-q4-v1'])
 
 
+BONSAI2 = '3907dc1658db1f78a9826bf8d5bcb8dc65db0d466388937af57f2294fae62ec1'  # bonsai2-27b-pq2-v1's artifact
+
+
+def stamp(path, sha):
+    """The receipt geistr pull / a catalog check leaves for path (src/catalog.c stamp)."""
+    s = os.lstat(path)
+    return (f'v1 {sha} {s.st_dev} {s.st_ino} {s.st_size} {s.st_mode} {s.st_uid} {s.st_gid} {s.st_nlink} '
+            f'{s.st_mtime_ns // 10**9} {s.st_mtime_ns % 10**9} {s.st_ctime_ns // 10**9} {s.st_ctime_ns % 10**9}\n')
+
+
+def receipts(binary):
+    """#285: a model given by path is identified by its receipt, never hashed at
+    decide time. With the receipt of the Bonsai 2 profile's artifact it is that
+    profile (early exit by default); without one, or once the file changed, it
+    is unverified (no profile, no early-exit default). Thinking is the chat
+    template's, the same for a catalog id and a path (the real-model test)."""
+    def resolve(path):
+        out = subprocess.run([str(binary), 'receipt', str(path)], capture_output=True, timeout=20, check=True)
+        return out.stdout.decode().split()
+    unverified = ['-', 'none', '0']
+    with tempfile.TemporaryDirectory() as directory:
+        models = Path(directory) / 'models'
+        (models / '.verified').mkdir(parents=True)
+        model = models / 'Ternary-Bonsai-2-27B-PQ2_0.gguf'
+        model.write_bytes(b'GGUF' + bytes(60))
+        assert resolve(model) == unverified
+        assert resolve(models / 'missing.gguf') == unverified
+        (models / '.verified' / BONSAI2).write_text(stamp(model, BONSAI2))
+        assert resolve(model) == [BONSAI2, 'bonsai2-27b-pq2-v1', '1']
+        other = 'ab' * 32  # a receipt of another artifact: no profile
+        (models / '.verified' / BONSAI2).unlink()
+        (models / '.verified' / other).write_text(stamp(model, other))
+        assert resolve(model) == [other, 'none', '0']
+        (models / '.verified' / other).write_text(stamp(model, BONSAI2))  # names another SHA than its own
+        assert resolve(model) == unverified
+        (models / '.verified' / other).unlink()
+        (models / '.verified' / BONSAI2).write_text(stamp(model, BONSAI2))
+        copy = Path(directory) / model.name  # the same bytes elsewhere: that file has no receipt
+        copy.write_bytes(model.read_bytes())
+        assert resolve(copy) == unverified
+        link = models / 'link.gguf'  # a link is not the file the receipt was written for
+        link.symlink_to(model)
+        assert resolve(link) == unverified
+        cwd = os.getcwd()
+        os.chdir(models)
+        try:
+            assert resolve(model.name) == [BONSAI2, 'bonsai2-27b-pq2-v1', '1']  # a relative path
+        finally:
+            os.chdir(cwd)
+        with open(model, 'r+b') as f:  # changed after its receipt: unverified until checked again
+            f.write(b'GGUX')
+        assert resolve(model) == unverified
+
+
 def main():
     binary = Path(sys.argv[1]).resolve()
     base = ['stub:echo', '--question', 'Q?', '--config', 'missing.json',
@@ -209,7 +264,8 @@ def main():
         args[2] = '-'
         call(binary, args, 2, b'q' * 65537)
         call(binary, args, 2, b'q\0q')
-    print('decide CLI: usage, feature-off, IDs, duplicate options, early-exit flags (default on for the Bonsai 2 27B profile only) and bounded file/stdin input passed')
+    receipts(binary)
+    print('decide CLI: usage, feature-off, IDs, duplicate options, early-exit flags (default on for the Bonsai 2 27B profile only), receipts of a path (#285) and bounded file/stdin input passed')
     batch(binary)
     print('decide-batch CLI: flags, numeric bounds, request shape, IDs, limits, file/stdin and feature-off passed')
 

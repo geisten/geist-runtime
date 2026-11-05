@@ -10,6 +10,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <dirent.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -97,6 +99,33 @@ static bool argument(size_t argc, size_t *index, const char *const *argv, const 
     return true;
 }
 
+bool geistr_decide_receipt_sha(const char *path, char sha[static 65]) {
+    *sha = 0;
+    const char *slash = strrchr(path, '/'), *file = slash ? slash + 1 : path;
+    char directory[4096], receipts[4200];
+    const int n = slash ? snprintf(directory, sizeof directory, "%.*s", (int)(slash - path), path)
+                        : snprintf(directory, sizeof directory, ".");
+    struct stat st;
+    if (n < 0 || (size_t)n >= sizeof directory || lstat(path, &st) != 0 || !S_ISREG(st.st_mode) ||
+        snprintf(receipts, sizeof receipts, "%s/.verified", directory) >= (int)sizeof receipts)
+        return false;
+    DIR *d = opendir(receipts);
+    if (!d)
+        return false;
+    /* Each receipt is named by its SHA-256 and holds the identity (device,
+     * inode, size, times) of the file it was written for; the catalog check
+     * without hashing compares exactly that. */
+    for (const struct dirent *e; !*sha && (e = readdir(d));) {
+        const geistr_catalog_entry entry = {.file = file, .sha256 = e->d_name, .bytes = (uint64_t)st.st_size};
+        geistr_install install;
+        if (strlen(e->d_name) == 64 && geistr_catalog_check(&entry, directory, false, &install) == GEISTR_OK &&
+            install == GEISTR_INSTALL_OK)
+            memcpy(sha, e->d_name, 65);
+    }
+    closedir(d);
+    return *sha != 0;
+}
+
 /* Configuration, catalog/path lookup with SHA, permission and model load,
  * shared by decide and decide-batch. Returns 0 or the exit code; unload frees
  * whatever was set, also after a failure. */
@@ -106,8 +135,8 @@ struct loaded {
     geistr_catalog *catalog;
     geistr_model *model;
     const geistr_decision_policy *policy;
-    char sha[65];
-    geistr_reasoning reasoning; /* the catalog's: a thinking model thinks when escalated to chat */
+    char sha[65];               /* "": a path without a receipt, unknown */
+    geistr_reasoning reasoning; /* the template's (#285): a thinking model thinks when escalated to chat */
 };
 static void unload(struct loaded *l) {
     geistr_model_close(l->model);
@@ -116,6 +145,7 @@ static void unload(struct loaded *l) {
     free(l->catalog_json);
     *l = (struct loaded){};
 }
+static const char UNKNOWN_SHA[] = "0000000000000000000000000000000000000000000000000000000000000000";
 static int load(struct loaded *l, const char *model, const char *config_file, const char *profile,
                 const char *models_dir, const char *catalog_file, const geistr_decide_host *host,
                 geistr_processor processor, uint32_t context) {
@@ -151,17 +181,19 @@ static int load(struct loaded *l, const char *model, const char *config_file, co
             return failure(1, "model path too long");
         selected_path = path;
         memcpy(l->sha, entry->sha256, sizeof l->sha);
-        if (entry->reasoning_format && !strcmp(entry->reasoning_format, "think_tags"))
-            l->reasoning = GEISTR_REASONING_THINK_TAGS;
-    } else if (geistr_sha256_file(selected_path, l->sha) != GEISTR_OK)
-        return failure(1, "model artifact unreadable");
+    } else /* a path is never hashed here (#285): its receipt names it, else it is unverified */
+        geistr_decide_receipt_sha(model, l->sha);
     l->policy = geistr_decision_config_find(l->sha, l->config);
     static geistr_decision_policy unverified;
     if (!l->policy && !config_file) { /* no verified profile: the model's own chat template, unverified */
         unverified = (geistr_decision_policy){.enabled = true, .mode = GEISTR_DECISION_DENSE};
-        memcpy(unverified.sha256, l->sha, sizeof unverified.sha256);
+        /* the policy needs a well-formed hash; an unverified one binds nothing */
+        snprintf(unverified.sha256, sizeof unverified.sha256, "%s", *l->sha ? l->sha : UNKNOWN_SHA);
         l->policy = &unverified;
     }
+    if (!l->policy && !*l->sha)
+        return failure(1, "decision permission unknown for this file: no receipt names its SHA-256 (#285; a model "
+                          "geistr pulled or verified has one)");
     if (!l->policy || !l->policy->enabled)
         return failure(1, "decision permission absent or disabled for this artifact");
     if (profile && strcmp(profile, geistr_decision_profile_name(l->policy->profile)))
@@ -173,6 +205,10 @@ static int load(struct loaded *l, const char *model, const char *config_file, co
     status = geistr_model_open(selected_path, &mo, &l->model, error, sizeof error);
     if (status != GEISTR_OK)
         return failure(1, error);
+    /* Whether it thinks: its chat template says, for a catalog id and a path alike (#266, #285). */
+    geistr_model_info info = {.size = sizeof info};
+    if (geistr_model_info_get(l->model, &info) == GEISTR_OK && info.thinking)
+        l->reasoning = GEISTR_REASONING_THINK_TAGS;
     return 0;
 }
 
@@ -542,7 +578,9 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
     if (to_chat && !no_early_exit && !ee.required)
         ee.enabled = geistr_decide_early_exit_default(policy->profile); /* geistlib#286 */
     geistr_model *model = loaded.model;
-    const char *sha = loaded.sha;
+    char sha[67] = "null"; /* JSON: the artifact's SHA-256, or null for a path without a receipt (#285) */
+    if (*loaded.sha)
+        snprintf(sha, sizeof sha, "\"%s\"", loaded.sha);
     geistr_decision_opts opts = GEISTR_DECISION_OPTS_INIT;
     opts.mode = mode;
     status = geistr_decision_open(model, sizeof error, &opts, &decision, error);
@@ -584,7 +622,7 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
         FILE *f = open_memstream(&diag, &diag_len);
         if (f) {
             fprintf(f,
-                "{\"schema\":1,\"profile\":\"%s\",\"artifact_sha256\":\"%s\",\"template_sha256\":\"%s\","
+                "{\"schema\":1,\"profile\":\"%s\",\"artifact_sha256\":%s,\"template_sha256\":\"%s\","
                 "\"runtime\":\"%s\","
                 "\"engine_revision\":\"%s\",\"engine\":\"%s\",\"operation\":\"decision\",\"backend\":\"%s\","
                 "\"requested_mode\":%d,\"resolved_mode\":%d,\"prompt_tokens\":%zu,\"model_"
@@ -629,7 +667,7 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
             asked_chat = true;
             if (ee.enabled && loaded.reasoning != GEISTR_REASONING_THINK_TAGS) {
                 if (ee.required) {
-                    code = failure(2, "--early-exit needs a model that thinks in <think> tags");
+                    code = failure(2, "--early-exit needs a model that thinks (its chat template has no thinking)");
                     goto done;
                 }
                 ee.enabled = false; /* the default: a model that does not think answers as before */
@@ -637,7 +675,8 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
             const char *id = ask_in_chat(model, loaded.reasoning, &request, (uint32_t)max_tokens, &ee, &chat_stats,
                                          answer, sizeof answer);
             if (ee.enabled && ee.set != GEISTR_OK) {
-                code = failure(2, "--early-exit: the options cannot be probed (each must start with its own token)");
+                code = failure(2, "--early-exit: this chat cannot be probed (it needs thinking in <think> tags and "
+                                  "options that each start with their own token)");
                 goto done;
             }
             if (!id) {
@@ -723,9 +762,11 @@ done:
         if (asked_chat)
             fprintf(stderr,
                     ",\"chat\":{\"max_tokens\":%lu,\"finish\":\"%s\",\"input_tokens\":%" PRIu32
-                    ",\"output_tokens\":%" PRIu32 ",\"prefill_ms\":%.3f,\"generation_ms\":%.3f,\"total_ms\":%.3f}",
+                    ",\"output_tokens\":%" PRIu32 ",\"prefill_ms\":%.3f,\"generation_ms\":%.3f,\"total_ms\":%.3f,"
+                    "\"thinking\":%s}",
                     max_tokens, finish_name(chat_stats.finish), chat_stats.input_tokens, chat_stats.output_tokens,
-                    chat_stats.prefill_ms, chat_stats.generation_ms, chat_stats.total_ms);
+                    chat_stats.prefill_ms, chat_stats.generation_ms, chat_stats.total_ms,
+                    loaded.reasoning == GEISTR_REASONING_THINK_TAGS ? "true" : "false");
         if (asked_chat && ee.enabled && ee.set == GEISTR_OK) {
             fprintf(stderr,
                     ",\"early_exit\":{\"interval\":%" PRIu32 ",\"threshold\":%.6f,\"probes\":%" PRIu32
@@ -1129,8 +1170,9 @@ done:
         prompt[i] = result.answers[i].prompt_tokens, uncached[i] = result.answers[i].uncached_tokens;
     const bool record = loaded.model != nullptr, opened_context = context != nullptr;
     const char *profile_name = record ? geistr_decision_profile_name(loaded.policy->profile) : "";
-    char sha[65];
-    memcpy(sha, loaded.sha, sizeof sha);
+    char sha[67] = "null"; /* as in decide: null for a path without a receipt */
+    if (*loaded.sha)
+        snprintf(sha, sizeof sha, "\"%s\"", loaded.sha);
     const double teardown = milliseconds();
     geistr_decision_context_close(context);
     unload(&loaded);
@@ -1141,7 +1183,7 @@ done:
         FILE *e = stderr;
         fprintf(e, "{\"schema\":1,\"operation\":\"decision_batch\",\"exit\":%d,\"profile\":", code);
         json_text(e, profile_name);
-        fprintf(e, ",\"artifact_sha256\":\"%s\",\"runtime\":", sha);
+        fprintf(e, ",\"artifact_sha256\":%s,\"runtime\":", sha);
         json_text(e, geistr_version());
         if (opened_context) {
             fprintf(e, ",\"template_sha256\":\"%s\",\"context_sha256\":\"%s\",\"engine_revision\":",

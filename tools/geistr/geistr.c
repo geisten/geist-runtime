@@ -765,6 +765,8 @@ int main(int argc, char **argv) {
                       "(128) and ends at the first probe whose top option reaches --exit-threshold P (0.8).\n"
                       "Default on only for the Bonsai 2 27B profile (validated there, geistlib#286); it can cost\n"
                       "accuracy on answers that finish within the cap. --no-early-exit reasons to the end.\n"
+                      "A catalog id and a .gguf path act alike: thinking as the chat template has it; a path\n"
+                      "is the verified profile's file by its receipt from geistr pull (never hashed here).\n"
                       "The two-stage trade-off is task- and model-specific: measure it (docs/DECISIONS.md).\n"
                       "Prints the chosen option's ID; on a terminal also each option's probability.\n"
                       "Works with every chat model; models without a verified profile are marked unverified.\n"
