@@ -51,7 +51,7 @@ class _ModelInfo(C.Structure):
 class _ChatOpts(C.Structure):
     _fields_ = [("size", C.c_size_t), ("temperature", C.c_float), ("top_p", C.c_float), ("max_tokens", C.c_uint32),
                 ("reasoning", C.c_int), ("overflow", C.c_int), ("thinking", C.c_int),
-                ("stop", C.POINTER(_str)), ("n_stop", C.c_size_t), ("effort", C.c_int)]
+                ("stop", C.POINTER(_str)), ("n_stop", C.c_size_t), ("effort", C.c_int), ("keep_reasoning", C.c_int)]
 
 
 class _Message(C.Structure):

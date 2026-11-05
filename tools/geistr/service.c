@@ -101,28 +101,33 @@ struct held {
     char            *stop; /* the stop strings, joined by \x1f; nullptr for none */
     size_t       n;
     char       **role, **content;
+    char       **thought; /* each message's reasoning (#282); nullptr: none */
     uint64_t     used;
 };
 
 static void held_keep(struct held *c, size_t n) {
     for (size_t i = n; i < c->n; i++)
-        free(c->role[i]), free(c->content[i]);
+        free(c->role[i]), free(c->content[i]), free(c->thought[i]);
     if (n < c->n)
         c->n = n;
 }
 
-static bool held_push(struct held *c, const char *role, const char *content) {
+static bool held_push(struct held *c, const char *role, const char *content, const char *reasoning) {
     char **r  = realloc(c->role, (c->n + 1) * sizeof *r);
     if (r)
         c->role = r;
     char **ct = r ? realloc(c->content, (c->n + 1) * sizeof *ct) : nullptr;
-    if (!ct)
+    if (ct)
+        c->content = ct;
+    char **rs = ct ? (char **) realloc((void *) c->thought, (c->n + 1) * sizeof *rs) : nullptr;
+    if (!rs)
         return false;
-    c->content       = ct;
-    c->role[c->n]    = strdup(role);
-    c->content[c->n] = strdup(content);
-    if (!c->role[c->n] || !c->content[c->n]) {
-        free(c->role[c->n]), free(c->content[c->n]);
+    c->thought         = rs;
+    c->role[c->n]      = strdup(role);
+    c->content[c->n]   = strdup(content);
+    c->thought[c->n] = reasoning ? strdup(reasoning) : nullptr;
+    if (!c->role[c->n] || !c->content[c->n] || (reasoning && !c->thought[c->n])) {
+        free(c->role[c->n]), free(c->content[c->n]), free(c->thought[c->n]);
         return false;
     }
     c->n++;
@@ -132,7 +137,7 @@ static bool held_push(struct held *c, const char *role, const char *content) {
 static void held_close(struct held *c) {
     geistr_chat_close(c->chat);
     held_keep(c, 0);
-    free(c->role), free(c->content), free(c->stop);
+    free(c->role), free(c->content), free((void *) c->thought), free(c->stop);
     *c = (struct held) {};
 }
 
@@ -176,10 +181,18 @@ static bool same_role(const char *a, const char *b) {
     return sa == sb && aa == ab; /* anything else counts as user, as in the runtime */
 }
 
-/* How many of the request's messages (all but the last) this conversation holds. */
-static size_t common(const struct held *c, const geistr_message *m, size_t n) {
+/* Both none, or the same text: an empty one is reasoning too (the templates
+ * then do not split the content at </think>). */
+static bool same_reasoning(const char *a, const char *b) {
+    return a && b ? !strcmp(a, b) : a == b;
+}
+
+/* How many of the request's messages (all but the last) this conversation
+ * holds, reasoning included (#282). */
+static size_t common(const struct held *c, const geistr_message *m, char *const *reasoning, size_t n) {
     size_t k = 0;
-    while (k < c->n && k + 1 < n && same_role(c->role[k], m[k].role) && !strcmp(c->content[k], m[k].content))
+    while (k < c->n && k + 1 < n && same_role(c->role[k], m[k].role) && !strcmp(c->content[k], m[k].content) &&
+           same_reasoning(c->thought[k], reasoning ? reasoning[k] : nullptr))
         k++;
     return k;
 }
@@ -202,9 +215,11 @@ void svc_unload(struct svc_options *o, struct held *pool) {
 void svc_free_request(struct svc_request *r) {
     for (size_t i = 0; r->messages && i < r->n; i++)
         free((char *) r->messages[i].role), free((char *) r->messages[i].content);
+    for (size_t i = 0; r->reasoning && i < r->n; i++)
+        free(r->reasoning[i]);
     for (size_t i = 0; r->stop && i < r->n_stop; i++)
         free((char *) r->stop[i]);
-    free(r->messages), free((void *) r->stop), free(r->image);
+    free(r->messages), free((void *) r->reasoning), free((void *) r->stop), free(r->image);
     *r = (struct svc_request) {};
 }
 
@@ -241,8 +256,9 @@ static void *watch_run(void *arg) {
 void svc_chat(const struct svc_options *o, struct held *pool, const struct svc_request *r,
               const struct svc_sink *out) {
     static uint64_t       clock;
-    const geistr_message *m = r->messages;
-    size_t                n = r->n;
+    const geistr_message *m  = r->messages;
+    char *const          *rs = o->ignore_reasoning ? nullptr : r->reasoning; /* #282 */
+    size_t                n  = r->n;
     if (!n || !(r->temperature >= 0 && r->temperature <= 2)) {
         out->error(out->ctx, GEISTR_INVALID, "at least one message; temperature 0 to 2");
         return;
@@ -284,7 +300,7 @@ void svc_chat(const struct svc_options *o, struct held *pool, const struct svc_r
     size_t       keep = 0;
     for (size_t i = 0; i < o->chats; i++)
         if (pool[i].chat && same_options(&pool[i], r->temperature, reasoning, effort, stop)) {
-            size_t h = common(&pool[i], m, n);
+            size_t h = common(&pool[i], m, rs, n);
             if (!c || h > keep)
                 c = &pool[i], keep = h;
         }
@@ -310,6 +326,7 @@ void svc_chat(const struct svc_options *o, struct held *pool, const struct svc_r
         opts.thinking         = 1; /* its pieces keep a stream alive */
         opts.stop             = r->stop;
         opts.n_stop           = r->n_stop;
+        opts.keep_reasoning   = !o->ignore_reasoning; /* answers as the template has them sent back with it */
         if (geistr_chat_open(o->model, &opts, &c->chat) != GEISTR_OK) {
             out->error(out->ctx, GEISTR_INVALID, geistr_model_error(o->model)); /* e.g. an empty stop string */
             free(stop);
@@ -336,7 +353,7 @@ void svc_chat(const struct svc_options *o, struct held *pool, const struct svc_r
         struct watch w = {.chat = c->chat, .fd = out->fd, .stop = o->stop};
         pthread_t    t;
         const bool   watching = pthread_create(&t, nullptr, watch_run, &w) == 0;
-        s                     = geistr_chat_send(c->chat, n - keep, m + keep);
+        s = geistr_chat_send_reasoning(c->chat, n - keep, m + keep, rs ? (const char *const *) rs + keep : nullptr);
         atomic_store(&w.done, true);
         if (watching)
             pthread_join(t, nullptr);
@@ -352,12 +369,13 @@ void svc_chat(const struct svc_options *o, struct held *pool, const struct svc_r
         return;
     }
     for (size_t i = keep; i < n; i++)
-        (void) held_push(c, m[i].role, m[i].content);
+        (void) held_push(c, m[i].role, m[i].content, rs ? rs[i] : nullptr);
     /* Stream the answer; a client that goes away stops it. */
-    char        *text     = nullptr, *thinking = nullptr;
-    size_t       text_len = 0, thinking_len = 0;
+    char        *text     = nullptr, *thinking = nullptr, *as_is = nullptr;
+    size_t       text_len = 0, thinking_len = 0, as_is_len = 0;
     FILE        *answer   = open_memstream(&text, &text_len);
     FILE        *thought  = open_memstream(&thinking, &thinking_len);
+    FILE        *raw      = open_memstream(&as_is, &as_is_len); /* the reasoning untrimmed */
     bool         reasoned = false; /* the reasoning's first text, after its line breaks, went out */
     geistr_piece p        = {.size = sizeof p};
     bool         gone     = out->alive && !out->alive(out->ctx); /* accepted: a stream's headers go now */
@@ -372,6 +390,8 @@ void svc_chat(const struct svc_options *o, struct held *pool, const struct svc_r
             reasoned          = reasoned || len;
             if (thought && len)
                 fwrite(from, 1, len, thought);
+            if (raw)
+                fwrite(p.text, 1, p.len, raw);
             if (out->thought && len)
                 gone = !out->thought(out->ctx, from, len);
             else if (!out->thought && out->alive && time(nullptr) != beat)
@@ -391,23 +411,27 @@ void svc_chat(const struct svc_options *o, struct held *pool, const struct svc_r
         fclose(answer);
     if (thought)
         fclose(thought);
+    if (raw)
+        fclose(raw);
     for (size_t k = thinking ? strlen(thinking) : 0; k && strchr(" \t\r\n", thinking[k - 1]); k--)
         thinking[k - 1] = 0;
     /* The answer as the chat holds it: with its reasoning, which the chat
-     * keeps in a tool loop (Qwen3, Qwen3.5: #269, #276). A client that sends
-     * the answer back without it (the OpenAI and Ollama SDKs do) matches only
-     * up to here, so the answer comes back without reasoning, as the
-     * template renders that request. */
-    char *held = nullptr;
-    if (thinking && *thinking) {
-        const size_t len = strlen("<think>\n\n</think>\n\n") + strlen(thinking) + (text ? strlen(text) : 0) + 1;
-        held = malloc(len);
-        if (held)
-            snprintf(held, len, "<think>\n%s\n</think>\n\n%s", thinking, text ? text : "");
-    }
-    if (!held_push(c, "assistant", held ? held : text ? text : "") || (thinking && *thinking && !held))
+     * keeps as the template renders it sent back so (#282; Qwen3 and Qwen3.5
+     * in a tool loop, #269, #276; with --client-reasoning=ignore Qwen3.6+ not:
+     * nobody sends it). A client that sends the answer back with the same
+     * reasoning matches it. One that sends it back without (or with other
+     * reasoning) matches only up to here, so the answer comes back as the
+     * template renders that request. The key is the reasoning as generated,
+     * less its line breaks at the ends: what the templates strip at least
+     * (Qwen3 only those); where the response's reasoning differs from it
+     * (spaces at an end), the answer comes back as sent. */
+    char *key = as_is ? as_is + strspn(as_is, "\n") : nullptr;
+    for (size_t k = key ? strlen(key) : 0; k && key[k - 1] == '\n'; k--)
+        key[k - 1] = 0;
+    if (!held_push(c, "assistant", text ? text : "", thinking && *thinking ? key : nullptr) ||
+        (thinking && *thinking && !as_is))
         held_keep(c, 0), (void) geistr_chat_rewind(c->chat, 0); /* out of memory: match anew next time */
-    free(held);
+    free(as_is);
     geistr_stats st = {.size = sizeof st};
     (void) geistr_chat_stats(c->chat, &st);
     if (st.dropped_messages) /* the runtime's conversation is shorter now: match anew next time */
@@ -455,11 +479,12 @@ static void chat_request(const struct svc_options *o, struct held *pool, FILE *o
     int    list = json_field(j, 0, "messages");
     size_t n    = json_count(j, list) > 0 ? (size_t) json_count(j, list) : 0;
     struct svc_request r = {.messages    = calloc(n ? n : 1, sizeof *r.messages),
+                            .reasoning   = (char **) calloc(n ? n : 1, sizeof *r.reasoning),
                             .n           = n,
                             .temperature = json_number(j, json_field(j, 0, "temperature"), 0),
                             .max         = json_unsigned(j, json_field(j, 0, "max"), 0),
                             .think       = -1};
-    bool ok   = r.messages && n;
+    bool ok   = r.messages && r.reasoning && n;
     int  think = json_field(j, 0, "think"); /* #266: true, false; "effort": "low", "medium", "high" */
     if (think >= 0)
         r.think = json_bool(j, think, false) ? 1 : 0, r.strict = true;
@@ -473,6 +498,7 @@ static void chat_request(const struct svc_options *o, struct held *pool, FILE *o
         item                  = json_next(j, list, item);
         r.messages[k].role    = json_string(j, json_field(j, item, "role"));
         r.messages[k].content = json_string(j, json_field(j, item, "content"));
+        r.reasoning[k]        = json_string(j, json_field(j, item, "reasoning")); /* #282 */
         ok                    = r.messages[k].role && r.messages[k].content;
     }
     const bool show = json_bool(j, json_field(j, 0, "thinking"), false);

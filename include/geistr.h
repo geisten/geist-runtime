@@ -225,11 +225,18 @@ typedef struct geistr_chat_opts {
                                      the answer ends before the first match */
     size_t             n_stop;
     geistr_effort      effort;    /* default DEFAULT; only for a thinking chat (#266) */
+    int                keep_reasoning; /* nonzero (#282): each answer stays in the conversation as the
+                                          template renders it when the caller sends it back with its
+                                          reasoning (geistr_chat_send_reasoning). That changes
+                                          Qwen3.6+ only: it keeps the reasoning in every earlier
+                                          answer (preserve_thinking). Default 0: Qwen3.6+ keeps the
+                                          empty block (#266). Qwen3 and Qwen3.5 keep it in a tool
+                                          loop either way (#276). */
 } geistr_chat_opts;
 
 #define GEISTR_CHAT_OPTS_INIT                                                                      \
     {sizeof(geistr_chat_opts), 0.0f, 1.0f, 0, GEISTR_REASONING_AUTO, GEISTR_OVERFLOW_REFUSE, 0,       \
-     nullptr, 0, GEISTR_EFFORT_DEFAULT}
+     nullptr, 0, GEISTR_EFFORT_DEFAULT, 0}
 
 typedef struct geistr_message {
     const char *role;    /* "system", "user" or "assistant"; anything else counts as user */
@@ -263,6 +270,22 @@ void geistr_chat_close(geistr_chat *chat);
  * "<|eot_id|>", ...) is tokenized as the characters it is made of, never as
  * a role marker (docs/API.md, "Messages are text, not template"). */
 GEISTR_NODISCARD geistr_status geistr_chat_send(geistr_chat *chat, size_t count, const geistr_message messages[]);
+
+/* geistr_chat_send with each message's reasoning (#282), as a client sends an
+ * earlier answer back with it (OpenAI reasoning_content, Ollama thinking):
+ * reasoning[i] belongs to messages[i], nullptr for none; reasoning itself may
+ * be nullptr (= geistr_chat_send). "" is reasoning too: the template takes it
+ * as given and does not look for </think> in the content. Only assistant
+ * messages' reasoning counts, and only where the template renders
+ * reasoning_content: Qwen3 and Qwen3.5 in a tool loop (after the last user
+ * query), Qwen3.6+ in every answer (preserve_thinking). Elsewhere, and with
+ * GEISTR_REASONING_NONE, it is ignored (Gemma 4 renders it only after the
+ * last user message, which needs its tool format). The reasoning is text,
+ * tokenized as message contents are. Same rules as geistr_chat_send. */
+GEISTR_NODISCARD geistr_status geistr_chat_send_reasoning(geistr_chat         *chat,
+                                                          size_t               count,
+                                                          const geistr_message messages[],
+                                                          const char *const    reasoning[]);
 
 /* Messages in the conversation: every sent message and every answer (an
  * answer counts once it has started). Turns dropped by DROP_OLDEST are gone. */

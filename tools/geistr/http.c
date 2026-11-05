@@ -422,11 +422,17 @@ static char *with_calls(const struct json *j, int calls, const char *content) {
     return t.s;
 }
 
-/* messages, and with tools (a list, already checked) their rendering. */
-static bool read_messages(const struct json *j, struct svc_request *r, int tools) {
+/* messages, and with tools (a list, already checked) their rendering. An
+ * answer's reasoning (#282): OpenAI's reasoning_content, else reasoning (as
+ * vLLM and OpenRouter name it); Ollama's thinking. */
+static bool read_messages(const struct json *j, struct svc_request *r, int tools, bool openai) {
     int list = json_field(j, 0, "messages");
     int n    = json_count(j, list);
-    if (n < 1 || !(r->messages = calloc((size_t) n + 1, sizeof *r->messages))) /* +1: a system message for tools */
+    if (n < 1)
+        return false;
+    r->messages  = calloc((size_t) n + 1, sizeof *r->messages); /* +1: a system message for tools */
+    r->reasoning = (char **) calloc((size_t) n + 1, sizeof *r->reasoning);
+    if (!r->messages || !r->reasoning)
         return false;
     size_t k = 0, results = SIZE_MAX; /* results: the user turn that collects tool results */
     int    item = -1;
@@ -441,6 +447,12 @@ static bool read_messages(const struct json *j, struct svc_request *r, int tools
         if (!role || !content) {
             free(role), free(content);
             return r->n = k, false;
+        }
+        char *why = nullptr;
+        if (!strcmp(role, "assistant")) {
+            why = json_string(j, json_field(j, item, openai ? "reasoning_content" : "thinking"));
+            if (!why && openai)
+                why = json_string(j, json_field(j, item, "reasoning"));
         }
         int calls = json_field(j, item, "tool_calls");
         if (tools >= 0 && !strcmp(role, "assistant") && json_count(j, calls) > 0) {
@@ -468,6 +480,7 @@ static bool read_messages(const struct json *j, struct svc_request *r, int tools
         }
         r->messages[k].role    = role;
         r->messages[k].content = content;
+        r->reasoning[k]        = why;
         k++;
         if (!role || !content)
             return r->n = k, false;
@@ -497,7 +510,9 @@ static bool read_messages(const struct json *j, struct svc_request *r, int tools
         free((char *) r->messages[0].content), r->messages[0].content = t.s;
     else {
         memmove(r->messages + 1, r->messages, r->n * sizeof *r->messages);
-        r->messages[0] = (geistr_message) {strdup("system"), t.s};
+        memmove((void *) (r->reasoning + 1), (const void *) r->reasoning, r->n * sizeof *r->reasoning);
+        r->messages[0]  = (geistr_message) {strdup("system"), t.s};
+        r->reasoning[0] = nullptr;
         r->n++;
         if (!r->messages[0].role)
             return false;
@@ -851,7 +866,7 @@ static void openai_chat(const struct svc_options *o, struct held *pool, FILE *ou
         error_json(out, 400, true, "this model has no tool-calling format (tools work with Qwen3 models)", nullptr);
         return;
     }
-    if (!read_messages(j, &r, tools)) {
+    if (!read_messages(j, &r, tools, true)) {
         svc_free_request(&r);
         error_json(out, 400, true, "messages: a list of messages with role and content", nullptr);
         return;
@@ -1039,7 +1054,7 @@ static void ollama_chat(const struct svc_options *o, struct held *pool, FILE *ou
         error_json(out, 400, false, "this model has no tool-calling format (tools work with Qwen3 models)", nullptr);
         return;
     }
-    if (!read_messages(j, &r, tools)) {
+    if (!read_messages(j, &r, tools, false)) {
         svc_free_request(&r);
         error_json(out, 400, false, "messages: a list of messages with role and content", nullptr);
         return;

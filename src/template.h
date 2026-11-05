@@ -45,7 +45,8 @@ struct tpl_thinking {
     const char *on;         /* after the generation prompt, thinking: "" or "<think>\n" (Qwen3.5+) */
     const char *off;        /* after it, not thinking: the empty block; nullptr: no switch */
     const char *history;    /* before an earlier answer: Qwen3.6+'s preserve_thinking keeps an
-                               empty block there (the runtime keeps no reasoning); else "" */
+                               empty block there, its reasoning_content inside where the
+                               message has one (#282); else "" */
     const char *system_on;  /* Gemma 4: opens the system turn while thinking; else nullptr */
     const char *open, *close; /* the reasoning's markers in the output */
 };
@@ -98,11 +99,12 @@ struct tpl_extra {
     struct tpl_style style;
 };
 
-/* What an assistant message with content renders as between its turn's
+/* What an assistant message with content (and reasoning, as the template's
+ * reasoning_content: nullptr for none, #282) renders as between its turn's
  * opening and close: after the last user query (in_loop) or before it. A
  * malloc'd string, nullptr when out of memory. The chat compares it with what
  * the context holds after an answer (#266, #269). */
-char *tpl_render_answer(const struct tpl_extra *extra, const char *content, bool in_loop);
+char *tpl_render_answer(const struct tpl_extra *extra, const char *content, const char *reasoning, bool in_loop);
 
 /* A chat's extra text with thinking on or off (enable_thinking), at effort.
  * The style is left empty: the chat sets it (tpl_style_of). */
@@ -148,8 +150,15 @@ void tpl_spans_free(struct tpl_spans *spans);
  * order. Everything outside them is the template's own: turn markers, role
  * names, separators. The chat tokenizes the bodies with special tokens off,
  * so a message cannot spell a role marker. On failure (nullptr) *spans is
- * unchanged. spans nullptr: tpl_render_send. */
-char *tpl_render_send_spans(struct tpl_state *state, size_t n, const geistr_message msgs[], struct tpl_spans *spans);
+ * unchanged. spans nullptr: tpl_render_send. reasoning (nullptr: none):
+ * reasoning[i] is msgs[i]'s reasoning_content (#282), nullptr for none;
+ * an assistant message's renders where the template renders it (style
+ * loop; history, Qwen3.6+'s preserve_thinking), its range a span too. */
+char *tpl_render_send_spans(struct tpl_state    *state,
+                            size_t               n,
+                            const geistr_message msgs[],
+                            const char *const    reasoning[],
+                            struct tpl_spans    *spans);
 
 /* The generation prompt alone (opens the assistant turn): the suffix of
  * every tpl_render_send. The chat tokenizes it apart from the turns before

@@ -329,6 +329,19 @@ geistr_status geistr_chat_rewind(geistr_chat *c, size_t keep) {
 }
 
 geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_message messages[]) {
+    return geistr_chat_send_reasoning(c, count, messages, nullptr);
+}
+
+/* An assistant message's reasoning (#282) counts as tokens of its turn, so a
+ * test sees whether it arrived. */
+static uint32_t reasoning_tokens(const geistr_message *m, const char *reasoning) {
+    return reasoning && is_role(m, "assistant") ? message_tokens(reasoning) : 0;
+}
+
+geistr_status geistr_chat_send_reasoning(geistr_chat         *c,
+                                         size_t               count,
+                                         const geistr_message messages[],
+                                         const char *const    reasoning[]) {
     if (!c)
         return GEISTR_INVALID;
     atomic_store(&c->cancel, false);
@@ -344,7 +357,7 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
     uint32_t context = c->model->context;
     uint32_t adding  = 4 + 2; /* the answer's markers and the generation prompt */
     for (size_t i = 0; i < count; i++)
-        adding += message_tokens(messages[i].content);
+        adding += message_tokens(messages[i].content) + reasoning_tokens(&messages[i], reasoning ? reasoning[i] : nullptr);
     /* Plan the drop first, so a refusal leaves the chat unchanged. */
     size_t   first = c->n_turns && c->turns[0].system ? 1 : 0, drop = 0;
     uint32_t used  = c->used;
@@ -384,7 +397,8 @@ geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_messag
     c->n_turns -= drop;
     for (size_t i = 0; i < count; i++)
         c->turns[c->n_turns++] = (struct turn) {.system = is_role(&messages[i], "system"),
-                                                .tokens = message_tokens(messages[i].content)};
+                                                .tokens = message_tokens(messages[i].content) +
+                                                          reasoning_tokens(&messages[i], reasoning ? reasoning[i] : nullptr)};
     c->turns[c->n_turns++] = (struct turn) {.tokens = 4 + 2};
     recount(c);
 

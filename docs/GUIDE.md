@@ -388,9 +388,10 @@ explaining everything again.
 Qwen3, Qwen3.5, Qwen3.8, Bonsai 2 and Gemma 4 can reason before they answer.
 While they do, the chat shows `⠋ thinking · N s`. The reasoning itself is
 not shown, not kept in the conversation and not sent back to the model; only
-the answer is. (One exception, as its template has it: Qwen3.5 keeps its
-reasoning while tool results follow, until the next question, #269.) Over
-HTTP it comes apart from the answer ([HTTP](#http)).
+the answer is. (One exception, as its template has it: Qwen3.5 and Qwen3 keep
+their reasoning while tool results follow, until the next question, #269,
+#276.) Over HTTP it comes apart from the answer, and a client may send it back
+with the answer ([HTTP](#http)).
 
 Unless a setting or a request says otherwise, each model does what its chat
 template does by default (#266):
@@ -532,6 +533,7 @@ Models installed while it runs are offered at once. The socket protocol
 | `--chats N` | conversations kept in memory, 1 to 64 (default 2) |
 | `--max-request=MiB` | largest request, 1 to 1024 (default 16) |
 | `--thinking=on`, `--thinking=off` | thinking for requests that do not say, over the settings; models that cannot ignore it ([Thinking models](#thinking-models)) |
+| `--client-reasoning=use`, `--client-reasoning=ignore` | the reasoning clients send back with earlier answers: given to the chat template (default), or dropped; over the `client_reasoning` setting ([HTTP](#http)) |
 | `--cpu`, `--gpu`, `--threads N` | the processor, as everywhere |
 
 ### HTTP
@@ -558,10 +560,10 @@ started with, or no `model` at all; another name gets 404
 
 | endpoint | |
 |---|---|
-| `POST /v1/chat/completions` | OpenAI: `messages`, `temperature`, `max_tokens` / `max_completion_tokens`, `stop`, `stream` (SSE, `stream_options.include_usage`), `tools` / `tool_choice`, `reasoning_effort`, `chat_template_kwargs.enable_thinking` / `.reasoning_effort` |
+| `POST /v1/chat/completions` | OpenAI: `messages`, `temperature`, `max_tokens` / `max_completion_tokens`, `stop`, `stream` (SSE, `stream_options.include_usage`), `tools` / `tool_choice`, `reasoning_effort`, `chat_template_kwargs.enable_thinking` / `.reasoning_effort`, an answer's `reasoning_content` / `reasoning` |
 | `POST /v1/embeddings` | OpenAI: `input` (a text or a list), `encoding_format` (`float`, `base64`); with an embedding model |
 | `GET /v1/models` | the model, or without one every installed model |
-| `POST /api/chat` | Ollama: `messages`, `stream` (NDJSON, the default), `options.temperature`, `options.num_predict`, `options.stop`, `tools`, `images`, `think` |
+| `POST /api/chat` | Ollama: `messages`, `stream` (NDJSON, the default), `options.temperature`, `options.num_predict`, `options.stop`, `tools`, `images`, `think`, an answer's `thinking` |
 | `POST /api/embed` | Ollama: `input` (a text or a list); with an embedding model |
 | `GET /api/tags` | the same as Ollama's list |
 | `GET /api/version` | the geistr version |
@@ -595,12 +597,33 @@ one (Qwen3.8, Bonsai 2: `low`, `medium`, else `xhigh`, an instruction in the
 system turn; `minimal` is `low`, `high` is `xhigh`); other models only think.
 The reasoning comes apart from the answer, as llama.cpp and Ollama return
 it: OpenAI `message.reasoning_content` (streamed: `delta.reasoning_content`
-chunks before the content), Ollama `message.thinking`. A conversation sent
-back without it is what the model expects: earlier reasoning is not part of
-the history. Ollama's `think: true` for a model that does not think is 400
+chunks before the content), Ollama `message.thinking`. Ollama's `think: true` for a model that does not think is 400
 (`this model does not support thinking`), as in Ollama; `false`, and the
 OpenAI fields, are ignored there. A model that always thinks refuses off
 (400). A value that is none of these is 400.
+
+**Reasoning sent back** (#282). A client may send an earlier answer back with
+its reasoning: OpenAI `reasoning_content` (or `reasoning`, as vLLM and
+OpenRouter name it) and Ollama `thinking` on the assistant message, as the
+SDKs do when the response's message is appended to the conversation. geistr
+hands it to the chat template as `reasoning_content`, so the prompt is what
+the template renders for those messages (transformers, llama.cpp's
+`/apply-template`):
+
+| model | an earlier answer's reasoning, when sent back |
+|---|---|
+| Qwen3, Qwen3.5 | kept while tool results follow (a tool loop); dropped from the next question on |
+| Qwen3.8, Bonsai 2 | kept in every earlier answer (`preserve_thinking`) |
+| Gemma 4, others | not rendered |
+
+An answer sent back without its reasoning is rendered as its text, as before.
+The server keeps each answer with its reasoning, so a conversation sent back
+with it continues where it was (only the new messages are processed); one
+sent back without it goes back to that answer and processes it again (so
+does an answer cut off inside its reasoning, by `max_tokens`).
+`geistr serve --client-reasoning=ignore` (or `geistr config client_reasoning
+ignore`) drops the reasoning clients send, as before #282. There is no
+per-request switch: no client sends one.
 
 **Tool calling** works with Qwen3 models (`qwen3-0.6b` and the other
 Qwen3.x): send `tools`, get `tool_calls` back (`finish_reason: tool_calls`;
@@ -685,7 +708,8 @@ echo '{"op":"chat","messages":[{"role":"user","content":"Hi"}]}' | nc -U ~/.loca
 A chat request may also carry `"temperature"` (0 to 2), `"max"` (answer
 tokens; 0: the rest of the context), `"think"` (`true` or `false`, #266),
 `"effort"` (`"low"`, `"medium"`, `"high"`) and `"thinking": true` for the
-reasoning as `{"part":"thinking","text":"…"}` lines. On failure the last line is
+reasoning as `{"part":"thinking","text":"…"}` lines. An assistant message may
+carry its `"reasoning"`, as HTTP's `reasoning_content` (#282). On failure the last line is
 `{"error":"…","status":"…"}`. The details are in
 [`tools/geistr/service.h`](../tools/geistr/service.h).
 
@@ -756,6 +780,7 @@ geistr config system ""               # back to the default (empty)
 | `threads` | `0` | 0 to 1024 | CPU threads; 0: geistr chooses |
 | `thinking` | `on` | `on`, `off` | on: thinking models reason as their template has it by default; off: none does |
 | `<model>.thinking` | (the `thinking` setting) | `on`, `off` | one model reasons, or not ([Thinking models](#thinking-models)) |
+| `client_reasoning` | `use` | `use`, `ignore` | `geistr serve`: the reasoning clients send back with earlier answers goes to the chat template, or is dropped ([HTTP](#http)) |
 
 A value with spaces needs no quotes: `geistr config system Answer in German.`
 An empty value (`""`) resets a key to its default. In a chat, `/save` writes

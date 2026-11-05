@@ -24,6 +24,8 @@ struct settings {
     bool   markdown, stats, intro, resume, history;
     bool   thinking; /* for thinking models without a <id>.thinking of their own (#212): on, each as its
                         template has it by default (#266); off, none thinks */
+    char   client_reasoning[8]; /* serve (#282): "use" the reasoning clients send back with earlier
+                                   answers (the template's reasoning_content), or "ignore" it */
 };
 extern struct settings cfg;
 extern char            config_path[4200], data_dir[4096]; /* "" when unknown */

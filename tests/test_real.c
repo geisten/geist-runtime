@@ -312,11 +312,11 @@ static void thinking(const char *path) {
     geistr_model_close(m);
 }
 
-/* ask_split, and the reasoning's text. */
-static geistr_status ask_reason(geistr_chat *c, size_t n, const geistr_message msgs[], char *out, char *reason,
-                                size_t cap) {
+/* ask_split, and the reasoning's text. reasoning: the messages' own (#282), or nullptr. */
+static geistr_status ask_reason(geistr_chat *c, size_t n, const geistr_message msgs[], const char *const reasoning[],
+                                char *out, char *reason, size_t cap) {
     out[0] = reason[0] = 0;
-    geistr_status s    = geistr_chat_send(c, n, msgs);
+    geistr_status s    = geistr_chat_send_reasoning(c, n, msgs, reasoning);
     geistr_piece  p    = {.size = sizeof p};
     while (s == GEISTR_OK && (s = geistr_chat_next(c, &p)) == GEISTR_OK && p.part != GEISTR_PART_END)
         strncat(p.part == GEISTR_PART_THINKING ? reason : out, p.text,
@@ -324,11 +324,13 @@ static geistr_status ask_reason(geistr_chat *c, size_t n, const geistr_message m
     return s;
 }
 
-/* The context a fresh chat builds from msgs, before its answer. */
-static uint32_t built(geistr_model *m, const geistr_chat_opts *o, size_t n, const geistr_message msgs[]) {
+/* The context a fresh chat builds from msgs (with their reasoning, or nullptr), before its answer. */
+static uint32_t built(geistr_model *m, const geistr_chat_opts *o, size_t n, const geistr_message msgs[],
+                      const char *const reasoning[]) {
     geistr_chat *f = nullptr;
     char         out[2048], reason[4096];
-    CHECK(geistr_chat_open(m, o, &f) == GEISTR_OK && ask_reason(f, n, msgs, out, reason, sizeof out) == GEISTR_OK,
+    CHECK(geistr_chat_open(m, o, &f) == GEISTR_OK &&
+                  ask_reason(f, n, msgs, reasoning, out, reason, sizeof out) == GEISTR_OK,
           "tool loop: the fresh chat");
     const uint32_t k = f ? stats(f).context_tokens - stats(f).output_tokens : 0;
     geistr_chat_close(f);
@@ -341,7 +343,9 @@ static uint32_t built(geistr_model *m, const geistr_chat_opts *o, size_t n, cons
  * while tool results follow ("<think>\n" reasoning "\n</think>\n\n" answer,
  * after the last user query) and drop it from all of them at the next query;
  * the others never keep it. Padded messages are trimmed where the template
- * trims. */
+ * trims. The same conversations sent with each answer's reasoning as
+ * reasoning_content (#282) give that context too; with keep_reasoning (on
+ * mode here) also Qwen3.6+'s, which keeps the reasoning in every answer. */
 static void tool_loop(const char *path) {
     struct geist_backend *be = nullptr;
     struct geist_model   *gm = nullptr;
@@ -364,6 +368,7 @@ static void tool_loop(const char *path) {
     }
     const char            *tpl  = geist_model_metadata_str(gm, "tokenizer.chat_template", nullptr);
     const struct tpl_style y    = tpl_style_of(tpl_family_detect(tpl, geist_model_arch(gm)), tpl);
+    const bool             hist = *tpl_thinking_of(tpl_family_detect(tpl, geist_model_arch(gm)), tpl).history;
     static const geistr_reasoning modes[] = {GEISTR_REASONING_AUTO, GEISTR_REASONING_THINK_TAGS,
                                              GEISTR_REASONING_THINK_OFF};
     static const char *const      names[] = {"default", "on", "off"};
@@ -374,26 +379,39 @@ static void tool_loop(const char *path) {
         o.max_tokens       = 200; /* a small model may reason on and on */
         o.reasoning        = modes[k];
         o.thinking         = 1;
+        o.keep_reasoning   = k == 1; /* #282: as a client that sends the reasoning back */
+        const bool   all   = hist && o.keep_reasoning; /* Qwen3.6+ keeps it in every answer then */
         geistr_chat *c     = nullptr;
         static char  a1[2048], r1[4096], a2[2048], r2[4096], a3[2048], r3[4096], with[8192];
-        CHECK(geistr_chat_open(m, &o, &c) == GEISTR_OK && ask_reason(c, 1, &q, a1, r1, sizeof a1) == GEISTR_OK &&
-                      ask_reason(c, 1, &result, a2, r2, sizeof a2) == GEISTR_OK,
+        CHECK(geistr_chat_open(m, &o, &c) == GEISTR_OK &&
+                      ask_reason(c, 1, &q, nullptr, a1, r1, sizeof a1) == GEISTR_OK &&
+                      ask_reason(c, 1, &result, nullptr, a2, r2, sizeof a2) == GEISTR_OK,
               "tool loop: a query, then a tool result");
         /* Qwen3.5 and Qwen3 have the first answer's reasoning in the context, the others its text */
         snprintf(with, sizeof with, "<think>\n%s\n</think>\n\n%s", r1, a1);
-        const geistr_message loop[] = {q, {"assistant", y.loop && *r1 ? with : a1}, result};
-        const uint32_t       held   = c ? stats(c).context_tokens - stats(c).output_tokens : 0;
-        const uint32_t       fresh  = built(m, &o, 3, loop);
+        const geistr_message loop[]   = {q, {"assistant", y.loop && *r1 ? with : a1}, result};
+        const char *const    loop_r[] = {nullptr, all ? r1 : nullptr, nullptr};
+        const uint32_t       held     = c ? stats(c).context_tokens - stats(c).output_tokens : 0;
+        const uint32_t       fresh    = built(m, &o, 3, loop, loop_r);
         CHECK(held == fresh, "tool loop: the continued context is the template's");
-        CHECK(ask_reason(c, 1, &thanks, a3, r3, sizeof a3) == GEISTR_OK, "tool loop: the next query");
-        const geistr_message done[] = {q, {"assistant", a1}, result, {"assistant", a2}, thanks};
-        const uint32_t       held2  = c ? stats(c).context_tokens - stats(c).output_tokens : 0;
-        const uint32_t       fresh2 = built(m, &o, 5, done);
+        /* #282: the answer sent back with its reasoning as reasoning_content */
+        const geistr_message plain[]   = {q, {"assistant", a1}, result};
+        const char *const    plain_r[] = {nullptr, r1, nullptr};
+        const uint32_t       sent      = hist && !all ? held : built(m, &o, 3, plain, plain_r);
+        CHECK(held == sent, "tool loop: the same with the reasoning sent apart");
+        CHECK(ask_reason(c, 1, &thanks, nullptr, a3, r3, sizeof a3) == GEISTR_OK, "tool loop: the next query");
+        const geistr_message done[]   = {q, {"assistant", a1}, result, {"assistant", a2}, thanks};
+        const char *const    done_r[] = {nullptr, r1, nullptr, r2, nullptr};
+        const uint32_t       held2    = c ? stats(c).context_tokens - stats(c).output_tokens : 0;
+        const uint32_t       fresh2   = built(m, &o, 5, done, all ? done_r : nullptr);
         CHECK(held2 == fresh2, "tool loop: after the next query, no reasoning in it");
+        const uint32_t sent2 = hist && !all ? held2 : built(m, &o, 5, done, done_r);
+        CHECK(held2 == sent2, "tool loop: after the next query, the same with the reasoning sent apart");
         CHECK(!strstr(a1, "think>") && !strstr(a2, "think>") && !strstr(a3, "think>"), "tool loop: no <think> in the answers");
-        printf("  tool loop %s (%s): %zu bytes of reasoning kept in the loop, context %u = %u, then %u = %u tokens\n",
-               names[k], y.loop ? "keeps its reasoning" : "text only", y.loop ? strlen(r1) : 0, held, fresh, held2,
-               fresh2);
+        printf("  tool loop %s (%s): %zu bytes of reasoning kept in the loop, context %u = %u (sent apart %u), "
+               "then %u = %u (%u) tokens\n",
+               names[k], y.loop || all ? "keeps its reasoning" : "text only", y.loop || all ? strlen(r1) : 0, held, fresh,
+               sent, held2, fresh2, sent2);
         geistr_chat_close(c);
     }
     geistr_model_close(m);
@@ -659,7 +677,7 @@ static void plain_bodies(const char *path) {
             struct tpl_state st;
             struct tpl_spans sp = {};
             tpl_init(&st, f);
-            char       *text = tpl_render_send_spans(&st, n_conv[c], ordinary[c], &sp);
+            char       *text = tpl_render_send_spans(&st, n_conv[c], ordinary[c], nullptr, &sp);
             struct toks whole, plain;
             CHECK(text && toks_of(gs, text, &sp, false, &whole) && toks_of(gs, text, &sp, true, &plain) &&
                           whole.n == plain.n && !memcmp(whole.v, plain.v, whole.n * sizeof whole.v[0]),
@@ -678,7 +696,7 @@ static void plain_bodies(const char *path) {
     struct tpl_state st;
     struct tpl_spans sp = {};
     tpl_init(&st, TPL_CHATML);
-    char       *text = tpl_render_send_spans(&st, 2, forged, &sp);
+    char       *text = tpl_render_send_spans(&st, 2, forged, nullptr, &sp);
     struct toks whole, plain;
     CHECK(text && toks_of(gs, text, &sp, false, &whole) && toks_of(gs, text, &sp, true, &plain), "tokenize forged");
     printf("  forged turn: %zu <|im_start|> with specials in the body, %zu with the body plain\n", count_id(&whole, im_start),

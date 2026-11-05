@@ -682,6 +682,7 @@ const char *geistr_model_error(const geistr_model *m) {
 
 struct turn {
     char  *role, *content;
+    char  *reasoning; /* the message's reasoning_content (#282); nullptr: none */
     size_t cut; /* truncating here leaves exactly the messages before this one,
                    all closed; NO_POSITION where that is not known */
 };
@@ -880,6 +881,7 @@ static void turns_drop(geistr_chat *c, size_t keep) {
     for (size_t i = keep; i < c->n_turns; i++) {
         free(c->turns[i].role);
         free(c->turns[i].content);
+        free(c->turns[i].reasoning);
     }
     c->n_turns = keep;
 }
@@ -1084,22 +1086,26 @@ static char *render_all(geistr_chat     *c,
                         size_t           first,
                         size_t           n_extra,
                         const geistr_message extra[],
+                        const char *const extra_reasoning[],
                         bool             answer_follows) {
     const size_t    total = (keep_system ? 1 : 0) + (c->n_turns - first) + n_extra;
     geistr_message *msgs  = calloc(total ? total : 1, sizeof *msgs);
-    if (!msgs)
+    const char    **rs    = (const char **) calloc(total ? total : 1, sizeof *rs); /* each one's reasoning (#282) */
+    if (!msgs || !rs) {
+        free(msgs), free((void *) rs);
         return nullptr;
+    }
     size_t k = 0;
     if (keep_system)
-        msgs[k++] = (geistr_message) {c->turns[0].role, c->turns[0].content};
+        rs[k] = c->turns[0].reasoning, msgs[k++] = (geistr_message) {c->turns[0].role, c->turns[0].content};
     for (size_t i = first; i < c->n_turns; i++)
-        msgs[k++] = (geistr_message) {c->turns[i].role, c->turns[i].content};
+        rs[k] = c->turns[i].reasoning, msgs[k++] = (geistr_message) {c->turns[i].role, c->turns[i].content};
     for (size_t i = 0; i < n_extra; i++)
-        msgs[k++] = extra[i];
+        rs[k] = extra_reasoning ? extra_reasoning[i] : nullptr, msgs[k++] = extra[i];
     tpl_init_extra(st, c->model->family, &c->extra);
     spans->n   = 0;
-    char *text = tpl_render_send_spans(st, k, msgs, spans);
-    free(msgs);
+    char *text = tpl_render_send_spans(st, k, msgs, rs, spans);
+    free(msgs), free((void *) rs);
     if (text && !answer_follows) { /* drop the generation prompt */
         const size_t g = strlen(tpl_generation_prompt(c->model->family)), n = strlen(text);
         text[n >= g ? n - g : 0] = 0;
@@ -1152,16 +1158,27 @@ static bool raw_append(geistr_chat *c, const char *text) {
     return true;
 }
 
-/* The answer becomes the content of its assistant turn (open or not). */
-static bool answer_commit(geistr_chat *c) {
+/* The answer becomes the content of its assistant turn (open or not): the
+ * generated text, or as (as, reasoning) where the chat keeps the answer as the
+ * template renders it with its reasoning (keep_reasoning, #282). */
+static bool answer_commit_as(geistr_chat *c, const char *as, const char *reasoning) {
     if (!c->answering && !c->open)
         return true;
-    char *content = strdup(c->raw ? c->raw : "");
-    if (!content)
+    char *content = strdup(as ? as : c->raw ? c->raw : "");
+    char *r       = reasoning ? strdup(reasoning) : nullptr;
+    if (!content || (reasoning && !r)) {
+        free(content), free(r);
         return false;
+    }
     free(c->turns[c->answer_turn].content);
-    c->turns[c->answer_turn].content = content;
+    free(c->turns[c->answer_turn].reasoning);
+    c->turns[c->answer_turn].content   = content;
+    c->turns[c->answer_turn].reasoning = r;
     return true;
+}
+
+static bool answer_commit(geistr_chat *c) {
+    return answer_commit_as(c, nullptr, nullptr);
 }
 
 static void answer_reset(geistr_chat *c) {
@@ -1187,14 +1204,15 @@ static bool turns_reserve(geistr_chat *c, size_t more) {
     return true;
 }
 
-static bool turn_push(geistr_chat *c, const char *role, const char *content, size_t cut) {
-    char *r = strdup(role ? role : "user"), *t = strdup(content);
-    if (!r || !t) {
+static bool turn_push(geistr_chat *c, const char *role, const char *content, const char *reasoning, size_t cut) {
+    char *r = strdup(role ? role : "user"), *t = strdup(content), *why = reasoning ? strdup(reasoning) : nullptr;
+    if (!r || !t || (reasoning && !why)) {
         free(r);
         free(t);
+        free(why);
         return false;
     }
-    c->turns[c->n_turns++] = (struct turn) {r, t, cut};
+    c->turns[c->n_turns++] = (struct turn) {r, t, why, cut};
     return true;
 }
 
@@ -1202,17 +1220,18 @@ static bool turn_push(geistr_chat *c, const char *role, const char *content, siz
  * first (a system turn stays), then the oldest new messages (a leading
  * system message stays, the last one always)? kept is scratch of count. */
 static geistr_status drop_fits(geistr_chat *c, bool system, bool new_system, const geistr_message *messages,
-                               size_t count, size_t go, geistr_message *kept, bool *fits) {
+                               const char *const *reasoning, size_t count, size_t go, geistr_message *kept,
+                               const char **kept_r, bool *fits) {
     const size_t held  = c->n_turns - (system ? 1 : 0);
     const size_t first = (system ? 1 : 0) + (go < held ? go : held), skip = go > held ? go - held : 0;
     size_t       k     = 0;
     if (new_system)
-        kept[k++] = messages[0];
+        kept_r[k] = reasoning ? reasoning[0] : nullptr, kept[k++] = messages[0];
     for (size_t i = (new_system ? 1 : 0) + skip; i < count; i++)
-        kept[k++] = messages[i];
+        kept_r[k] = reasoning ? reasoning[i] : nullptr, kept[k++] = messages[i];
     struct tpl_state fresh = {};
     struct tpl_spans spans = {};
-    char            *all   = render_all(c, &fresh, &spans, system, first, k, kept, true);
+    char            *all   = render_all(c, &fresh, &spans, system, first, k, kept, kept_r, true);
     tpl_free(&fresh);
     if (!all) {
         tpl_spans_free(&spans);
@@ -1254,7 +1273,8 @@ static bool concat_equal(const char *a, const char *b, const char *c, const char
     }
 }
 
-static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_message messages[]) {
+static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_message messages[],
+                               const char *const reasoning[]) {
     atomic_store(&c->cancel, false);
     if (!count || !messages)
         return fail(c, GEISTR_INVALID, "send needs at least one message");
@@ -1267,9 +1287,11 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
         return fail(c, GEISTR_INVALID, "a message with an image cannot contain U+001F");
     /* A thinking model's earlier reasoning is not part of its history: the
      * templates of Qwen3, QwQ and DeepSeek-R1 drop it, and the models are
-     * trained so; kept, Qwen3's next answer is empty or wrong (#96). The
-     * runtime keeps no reasoning, so an earlier answer is what the template
-     * renders for an assistant message without reasoning_content: its text,
+     * trained so; kept, Qwen3's next answer is empty or wrong (#96). Of its
+     * own answers the runtime keeps no reasoning (a caller's assistant
+     * message renders with the reasoning it sent, #282), so an earlier answer
+     * is what the template renders for an assistant message without
+     * reasoning_content: its text,
      * after Qwen3.6+'s empty block (#266), trimmed where the template trims
      * (#269). Where the context holds something else (the reasoning, or the
      * empty block of thinking off before Qwen3's and Qwen3.5's answers), the
@@ -1282,12 +1304,20 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
      * reasoning "\n</think>\n\n" answer, as the templates render the
      * assistant messages after the last query (Qwen3: an answer without
      * reasoning as its text alone); the next query takes the reasoning out of
-     * all of them again. */
+     * all of them again.
+     *
+     * With keep_reasoning (#282) an answer is what the template renders for
+     * it sent back with its reasoning_content: Qwen3.6+ (preserve_thinking)
+     * keeps "<think>\n" reasoning "\n</think>\n\n" before every answer; the
+     * turn holds the answer and its reasoning apart. */
+    bool committed = false; /* the answer's turn is written already */
     if (c->mode != THINK_RAW) {
         const bool answer = (c->answering || c->open) && c->raw;
         const bool query  = tpl_has_query(&c->extra.style, count, messages);
         size_t     from   = c->n_turns; /* the first held turn to render again */
         char      *kept   = nullptr;    /* the answer's content as the template has it */
+        char      *kept_r = nullptr;    /* and its reasoning, where the turn holds it apart (#282) */
+        bool       keep_r = false;
         if (answer) {
             const char *open = c->model->think.open, *close = c->model->think.close;
             const char *lead   = c->raw + strspn(c->raw, " \t\r\n");
@@ -1300,18 +1330,23 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
             const bool  loop = c->extra.style.loop && !query;
             const char *r    = !inside ? "" : opened ? c->raw : lead + strlen(open);
             const int   r_n  = (int) (!inside ? 0 : end ? (size_t) (end - r) : strlen(r));
+            /* Qwen3.6+ (history) with keep_reasoning: the answer and its reasoning apart */
+            keep_r           = c->opts.keep_reasoning && inside && !c->extra.style.loop && c->extra.history &&
+                     *c->extra.history;
             const size_t n   = (loop ? strlen("<think>\n\n</think>\n\n") + (size_t) r_n : 0) + strlen(after) + 1;
             char        *want = nullptr;
             kept              = malloc(n);
-            if (kept) {
+            if (keep_r)
+                kept_r = strndup(r, (size_t) r_n);
+            if (kept && (!keep_r || kept_r)) {
                 if (loop) /* Qwen3, Qwen3.5: markers are <think> */
                     snprintf(kept, n, "<think>\n%.*s\n</think>\n\n%s", r_n, r, after);
                 else
                     snprintf(kept, n, "%s", after);
-                want = tpl_render_answer(&c->extra, kept, loop);
+                want = tpl_render_answer(&c->extra, kept, kept_r, loop);
             }
             if (!want) {
-                free(kept);
+                free(kept), free(kept_r);
                 return fail(c, GEISTR_NO_MEMORY, "out of memory");
             }
             /* the context holds gen + raw; the template has want */
@@ -1331,32 +1366,42 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
                     from = i;
         }
         if (from < c->n_turns) {
-            const size_t    k     = c->n_turns - from;
-            geistr_message *again = calloc(k + count, sizeof *again); /* again[0, k): copies, freed below */
-            bool            ok    = again != nullptr;
+            const size_t    k       = c->n_turns - from;
+            geistr_message *again   = calloc(k + count, sizeof *again); /* again[0, k): copies, freed below */
+            char          **again_r = (char **) calloc(k + count, sizeof *again_r); /* their reasoning (#282) */
+            bool            ok      = again && again_r;
             for (size_t i = 0; ok && i < k; i++) {
-                const bool is_answer = answer && from + i == c->answer_turn;
-                again[i]             = (geistr_message) {strdup(c->turns[from + i].role),
-                                                         strdup(is_answer ? kept : c->turns[from + i].content)};
-                ok                   = again[i].role && again[i].content;
+                const bool  is_answer = answer && from + i == c->answer_turn;
+                const char *why       = is_answer ? kept_r : c->turns[from + i].reasoning;
+                again[i]              = (geistr_message) {strdup(c->turns[from + i].role),
+                                                          strdup(is_answer ? kept : c->turns[from + i].content)};
+                again_r[i]            = why ? strdup(why) : nullptr;
+                ok                    = again[i].role && again[i].content && (!why || again_r[i]);
             }
             geistr_status st = ok ? geistr_chat_rewind(c, from) : GEISTR_NO_MEMORY;
             if (st == GEISTR_OK) {
                 memcpy(again + k, messages, count * sizeof *again);
-                st = chat_send(c, k + count, again);
+                for (size_t i = 0; reasoning && i < count; i++)
+                    again_r[k + i] = (char *) reasoning[i]; /* borrowed: not freed below */
+                st = chat_send(c, k + count, again, (const char *const *) again_r);
             } else if (st == GEISTR_NO_MEMORY)
                 st = fail(c, st, "out of memory");
             for (size_t i = 0; again && i < k; i++) {
                 free((char *) again[i].role);
                 free((char *) again[i].content);
+                free(again_r ? again_r[i] : nullptr);
             }
-            free(again);
-            free(kept);
+            free(again), free((void *) again_r);
+            free(kept), free(kept_r);
             return st;
         }
-        free(kept);
+        const bool failed = keep_r && !answer_commit_as(c, kept, kept_r); /* the turn as kept (#282) */
+        committed         = keep_r && !failed;
+        free(kept), free(kept_r);
+        if (failed)
+            return fail(c, GEISTR_NO_MEMORY, "out of memory");
     }
-    if (!answer_commit(c) || !turns_reserve(c, count + 1))
+    if (!(committed || answer_commit(c)) || !turns_reserve(c, count + 1))
         return fail(c, GEISTR_NO_MEMORY, "out of memory");
 
     const double start = now_ms();
@@ -1379,7 +1424,7 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
     }
     struct tpl_spans spans = {};
     char            *text  = (!c->image || opened)
-                                     ? tpl_render_send_spans(&st, count, with_image ? with_image : messages, &spans)
+                                     ? tpl_render_send_spans(&st, count, with_image ? with_image : messages, reasoning, &spans)
                                      : nullptr;
     free(with_image);
     free(opened);
@@ -1419,9 +1464,11 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
     size_t       input  = adding;
     uint32_t     dropped = 0, dropped_new = 0; /* held turns, and new messages, that went */
     bool         rebuilt = false;
-    const geistr_message *msgs = messages; /* what is sent: fewer when the oldest new ones went */
+    const geistr_message *msgs   = messages; /* what is sent: fewer when the oldest new ones went */
+    const char *const    *msgs_r = reasoning; /* their reasoning (#282) */
     size_t                n_msgs = count;
     geistr_message       *kept   = nullptr;
+    const char          **kept_r = nullptr;
 
     if (s == GEISTR_OK && len0 + adding + 1 > c->model->context) {
         /* ponytail: a rebuild replays text only, so an image must fit as is */
@@ -1442,17 +1489,18 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
             const size_t fixed      = (new_system ? 1 : 0) + 1; /* a leading system message, the last one */
             const size_t sendable   = count > fixed ? count - fixed : 0;  /* new messages that may go */
             kept                    = calloc(count, sizeof *kept);
+            kept_r                  = (const char **) calloc(count, sizeof *kept_r);
             size_t lo = 0, hi = held + sendable;                     /* how many go */
             bool   fit_hi = false;
-            s             = kept ? GEISTR_OK : GEISTR_NO_MEMORY;
+            s             = kept && kept_r ? GEISTR_OK : GEISTR_NO_MEMORY;
             if (s == GEISTR_OK)
-                s = drop_fits(c, system, new_system, messages, count, hi, kept, &fit_hi);
+                s = drop_fits(c, system, new_system, messages, reasoning, count, hi, kept, kept_r, &fit_hi);
             if (s == GEISTR_OK && !fit_hi)
                 s = fail(c, GEISTR_CONTEXT, "the conversation does not fit the context window");
             while (s == GEISTR_OK && lo < hi) {
                 size_t mid = lo + (hi - lo) / 2;
                 bool   fit = false;
-                s          = drop_fits(c, system, new_system, messages, count, mid, kept, &fit);
+                s          = drop_fits(c, system, new_system, messages, reasoning, count, mid, kept, kept_r, &fit);
                 if (fit)
                     hi = mid;
                 else
@@ -1465,10 +1513,10 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
                 if (dropped_new) {
                     size_t k = 0;
                     if (new_system)
-                        kept[k++] = messages[0];
+                        kept_r[k] = reasoning ? reasoning[0] : nullptr, kept[k++] = messages[0];
                     for (size_t i = (new_system ? 1 : 0) + dropped_new; i < count; i++)
-                        kept[k++] = messages[i];
-                    msgs = kept, n_msgs = k;
+                        kept_r[k] = reasoning ? reasoning[i] : nullptr, kept[k++] = messages[i];
+                    msgs = kept, msgs_r = kept_r, n_msgs = k;
                 }
             }
             if (s == GEISTR_OK) {
@@ -1478,6 +1526,7 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
                 for (size_t i = system ? 1 : 0; i < keep_from; i++) {
                     free(c->turns[i].role);
                     free(c->turns[i].content);
+                    free(c->turns[i].reasoning);
                 }
                 memmove(c->turns + (system ? 1 : 0),
                         c->turns + keep_from,
@@ -1486,7 +1535,7 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
                 for (size_t i = 0; i < c->n_turns; i++)
                     c->turns[i].cut = NO_POSITION;
                 struct tpl_state fresh = {};
-                char *all = render_all(c, &fresh, &spans, false, 0, n_msgs, msgs, true);
+                char *all = render_all(c, &fresh, &spans, false, 0, n_msgs, msgs, msgs_r, true);
                 if (!all) {
                     tpl_free(&fresh);
                     s = GEISTR_NO_MEMORY;
@@ -1528,7 +1577,7 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
                 hist_cut(c, len0);
             if (ts != GEIST_OK) {
                 struct tpl_state fresh = {};
-                char *all = render_all(c, &fresh, &spans, false, 0, 0, nullptr, false);
+                char *all = render_all(c, &fresh, &spans, false, 0, 0, nullptr, nullptr, false);
                 if (all)
                     (void) refill(c, all, &spans, nullptr);
                 free(all);
@@ -1547,7 +1596,7 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
     tpl_spans_free(&spans);
     if (s != GEISTR_OK) {
         tpl_free(&st);
-        free(kept);
+        free(kept), free((void *) kept_r);
         return s;
     }
 
@@ -1555,13 +1604,14 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
      * answer's turn are part of the conversation. */
     const size_t base = len0 + close.n;
     for (size_t i = 0; i < n_msgs; i++)
-        if (!turn_push(c, msgs[i].role, msgs[i].content, !rebuilt && i == 0 ? base : NO_POSITION)) {
-            free(kept);
+        if (!turn_push(c, msgs[i].role, msgs[i].content, msgs_r ? msgs_r[i] : nullptr,
+                       !rebuilt && i == 0 ? base : NO_POSITION)) {
+            free(kept), free((void *) kept_r);
             return fail(c, GEISTR_NO_MEMORY, "out of memory");
         }
-    free(kept);
+    free(kept), free((void *) kept_r);
     c->answer_turn = c->n_turns;
-    if (!turn_push(c, "assistant", "", rebuilt ? NO_POSITION : answer_at - prompt.n))
+    if (!turn_push(c, "assistant", "", nullptr, rebuilt ? NO_POSITION : answer_at - prompt.n))
         return fail(c, GEISTR_NO_MEMORY, "out of memory");
     tpl_free(&c->tpl);
     c->tpl = st;
@@ -1594,9 +1644,16 @@ static geistr_status chat_send(geistr_chat *c, size_t count, const geistr_messag
 }
 
 geistr_status geistr_chat_send(geistr_chat *c, size_t count, const geistr_message messages[]) {
+    return geistr_chat_send_reasoning(c, count, messages, nullptr);
+}
+
+geistr_status geistr_chat_send_reasoning(geistr_chat         *c,
+                                         size_t               count,
+                                         const geistr_message messages[],
+                                         const char *const    reasoning[]) {
     if (!c)
         return GEISTR_INVALID;
-    geistr_status s = chat_send(c, count, messages);
+    geistr_status s = chat_send(c, count, messages, reasoning);
     if (c->image) /* one send, one image */
         stbi_image_free(c->image), c->image = nullptr;
     return s;
@@ -2081,7 +2138,7 @@ geistr_status geistr_chat_rewind(geistr_chat *c, size_t keep) {
      * fold, whether a system message still leads). */
     struct tpl_state fresh = {};
     struct tpl_spans spans = {};
-    char            *all   = render_all(c, &fresh, &spans, false, 0, 0, nullptr, false);
+    char            *all   = render_all(c, &fresh, &spans, false, 0, 0, nullptr, nullptr, false);
     if (!all) {
         tpl_free(&fresh);
         tpl_spans_free(&spans);

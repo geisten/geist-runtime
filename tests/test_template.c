@@ -251,7 +251,7 @@ static void body_spans(void) {
             struct tpl_spans sp = {};
             tpl_init(&st, f);
             tpl_init(&st0, f);
-            char *text     = tpl_render_send_spans(&st, n, convs[c].msgs, &sp);
+            char *text     = tpl_render_send_spans(&st, n, convs[c].msgs, nullptr, &sp);
             char *scaffold = tpl_render_send(&st0, n, empty);
             char *plain    = whole(f, n, convs[c].msgs);
             char  name[160];
@@ -268,7 +268,7 @@ static void body_spans(void) {
             for (size_t i = 0; i <= n; i++) {
                 if (i < n && strcmp(convs[c].msgs[i].role, "assistant"))
                     continue;
-                text     = tpl_render_send_spans(&st, i - first, convs[c].msgs + first, &sp);
+                text     = tpl_render_send_spans(&st, i - first, convs[c].msgs + first, nullptr, &sp);
                 scaffold = tpl_render_send(&st0, i - first, empty + first);
                 snprintf(name, sizeof name, "spans %s: %s, send at %zu", tpl_family_name(f), convs[c].name, first);
                 spans_cover(name, text, &sp, scaffold, n, convs[c].msgs);
@@ -408,7 +408,8 @@ static void thinking_goldens(void) {
                 continue;
             struct tpl_state st;
             tpl_init_extra(&st, f, &x);
-            char *text = tpl_render_send(&st, THINKING_CONVS[c].n, THINKING_CONVS[c].m);
+            char *text = tpl_render_send_spans(&st, THINKING_CONVS[c].n, THINKING_CONVS[c].m, THINKING_CONVS[c].r,
+                                               nullptr);
             tpl_free(&st);
             append(&text, on ? t.on : t.off);
             eq(name, g->text, text);
@@ -514,7 +515,7 @@ static void message_style(void) {
     struct tpl_state st;
     struct tpl_spans sp = {};
     tpl_init_extra(&st, TPL_CHATML, &x);
-    char *text = tpl_render_send_spans(&st, sizeof msgs / sizeof *msgs, msgs, &sp);
+    char *text = tpl_render_send_spans(&st, sizeof msgs / sizeof *msgs, msgs, nullptr, &sp);
     tpl_free(&st);
     check(text && sp.n == sizeof bodies / sizeof *bodies, "style: one span per trimmed body");
     for (size_t i = 0; text && i < sp.n && i < sizeof bodies / sizeof *bodies; i++)
@@ -531,31 +532,74 @@ static void message_style(void) {
     tpl_spans_free(&sp);
 
     /* an answer, as the chat compares it with the context */
-    char *a = tpl_render_answer(&x, "R\n</think>\n\nA ", true), *b = tpl_render_answer(&x, "R\n</think>\n\nA ", false);
+    char *a = tpl_render_answer(&x, "R\n</think>\n\nA ", nullptr, true), *b = tpl_render_answer(&x, "R\n</think>\n\nA ", nullptr, false);
     eq("answer in the loop", "<think>\nR\n</think>\n\nA", a);
     eq("answer before a query", "A", b);
     free(a), free(b);
     const struct tpl_extra q36 = {.history = "<think>\n\n</think>\n\n", .style = {.trim = true}};
-    a = tpl_render_answer(&q36, " A\n", false);
+    a = tpl_render_answer(&q36, " A\n", nullptr, false);
     eq("answer after Qwen3.6+'s empty block, trimmed", "<think>\n\n</think>\n\nA", a);
     free(a);
     const struct tpl_extra plain = {};
-    a = tpl_render_answer(&plain, " A\n", false);
+    a = tpl_render_answer(&plain, " A\n", nullptr, false);
     eq("answer as it is", " A\n", a);
     free(a);
 
     /* Qwen3's loop (#276): untrimmed, the reasoning stripped of line breaks
      * only, no block without reasoning, the split before the last query too */
     const struct tpl_extra x3 = {.style = q3};
-    a = tpl_render_answer(&x3, "<think>\n R \n</think>\n\n A ", true);
+    a = tpl_render_answer(&x3, "<think>\n R \n</think>\n\n A ", nullptr, true);
     eq("Qwen3: answer in the loop", "<think>\n R \n</think>\n\n A ", a);
     free(a);
-    a = tpl_render_answer(&x3, "<think>\n\n</think>\n\nA", true);
+    a = tpl_render_answer(&x3, "<think>\n\n</think>\n\nA", nullptr, true);
     eq("Qwen3: no block without reasoning", "A", a);
     free(a);
-    a = tpl_render_answer(&x3, "<think>\nR\n</think>\n\nA\n", false);
+    a = tpl_render_answer(&x3, "<think>\nR\n</think>\n\nA\n", nullptr, false);
     eq("Qwen3: answer before a query", "A\n", a);
     free(a);
+
+    /* reasoning_content given (#282): the content is not split; Qwen3 strips
+     * line breaks off the reasoning and the content in the loop, keeps the
+     * content as it is before a query and renders no block for empty
+     * reasoning; Qwen3.5 and Qwen3.6+ trim; Qwen3.6+ keeps it in every answer */
+    const struct {
+        const struct tpl_extra *x;
+        const char             *content, *reasoning;
+        bool                    in_loop;
+        const char             *want, *name;
+    } given[] = {
+            {&x, " A ", " R\n", true, "<think>\nR\n</think>\n\nA", "Qwen3.5: given reasoning in the loop"},
+            {&x, " A ", " R\n", false, "A", "Qwen3.5: given reasoning before a query"},
+            {&x, "X</think>A", "", true, "<think>\n\n</think>\n\nX</think>A", "Qwen3.5: empty reasoning, no split"},
+            {&x3, "\n A", "\nR \n", true, "<think>\nR \n</think>\n\n A", "Qwen3: given reasoning in the loop"},
+            {&x3, "\n A", "\nR \n", false, "\n A", "Qwen3: given reasoning before a query"},
+            {&x3, "\n A", "\n", true, "<think>\n\n</think>\n\n A", "Qwen3: reasoning of line breaks is reasoning"},
+            {&x3, "\n<think>R</think>A", "", true, "\n<think>R</think>A", "Qwen3: empty reasoning, no block, no split"},
+            {&q36, " A\n", " R \n", false, "<think>\nR\n</think>\n\nA", "Qwen3.6+: the reasoning in every answer"},
+            {&q36, "A", "", false, "<think>\n\n</think>\n\nA", "Qwen3.6+: empty reasoning is the empty block"},
+            {&plain, " A\n", "R", false, " A\n", "no thinking: the reasoning is not rendered"},
+    };
+    for (size_t i = 0; i < sizeof given / sizeof *given; i++) {
+        a = tpl_render_answer(given[i].x, given[i].content, given[i].reasoning, given[i].in_loop);
+        eq(given[i].name, given[i].want, a);
+        free(a);
+    }
+    /* the given reasoning is a body: tokenized as text, its range a span */
+    const geistr_message turns[]  = {{"user", "Hi"}, {"assistant", " A "}, {"user", "B"}};
+    const char *const    why[]    = {nullptr, " R ", nullptr};
+    const char *const    order[]  = {"Hi", "R", "A", "B"};
+    struct tpl_state     st36;
+    struct tpl_spans     sp36 = {};
+    tpl_init_extra(&st36, TPL_CHATML, &q36);
+    char *t36 = tpl_render_send_spans(&st36, 3, turns, why, &sp36);
+    tpl_free(&st36);
+    check(t36 && sp36.n == 4, "reasoning: a span of its own");
+    for (size_t i = 0; t36 && i < sp36.n && i < 4; i++)
+        check(sp36.v[i].end - sp36.v[i].begin == strlen(order[i]) &&
+                      !memcmp(t36 + sp36.v[i].begin, order[i], strlen(order[i])),
+              order[i]);
+    free(t36);
+    tpl_spans_free(&sp36);
 }
 
 int main(void) {
@@ -573,6 +617,6 @@ int main(void) {
         fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;
     }
-    puts("templates: geist-serve goldens, incremental = whole for 5 families, body spans, generation prompts, thinking off, closes, detection, stops, thinking on/off, trim and tool loops for 5 templates, message styles passed");
+    puts("templates: geist-serve goldens, incremental = whole for 5 families, body spans, generation prompts, thinking off, closes, detection, stops, thinking on/off, trim, tool loops and reasoning_content for 5 templates, message styles passed");
     return 0;
 }

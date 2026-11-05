@@ -43,6 +43,21 @@
     llama.cpp on the real templates of Qwen3, Qwen3.5, Qwen3.8, Bonsai 2
     and Gemma 4). Gemma 4 can think now (`<|think|>`, its reasoning in
     `<|channel>thought … <channel|>`).
+- `geistr serve` reads the reasoning clients send back with earlier answers
+  (#282): OpenAI `reasoning_content` (also `reasoning`), Ollama `thinking`,
+  the socket protocol's `"reasoning"`.
+  - It goes to the chat template as `reasoning_content`, so the prompt is the
+    template's for those messages. Qwen3 and Qwen3.5 keep it while tool
+    results follow; Qwen3.8 and Bonsai 2 in every earlier answer
+    (`preserve_thinking`). Before, it was dropped, and such a client's
+    context differed from the template's.
+  - The service holds each answer with its reasoning: a conversation sent
+    back with it continues without processing the answer again.
+  - `geistr serve --client-reasoning=use|ignore` and the setting
+    `client_reasoning` (default `use`); `ignore` drops it, as before.
+  - Library: `geistr_chat_send_reasoning` (each message's reasoning) and
+    `geistr_chat_opts.keep_reasoning` (the chat's own answers as sent back
+    with their reasoning; changes Qwen3.6+ only).
 - Experimental: early exit from reasoning (geistlib#236).
   - `geistr decide ... --escalate chat --early-exit [--probe-interval N]
     [--exit-threshold P]` probes the thinking model's answer every N tokens

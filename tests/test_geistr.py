@@ -1370,6 +1370,95 @@ def section_tools():
     print('geistr serve --http tools (Qwen3): OpenAI call (plain, streamed), the result back, Ollama call and result, no tools, '
           'thinking on/off per request (reasoning_content, message.thinking, socket think) passed')
 
+def section_reasoning():
+    """#282: the reasoning a client sends back with an earlier answer (OpenAI reasoning_content or reasoning,
+    Ollama thinking, the socket's reasoning) goes to Qwen3's template, which keeps it in a tool loop: the
+    context then is a fresh chat's of the same messages, the held answer matches it (only the new message is
+    processed), and an answer sent back without its reasoning does not. --client-reasoning=ignore (or the
+    client_reasoning setting) drops it, as before."""
+    import http.client, socket as unix
+    qwen = os.environ['GEISTR_TEST_TOOLS_MODEL']
+
+    def start(*extra):
+        probe = unix.socket(); probe.bind(('127.0.0.1', 0)); port = probe.getsockname()[1]; probe.close()
+        sock = f'/tmp/geistr-rc-{os.getpid()}-{port}.sock'
+        service = subprocess.Popen([geistr, 'serve', qwen, f'--socket={sock}', f'--http=127.0.0.1:{port}', '--cpu',
+                                    '--models', models, *extra], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                   text=True, env=env)
+        deadline = time.time() + 120
+        while True:
+            try:
+                c = http.client.HTTPConnection('127.0.0.1', port, timeout=5); c.request('GET', '/'); c.getresponse(); c.close()
+                return service, port, sock
+            except OSError:
+                assert time.time() < deadline and service.poll() is None, service.stderr.read()
+                time.sleep(.5)
+
+    def line(sock, body):  # the socket: (answer, reasoning as it came, done line)
+        s = unix.socket(unix.AF_UNIX); s.connect(sock)
+        s.sendall((json.dumps({'op': 'chat', **body}) + '\n').encode())
+        lines = [json.loads(l) for l in s.makefile().read().splitlines()]; s.close()
+        assert 'done' in lines[-1], lines[-3:]
+        text = ''.join(l['text'] for l in lines if l.get('part') == 'answer')
+        return text, ''.join(l['text'] for l in lines if l.get('part') == 'thinking'), lines[-1]
+
+    def call(port, path, body):
+        c = http.client.HTTPConnection('127.0.0.1', port, timeout=300)
+        c.request('POST', path, body=json.dumps(body))
+        r = c.getresponse(); data = r.read().decode(); c.close()
+        assert r.status == 200, (r.status, data)
+        return json.loads(data)
+
+    q = {'role': 'user', 'content': 'You may call get_weather(city). What is the weather in Paris? Be short.'}
+    result = {'role': 'tool', 'content': '{"temperature": 21}'}
+    service, port, sock = start()
+    answer, thought, first = line(sock, {'messages': [q], 'thinking': True, 'max': 300})
+    reasoning = thought.strip()
+    assert reasoning and 'think>' not in answer, (answer, thought)
+    back = {'role': 'assistant', 'content': answer, 'reasoning': reasoning}
+    prompt = lambda done: done['context_tokens'] - done['output_tokens']
+    # sent back with its reasoning: the held answer matches, only the result is new
+    _, _, held = line(sock, {'messages': [q, back, result], 'max': 1})
+    # a fresh chat (another temperature: another conversation) of the same messages
+    _, _, fresh = line(sock, {'messages': [q, back, result], 'max': 1, 'temperature': 0.001})
+    assert prompt(held) == prompt(fresh), (held, fresh)
+    # (an answer cut inside its reasoning is processed again: the context has no close there)
+    assert first['finish'] != 'stop' or held['input_tokens'] < fresh['input_tokens'] / 2, (first, held, fresh)
+    # without it: Qwen3 renders the answer's text alone, the held answer does not match
+    plain = {'role': 'assistant', 'content': answer}
+    _, _, bare = line(sock, {'messages': [q, plain, result], 'max': 1})
+    assert prompt(bare) < prompt(held) and (first['finish'] != 'stop' or bare['input_tokens'] > held['input_tokens']), \
+        (bare, held)
+    # the HTTP routes, the same conversation: OpenAI reasoning_content and reasoning, Ollama thinking
+    for path, field in (('/v1/chat/completions', 'reasoning_content'), ('/v1/chat/completions', 'reasoning'),
+                        ('/api/chat', 'thinking')):
+        sent = {'role': 'assistant', 'content': answer, field: reasoning}
+        body = {'messages': [q, sent, result], 'temperature': 0, 'stream': False}
+        body.update({'max_tokens': 1} if path.startswith('/v1') else {'options': {'temperature': 0, 'num_predict': 1}})
+        done = call(port, path, body)
+        tokens = done['usage']['prompt_tokens'] if path.startswith('/v1') else done['prompt_eval_count']
+        assert tokens == prompt(held), (path, field, tokens, prompt(held))
+    service.send_signal(signal.SIGTERM)
+    assert service.wait(60) == 0
+    # ignore: the reasoning sent back is dropped, as before #282; by option, and by the setting
+    for extra, setting in ((['--client-reasoning=ignore'], None), ([], 'ignore')):
+        if setting:
+            assert geistr_run('config', 'client_reasoning', setting).returncode == 0
+        service, port, sock = start(*extra)
+        _, _, ignored = line(sock, {'messages': [q, back, result], 'max': 1})
+        assert prompt(ignored) == prompt(bare), (extra, setting, ignored, bare)
+        done = call(port, '/v1/chat/completions', {'messages': [q, {**plain, 'reasoning_content': reasoning}, result],
+                                                   'max_tokens': 1, 'temperature': 0})
+        assert done['usage']['prompt_tokens'] == prompt(bare), done
+        service.send_signal(signal.SIGTERM)
+        assert service.wait(60) == 0
+    assert geistr_run('config', 'client_reasoning', 'sometimes').returncode != 0
+    assert geistr_run('config', 'client_reasoning', 'use').returncode == 0
+    print(f'geistr serve reasoning sent back (Qwen3, #282): {len(reasoning)} B of reasoning, context {prompt(held)} = '
+          f'{prompt(fresh)} tokens (held answer matched: {held["input_tokens"]} of {fresh["input_tokens"]} processed), '
+          f'{prompt(bare)} without; OpenAI reasoning_content and reasoning, Ollama thinking equal; ignore by option '
+          f'and setting as without passed')
+
 # ---- bench and the speed chart --------------------------------------------------
 def section_bench():
     speeds = os.path.join(env['GEISTEN_HOME'], 'speed.tsv')
@@ -1750,14 +1839,15 @@ SECTIONS = {name[len('section_'):]: f for name, f in list(globals().items()) if 
 only = [s for s in os.environ.get('GEISTR_TEST_ONLY', '').split(',') if s]
 assert all(s in SECTIONS for s in only), f'GEISTR_TEST_ONLY: unknown section in {only}; known: {", ".join(SECTIONS)}'
 assert 'gpu' not in only or os.environ.get('GEISTR_TEST_GPU_MODELS'), 'gpu: set GEISTR_TEST_GPU_MODELS'
-assert 'tools' not in only or os.environ.get('GEISTR_TEST_TOOLS_MODEL'), 'tools: set GEISTR_TEST_TOOLS_MODEL'
+assert not {'tools', 'reasoning'} & set(only) or os.environ.get('GEISTR_TEST_TOOLS_MODEL'), \
+    'tools, reasoning: set GEISTR_TEST_TOOLS_MODEL'
 assert not {'embed', 'files'} & set(only) or os.environ.get('GEISTR_TEST_EMBED_MODEL'), 'embed, files: set GEISTR_TEST_EMBED_MODEL'
 assert 'rerank' not in only or (os.environ.get('GEISTR_TEST_RERANK_MODEL') and os.environ.get('GEISTR_TEST_EMBED_MODEL')), \
     'rerank: set GEISTR_TEST_RERANK_MODEL and GEISTR_TEST_EMBED_MODEL'
 for name, section in SECTIONS.items():
     if name == 'gpu' and not os.environ.get('GEISTR_TEST_GPU_MODELS'):
         continue  # no GPU models here (#112)
-    if name == 'tools' and not os.environ.get('GEISTR_TEST_TOOLS_MODEL'):
+    if name in ('tools', 'reasoning') and not os.environ.get('GEISTR_TEST_TOOLS_MODEL'):
         continue  # no tool-capable model here (#92)
     if name in ('embed', 'files') and not os.environ.get('GEISTR_TEST_EMBED_MODEL'):
         continue  # no embedding model here (#91)
