@@ -64,8 +64,10 @@ with tempfile.TemporaryDirectory() as directory:
     assert c['answer_index'] == [b'left\n', b'right\n'].index(chat.stdout), c
     assert c['chat']['max_tokens'] == 4096 and c['chat']['output_tokens'] > 0 and c['chat']['input_tokens'] > 0, c
     assert c['escalation_ms'] >= c['chat']['total_ms'] > 0, c
-    # Early exit is the default of --escalate chat (geistlib#286): a thinking model is probed every 128
-    # tokens and may answer at a confident probe; a model that does not think answers as before.
+    # Early exit is the default of --escalate chat for the Bonsai 2 27B profile only (geistlib#286): it is
+    # probed every 128 tokens and may answer at a confident probe; every other model reasons to the end.
+    # (Probing needs a chat that thinks; a model given by path, not catalog id, is not marked as thinking.)
+    assert profile == 'bonsai2' or 'early_exit' not in c, c
     if 'early_exit' in c:
         e = c['early_exit']
         assert e['interval'] == 128 and abs(e['threshold'] - 0.8) < 1e-9, c

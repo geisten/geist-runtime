@@ -387,11 +387,29 @@ add up the cost of both stages from these fields: one decision call
 time. There is no cap on the escalated share: a single command cannot see
 one; callers that run many decisions should cap it themselves.
 
-**Early exit from the chat answer (experimental; geistlib#236, the default of
-`--escalate chat` since geistlib#286).** With `--escalate chat`, the thinking
-model's answer is probed while it reasons; `--no-early-exit` turns this off
-and the model reasons to the end. Every `--probe-interval N` generated tokens
-(default 128), while the model is still thinking, a probe does four things:
+**Early exit from the chat answer (experimental; geistlib#236, geistlib#286).**
+With `--escalate chat` and `--early-exit`, the thinking model's answer is
+probed while it reasons; with `--no-early-exit` the model reasons to the end.
+Both work for every model.
+
+- **Default:** on only for the verified Bonsai 2 27B profile
+  (`bonsai2-27b-pq2-v1`, the exact artifact its evidence was measured on).
+  Every other model, verified or not, reasons to the end unless asked with
+  `--early-exit`. The evidence is Bonsai 2 only; another model gets the
+  default only after its own declared validation. Probing needs a chat that
+  thinks, which `decide` knows from the catalog: give the model by its
+  catalog id (`bonsai2-27b-pq2`), not by file path.
+- **What the default costs:** on Bonsai 2, early exit is non-inferior to
+  full reasoning overall, but the gain comes from answers that full
+  reasoning loses to the cap. **On questions that full reasoning finishes
+  within the cap, early exit is about 2.5 pp less accurate** (geistlib#286:
+  −2.45 pp [−3.56, −1.33] on 3,223 such questions). Some tasks lose much
+  more: moral_scenarios 147 → 119 of 225 (−12.4 pp), most of it at the first
+  probe. If your task's reasoning usually finishes within `--max-tokens`, or
+  it resembles those tasks, use **`--no-early-exit`**.
+
+Every `--probe-interval N` generated tokens (default 128), while the model is
+still thinking, a probe does four things:
 1. it saves the chat session's complete state;
 2. it prefills the thinking close (`\n</think>\n\n`);
 3. it reads the logits of each option ID's first token;
@@ -403,9 +421,9 @@ answer. Without such a probe the chat answers as before.
 - **Probes are transparent:** a probe that does not exit leaves the generation
   token for token the same.
 - **Requirements:** each option ID must start with its own token, and the
-  model must think in `<think>` tags. Otherwise, by default, the chat reasons
-  to the end as without early exit (the diagnostics then have no
-  `early_exit`). Asked for explicitly, with `--early-exit`,
+  model must think in `<think>` tags. If they do not hold, the Bonsai
+  default reasons to the end as without early exit (the diagnostics then
+  have no `early_exit`). Asked for explicitly, with `--early-exit`,
   `--probe-interval` or `--exit-threshold`, it exits with 2 instead.
 - **Library:** the probes are `geistr_chat_probe_set` /
   `geistr_chat_probe_result` and work with `geistr_chats_next`, where each
@@ -439,7 +457,7 @@ threshold 0.8):
   needs host memory for one copy of the session state (KV cache and recurrent
   state).
 
-**Validated as the default** (geistlib#286, declared before any inference:
+**Validated as the default for Bonsai 2 27B** (geistlib#286, declared before any inference:
 3,500 further held-out classic-MMLU questions, the same model, settings and
 threshold, frozen; both arms from one recorded generation):
 
@@ -455,17 +473,17 @@ threshold, frozen; both arms from one recorded generation):
   - per-question latency p50 39.5 s vs 37.9 s, p95 285 s vs 1,178 s;
   - 2.9× the answers per hour (batch of 8 refilled, M1 Max).
 - **What the result rests on:** the gain comes from the questions full
-  reasoning loses to the cap. On the questions it finishes, early exit is
-  about 2.5 pp worse (108 losses, 73 of them at the first probe). The losses
-  concentrate in some tasks: moral_scenarios lost 12 pp.
+  reasoning loses to the cap (141 of the 170 gains). On the questions it
+  finishes, early exit is about 2.5 pp worse (all 108 losses, 73 of them at
+  the first probe); moral_scenarios lost 12.4 pp. This cost is accepted for
+  the default (owner decision, geistlib#286); `--no-early-exit` avoids it.
   - With a larger `--max-tokens` the advantage shrinks; on a task whose
-    reasoning finishes well within the cap, early exit can cost accuracy.
-    Check your own calibration data, or use `--no-early-exit`.
+    reasoning finishes well within the cap, early exit costs accuracy.
   - Recomputed from the committed probe records by
     `tests/test_decision_evidence.py` (`docs/DECISION_EVIDENCE_PLAN_286.json`).
 - **Scope:** one model (Bonsai 2 27B) and one task family, measured with
-  geistlib's MMLU prompts, not this command's prompt. For other thinking
-  models the default is an extrapolation.
+  geistlib's MMLU prompts, not this command's prompt. That is why the
+  default is keyed on that profile and no other model.
 
 **Choosing the threshold and the cap.** These two settings trade speed
 against quality, and the trade-off belongs to the application, not to the

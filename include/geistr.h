@@ -352,7 +352,7 @@ GEISTR_NODISCARD geistr_status geistr_chats_next(size_t n, geistr_chat *const ch
 
 /* EXPERIMENTAL (geistlib#236): answer probes and early exit while a thinking
  * model reasons. Off unless set here; geistr decide --escalate chat sets it
- * by default (geistlib#286).
+ * by default for the Bonsai 2 27B decision profile only (geistlib#286).
  *
  * A thinking chat (opts.reasoning = GEISTR_REASONING_THINK_TAGS) probes its
  * answer every `interval` generated tokens while it is still thinking. A probe

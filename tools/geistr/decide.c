@@ -215,11 +215,11 @@ static const char *answer_option(const char *answer, const geistr_decision_reque
  * the options as allowed labels, in at most max_tokens generated tokens
  * (thinking included). Returns the chosen ID or nullptr; *stats describes the
  * answer (finish reason, tokens, timing) when the chat got that far. */
-/* Early exit (geistlib#236; the default of --escalate chat since geistlib#286):
- * probe settings for the chat escalation; the result of the last escalated
- * answer. Asked for explicitly (--early-exit or a probe setting), a model or
- * options that cannot be probed are an error; as the default, the chat then
- * reasons to the end. */
+/* Early exit (geistlib#236): probe settings for the chat escalation; the
+ * result of the last escalated answer. The default of --escalate chat only
+ * for the profiles its evidence names (geistlib#286). Asked for explicitly
+ * (--early-exit or a probe setting), a model or options that cannot be probed
+ * are an error; as the default, the chat then reasons to the end. */
 struct early_exit {
     bool                enabled;
     bool                required; /* --early-exit, --probe-interval or --exit-threshold */
@@ -228,6 +228,13 @@ struct early_exit {
     geistr_status       set; /* geistr_chat_probe_set */
     geistr_probe_result result;
 };
+
+bool geistr_decide_early_exit_default(geistr_decision_profile profile) {
+    /* geistlib#286 validated it on Bonsai 2 27B PQ2_0 only (3,500 held-out
+     * MMLU questions, cap 8192): every other model reasons to the end unless
+     * asked. A new entry needs its own declared validation. */
+    return profile == GEISTR_DECISION_BONSAI2_27B_PQ2;
+}
 
 static const char *ask_in_chat(geistr_model *model, geistr_reasoning reasoning, const geistr_decision_request *r,
                                uint32_t max_tokens, struct early_exit *ee, geistr_stats *stats, char *answer,
@@ -485,7 +492,7 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
     if ((seen & (4096 | 8192)) && no_early_exit)
         return failure(2, "--probe-interval and --exit-threshold need early exit; not with --no-early-exit");
     ee.required = ee.required || (seen & (4096 | 8192));
-    ee.enabled  = to_chat && !no_early_exit; /* the default of --escalate chat (geistlib#286) */
+    ee.enabled  = to_chat && ee.required; /* the profile's default is known after loading */
     char *owned_question = nullptr;
     size_t question_len = question ? strnlen(question, GEISTR_DECISION_MAX_QUESTION + 1) : 0;
     if (question_file && read_bounded(&question_len, GEISTR_DECISION_MAX_QUESTION, question_file,
@@ -532,6 +539,8 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
         goto done;
     code = 1;
     const geistr_decision_policy *policy = loaded.policy;
+    if (to_chat && !no_early_exit && !ee.required)
+        ee.enabled = geistr_decide_early_exit_default(policy->profile); /* geistlib#286 */
     geistr_model *model = loaded.model;
     const char *sha = loaded.sha;
     geistr_decision_opts opts = GEISTR_DECISION_OPTS_INIT;

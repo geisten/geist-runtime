@@ -164,8 +164,13 @@ def main():
     call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--max-tokens', '512'], 2)  # needs --escalate chat
     call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--threshold', '0.9', '--escalate', 'other.gguf',
                   '--max-tokens', '512'], 2)
-    # Early exit (geistlib#236), the default of --escalate chat since geistlib#286: --early-exit asks for it
-    # explicitly, --no-early-exit turns it off; all of them and the probe settings need --escalate chat.
+    # Early exit (geistlib#236): --early-exit asks for it, --no-early-exit turns it off, for every model; all of
+    # them and the probe settings need --escalate chat. The default is on only for the profile geistlib#286
+    # validated (Bonsai 2 27B); every other model, verified or not, reasons to the end unless asked.
+    defaults = subprocess.run([str(binary), 'early-exit-default'], capture_output=True, timeout=20)
+    assert defaults.returncode == 0, defaults
+    rule = dict(line.split() for line in defaults.stdout.decode().splitlines())
+    assert rule.pop('bonsai2-27b-pq2-v1') == '1' and rule and set(rule.values()) == {'0'}, defaults.stdout
     call(binary, chat + ['--early-exit'], 1)
     call(binary, chat + ['--no-early-exit'], 1)
     call(binary, chat + ['--early-exit', '--probe-interval', '64', '--exit-threshold', '0.9'], 1)
@@ -204,7 +209,7 @@ def main():
         args[2] = '-'
         call(binary, args, 2, b'q' * 65537)
         call(binary, args, 2, b'q\0q')
-    print('decide CLI: usage, feature-off, IDs, duplicate options, early-exit flags (default on with --escalate chat) and bounded file/stdin input passed')
+    print('decide CLI: usage, feature-off, IDs, duplicate options, early-exit flags (default on for the Bonsai 2 27B profile only) and bounded file/stdin input passed')
     batch(binary)
     print('decide-batch CLI: flags, numeric bounds, request shape, IDs, limits, file/stdin and feature-off passed')
 
