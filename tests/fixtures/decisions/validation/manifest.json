@@ -747,5 +747,44 @@
     "sha256": "fd5b1bc168d25807180b7e1a84e868d2c800f141a6110c2b1c699dd92df0489d"
    }
   }
+ },
+ "early_exit_286": {
+  "plan": "docs/DECISION_EVIDENCE_PLAN_286.json",
+  "plan_sha256": "7a77113678d97d18c1a9a2936e257ec53d6540ae6040cc607b430a2093467279",
+  "issue": "geisten/geistlib#286",
+  "engine_revision": "4da9fdb2ae96c83c5b129dd55f33d07356a9fcec",
+  "driver": "geistlib tools/eval_decision_batched_reasoning.py -> tools/bench_reasoning_batch (the engine driver, not geistr decide: it takes the prepared MMLU prompts; declared method_note)",
+  "binary_sha256": {
+   "bench_reasoning_batch": "35a600d64a5587d9d7617336cbdc7a89901b9f1a6c87677573318cd33a2aaa98"
+  },
+  "model_sha256": "3907dc1658db1f78a9826bf8d5bcb8dc65db0d466388937af57f2294fae62ec1",
+  "cases_sha256": "aeb39d5c8c53653bc40a874cf51a89c595cae3468f12cf501fac10c60094fd15",
+  "hardware": "Apple M1 Max, 64 GiB, Metal, FP32 KV, 6 threads, batch 8 refilled, no padding",
+  "power": "latency phase: 501 of 501 samples (every 30 s inside the chunk windows) on AC with Low Power Mode off; main run: Low Power Mode on in parts of two nights, which changes speed only (declared amendment)",
+  "source_reports_sha256": {
+   "main/report.json": "279b2ba24da45b014cc729d5cc8b4559b21210016b0c01ccf78d5ec686eb54c6",
+   "latency/report.json": "ef9ab90569276e98af19efef07b23f269579fdb8dd20213dd1d076982e10a5fd",
+   "latency-full/report.json": "6e5ea67bd2b0ce1cc49aea5168036979b77211fbcc8e9e865286be1e4ba7ece7"
+  },
+  "extracted_by": "tools/decision_evidence_286.py",
+  "records": {
+   "early-exit-286/records.jsonl.gz": {
+    "sha256": "f24f0eaf378a57bfd98a9af3252bb84aaed8ae68beac9780f6e694c2b56453ac",
+    "scope": "main run, 3,500 questions: target, full-reasoning outcome, every probe's option logits"
+   },
+   "early-exit-286/live.jsonl.gz": {
+    "sha256": "0fa207f31a9c348b2674a6fb7e68f761650f274624a11ae9bbcdb0f94e149621",
+    "scope": "latency check, the 300 live in both arms: answer, stop, tokens, latency"
+   }
+  },
+  "verdict": "PASS",
+  "gains": 170,
+  "losses": 108,
+  "interval_pp": [
+   0.27,
+   3.27
+  ],
+  "live_identical_with_offline": 300,
+  "result_comment": "https://git.geisten.net/geisten/geistlib/issues/286#issuecomment-7661"
  }
 }

@@ -215,10 +215,14 @@ static const char *answer_option(const char *answer, const geistr_decision_reque
  * the options as allowed labels, in at most max_tokens generated tokens
  * (thinking included). Returns the chosen ID or nullptr; *stats describes the
  * answer (finish reason, tokens, timing) when the chat got that far. */
-/* --early-exit (geistlib#236): probe settings for the chat escalation; the
- * result of the last escalated answer. */
+/* Early exit (geistlib#236; the default of --escalate chat since geistlib#286):
+ * probe settings for the chat escalation; the result of the last escalated
+ * answer. Asked for explicitly (--early-exit or a probe setting), a model or
+ * options that cannot be probed are an error; as the default, the chat then
+ * reasons to the end. */
 struct early_exit {
     bool                enabled;
+    bool                required; /* --early-exit, --probe-interval or --exit-threshold */
     uint32_t            interval;
     double              threshold;
     geistr_status       set; /* geistr_chat_probe_set */
@@ -265,7 +269,10 @@ static const char *ask_in_chat(geistr_model *model, geistr_reasoning reasoning, 
         probe.n_options         = r->n_options;
         probe.options           = ids;
         ee->set                 = geistr_chat_probe_set(chat, &probe);
-        ok                      = ee->set == GEISTR_OK;
+        if (ee->set != GEISTR_OK && !ee->required)
+            ee->enabled = false; /* the default: options that cannot be probed reason to the end */
+        else
+            ok = ee->set == GEISTR_OK;
     }
     ok = ok && geistr_chat_send(chat, 2, messages) == GEISTR_OK;
     while (ok && geistr_chat_next(chat, &piece) == GEISTR_OK && piece.part != GEISTR_PART_END)
@@ -335,7 +342,8 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
     double temperature = 1;         /* --temperature: the probabilities the threshold compares (calibration) */
     unsigned long max_tokens = 4096; /* --max-tokens: the chat escalation's answer cap, thinking included */
     struct early_exit ee = {.interval = 128, .threshold = 0.8, .set = GEISTR_INVALID,
-                            .result = {.size = sizeof(geistr_probe_result), .exit_option = -1}}; /* --early-exit (geistlib#236) */
+                            .result = {.size = sizeof(geistr_probe_result), .exit_option = -1}}; /* geistlib#236, #286 */
+    bool no_early_exit = false;
     size_t count = 0, serialized = 0;
     unsigned seen = 0;
     for (size_t i = 0; i < argc; ++i) {
@@ -361,10 +369,13 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
             }
             continue;
         }
-        if (!strcmp(argv[i], "--early-exit")) {
-            if (ee.enabled)
+        if (!strcmp(argv[i], "--early-exit") || !strcmp(argv[i], "--no-early-exit")) {
+            if (ee.required || no_early_exit)
                 return failure(2, "duplicate/conflicting flag");
-            ee.enabled = true;
+            if (argv[i][2] == 'n')
+                no_early_exit = true;
+            else
+                ee.required = true;
             continue;
         }
         if (!strcmp(argv[i], "--option")) {
@@ -468,10 +479,13 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
         return failure(2, "--escalate needs --threshold");
     if ((seen & 2048) && !(escalate && !strcmp(escalate, "chat")))
         return failure(2, "--max-tokens needs --escalate chat");
-    if ((ee.enabled || (seen & (4096 | 8192))) && !(escalate && !strcmp(escalate, "chat")))
-        return failure(2, "--early-exit needs --escalate chat");
-    if ((seen & (4096 | 8192)) && !ee.enabled)
-        return failure(2, "--probe-interval and --exit-threshold need --early-exit");
+    const bool to_chat = escalate && !strcmp(escalate, "chat");
+    if ((ee.required || no_early_exit || (seen & (4096 | 8192))) && !to_chat)
+        return failure(2, "--early-exit, --no-early-exit and the probe settings need --escalate chat");
+    if ((seen & (4096 | 8192)) && no_early_exit)
+        return failure(2, "--probe-interval and --exit-threshold need early exit; not with --no-early-exit");
+    ee.required = ee.required || (seen & (4096 | 8192));
+    ee.enabled  = to_chat && !no_early_exit; /* the default of --escalate chat (geistlib#286) */
     char *owned_question = nullptr;
     size_t question_len = question ? strnlen(question, GEISTR_DECISION_MAX_QUESTION + 1) : 0;
     if (question_file && read_bounded(&question_len, GEISTR_DECISION_MAX_QUESTION, question_file,
@@ -510,7 +524,6 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
         code = failure(1, "linked decision engine is disabled; no fallback");
         goto done;
     }
-    const bool to_chat = escalate && !strcmp(escalate, "chat");
     /* A chat escalation writes, and a thinking model thinks: room for the
      * prompt (4096 tokens) and the answer cap. */
     code = load(&loaded, argv[0], config_file, profile, models_dir, catalog_file, host, processor,
@@ -606,8 +619,11 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
             static char answer[16384];
             asked_chat = true;
             if (ee.enabled && loaded.reasoning != GEISTR_REASONING_THINK_TAGS) {
-                code = failure(2, "--early-exit needs a model that thinks in <think> tags");
-                goto done;
+                if (ee.required) {
+                    code = failure(2, "--early-exit needs a model that thinks in <think> tags");
+                    goto done;
+                }
+                ee.enabled = false; /* the default: a model that does not think answers as before */
             }
             const char *id = ask_in_chat(model, loaded.reasoning, &request, (uint32_t)max_tokens, &ee, &chat_stats,
                                          answer, sizeof answer);

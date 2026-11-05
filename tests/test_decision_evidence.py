@@ -89,4 +89,43 @@ for profile in ('bonsai2', 'gemma4'):
             assert cut == (len(c['prefix_ids']) - 1) // int(chunk) * int(chunk), (profile, c['id'])
             for q in c['questions']:
                 assert q['prompt'].startswith(c['prefix']) and q['ids'][:cut] == c['prefix_ids'][:cut]
-print('evidence verifier: independent Gemma drift FAIL preserved (Apple NEON, Metal and x86 records, both contracts); finite complete output required; manifest hashes match; context fixtures bound and current')
+# geistlib#286: early exit as the default of decide --escalate chat. The gate is recomputed from the raw
+# probe records and must match the manifest; the plan copy and the records are bound by hash; a changed
+# record, a missing question or a probe after the frozen rule's exit cannot pass unnoticed
+ee = manifest['early_exit_286']
+plan286_path = root / ee['plan']
+assert ee['plan_sha256'] == hashlib.sha256(plan286_path.read_bytes()).hexdigest()
+plan286 = json.loads(plan286_path.read_text())
+declared = plan286['declared']
+assert declared['sample']['question_ids_sha256'] == plan286['contract']['question_ids_sha256']
+assert plan286['contract']['latency_question_ids_sha256'] in declared['latency_check']['questions']
+assert 'tau 0.8' in declared['question'] and 'probes every 128' in declared['question'] and 'cap 8192' in declared['question']
+for name, record in ee['records'].items():
+    assert hashlib.sha256((validation / name).read_bytes()).hexdigest() == record['sha256'], name
+records = module.jsonl_gz(validation / 'early-exit-286/records.jsonl.gz')
+live = module.jsonl_gz(validation / 'early-exit-286/live.jsonl.gz')
+gate = module.early_exit(plan286, records, live)
+assert gate['verdict'] == ee['verdict'] == 'PASS' and (gate['gains'], gate['losses']) == (ee['gains'], ee['losses'])
+assert [round(x, 2) for x in gate['interval_pp']] == ee['interval_pp']
+assert gate['live']['identical_with_offline'] == ee['live_identical_with_offline']
+try:
+    module.early_exit(plan286, records[1:], live)
+    raise RuntimeError('accepted an incomplete sample')
+except ValueError:
+    pass
+gapped = copy.deepcopy(records)
+long = next(r for r in gapped if len(r['probes']) > 3)
+del long['probes'][2]
+try:
+    module.early_exit(plan286, gapped, live)
+    raise RuntimeError('accepted a dropped probe')
+except ValueError:
+    pass
+# a confident wrong probe at the first position on every question must fail the gate
+wrong = copy.deepcopy(records)
+for r in wrong:
+    if r['generated_tokens'] > 128:
+        r['probes'][1][1:] = [10.0 if i != r['target_index'] else 0.0 for i in range(len(r['probes'][1]) - 1)]
+        r['probes'][1][1 + (r['target_index'] + 1) % (len(r['probes'][1]) - 1)] = 20.0
+assert module.early_exit(plan286, wrong, live)['verdict'] == 'FAIL'
+print('evidence verifier: independent Gemma drift FAIL preserved (Apple NEON, Metal and x86 records, both contracts); finite complete output required; manifest hashes match; context fixtures bound and current; geistlib#286 early-exit gate PASS recomputed from its records')

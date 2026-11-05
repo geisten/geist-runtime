@@ -389,8 +389,9 @@ Settings are checked when set:
 
 The state image is shared by the model's chats and allocated on the first
 probe. With `geistr_chats_next` a probe runs on its chat alone, between
-batched steps. `geistr decide --early-exit` uses it; docs/DECISIONS.md has the
-measured accuracy and its uncertainty.
+batched steps. `geistr decide --escalate chat` uses it by default
+(geistlib#286); docs/DECISIONS.md has the measured accuracy and its
+uncertainty.
 
 ## Catalog and verification (#5)
 

@@ -387,10 +387,11 @@ add up the cost of both stages from these fields: one decision call
 time. There is no cap on the escalated share: a single command cannot see
 one; callers that run many decisions should cap it themselves.
 
-**Early exit from the chat answer (`--early-exit`, experimental, geistlib#236).**
-With `--escalate chat`, `--early-exit` probes the thinking model's answer while
-it reasons. Every `--probe-interval N` generated tokens (default 128), while
-the model is still thinking, a probe does four things:
+**Early exit from the chat answer (experimental; geistlib#236, the default of
+`--escalate chat` since geistlib#286).** With `--escalate chat`, the thinking
+model's answer is probed while it reasons; `--no-early-exit` turns this off
+and the model reasons to the end. Every `--probe-interval N` generated tokens
+(default 128), while the model is still thinking, a probe does four things:
 1. it saves the chat session's complete state;
 2. it prefills the thinking close (`\n</think>\n\n`);
 3. it reads the logits of each option ID's first token;
@@ -402,11 +403,14 @@ answer. Without such a probe the chat answers as before.
 - **Probes are transparent:** a probe that does not exit leaves the generation
   token for token the same.
 - **Requirements:** each option ID must start with its own token, and the
-  model must think in `<think>` tags. Otherwise `--early-exit` exits with 2.
+  model must think in `<think>` tags. Otherwise, by default, the chat reasons
+  to the end as without early exit (the diagnostics then have no
+  `early_exit`). Asked for explicitly, with `--early-exit`,
+  `--probe-interval` or `--exit-threshold`, it exits with 2 instead.
 - **Library:** the probes are `geistr_chat_probe_set` /
   `geistr_chat_probe_result` and work with `geistr_chats_next`, where each
   probe runs on its chat between batched steps.
-- **Diagnostics:** the JSON gains `early_exit` (`interval`, `threshold`,
+- **Diagnostics:** when probing ran, the JSON gains `early_exit` (`interval`, `threshold`,
   `probes`, `probe_ms`, `exited`, and after an exit `position` (generated
   tokens), `probability` and `option_index`). The `chat.finish` value of an
   exit is `early_exit`.
@@ -434,6 +438,34 @@ threshold 0.8):
 - **Probe cost:** on Bonsai, a probe costs about two decode steps, and it
   needs host memory for one copy of the session state (KV cache and recurrent
   state).
+
+**Validated as the default** (geistlib#286, declared before any inference:
+3,500 further held-out classic-MMLU questions, the same model, settings and
+threshold, frozen; both arms from one recorded generation):
+
+| | accuracy | generated tokens | still at the cap |
+|---|---|---|---|
+| full reasoning | 82.8 % | 4,784,285 | 277 |
+| early exit | 84.6 % | 1,163,236 (0.24×) | 15 |
+
+- **Non-inferiority at 2 pp: established.** Gains 170, losses 108,
+  conservative paired 95 % interval [+0.27, +3.27] pp.
+- **Live check (300 of the 3,500, both arms run live):**
+  - answers identical to the offline evaluation on 300 of 300;
+  - per-question latency p50 39.5 s vs 37.9 s, p95 285 s vs 1,178 s;
+  - 2.9× the answers per hour (batch of 8 refilled, M1 Max).
+- **What the result rests on:** the gain comes from the questions full
+  reasoning loses to the cap. On the questions it finishes, early exit is
+  about 2.5 pp worse (108 losses, 73 of them at the first probe). The losses
+  concentrate in some tasks: moral_scenarios lost 12 pp.
+  - With a larger `--max-tokens` the advantage shrinks; on a task whose
+    reasoning finishes well within the cap, early exit can cost accuracy.
+    Check your own calibration data, or use `--no-early-exit`.
+  - Recomputed from the committed probe records by
+    `tests/test_decision_evidence.py` (`docs/DECISION_EVIDENCE_PLAN_286.json`).
+- **Scope:** one model (Bonsai 2 27B) and one task family, measured with
+  geistlib's MMLU prompts, not this command's prompt. For other thinking
+  models the default is an extrapolation.
 
 **Choosing the threshold and the cap.** These two settings trade speed
 against quality, and the trade-off belongs to the application, not to the

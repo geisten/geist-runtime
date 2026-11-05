@@ -139,6 +139,23 @@
 
 ### Changed
 
+- `geistr decide --escalate chat` exits early by default (geistlib#286).
+  - A thinking model's answer is probed every 128 tokens, and the answer ends
+    at the first probe whose top option reaches 0.8.
+  - `--no-early-exit` reasons to the end, as before. `--probe-interval` and
+    `--exit-threshold` set the default's values.
+  - A model that does not think in tags, or options that cannot be probed,
+    answer as before. With `--early-exit` or a probe setting, they are an
+    error (exit 2), as before.
+  - Evidence: the declared validation on Bonsai 2 27B, 3,500 held-out MMLU
+    questions at cap 8192. Early exit scored 84.6 % vs 82.8 % for full
+    reasoning, with 0.24x the generated tokens; the paired 95 % interval is
+    [+0.27, +3.27] pp, so the 2 pp non-inferiority margin is established.
+    Live, p95 latency was 285 s vs 1,178 s, with the same answers as the
+    offline evaluation.
+  - The gain comes from answers that full reasoning loses to the cap. On
+    questions it finishes, early exit is about 2.5 pp worse (docs/DECISIONS.md).
+    The record and its verifier are in `tests/test_decision_evidence.py`.
 - Thinking follows the model's chat template by default (#266). Qwen3.5 and
   Gemma 4 answer at once unless asked to think, as their templates do; on,
   Qwen3.5 now really reasons: its generation prompt ends in `<think>\n`,
