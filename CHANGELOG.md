@@ -139,6 +139,15 @@
 
 ### Changed
 
+- Opening a model under a verified decision profile no longer hashes the
+  file every time (#287). A matching pull receipt (`<dir>/.verified/`,
+  bound to the file's identity, size and change times) stands for the
+  hash; only a file without one is hashed. A Bonsai 2 27B `geistr decide`
+  took 4.1 s and now takes 0.8 s on an M1 Max, by catalog id and by path
+  alike. A changed, replaced or receipt-less file is still hashed and
+  refused if it is not the profile's artifact. `/decide` in `geistr chat`
+  takes a path's SHA-256 from its receipt too, hashing only without one.
+
 - `geistr decide` resolves a model the same way for a catalog id and a
   file path (#285). Before, Bonsai 2 27B given by path answered its
   `--escalate chat` without reasoning (no option named), and the early-exit

@@ -4,6 +4,7 @@
  * invalid-input cases are ported in tests/test_catalog.py. The receipt stamp
  * is geist-serve's model_stamp (src/app/jobs.c). */
 #include "geistr_catalog.h"
+#include "common.h"
 #include "stream.h"
 #define JSMN_STATIC
 #define JSMN_STRICT
@@ -731,6 +732,28 @@ geistr_status geistr_catalog_check(const geistr_catalog_entry *m, const char *di
             unlink(part);
     }
     return GEISTR_OK;
+}
+
+geistr_status artifact_verify(const char *path, const char *sha256) {
+    if (!path || !hex(sha256, 64))
+        return GEISTR_INVALID;
+    /* The receipt a catalog check or geistr pull left next to the file names
+     * it as long as its identity is unchanged (#287); read-only here. */
+    const char *slash = strrchr(path, '/'), *file = slash ? slash + 1 : path;
+    char        dir[4096];
+    const int   n = !slash          ? snprintf(dir, sizeof dir, ".")
+                    : slash == path ? snprintf(dir, sizeof dir, "/")
+                                    : snprintf(dir, sizeof dir, "%.*s", (int) (slash - path), path);
+    struct stat s;
+    if (n > 0 && (size_t) n < sizeof dir && lstat(path, &s) == 0 && S_ISREG(s.st_mode) && component(file, true)) {
+        const geistr_catalog_entry entry = {.file = file, .sha256 = sha256, .bytes = (uint64_t) s.st_size};
+        geistr_install             state;
+        if (geistr_catalog_check(&entry, dir, false, &state) == GEISTR_OK && state == GEISTR_INSTALL_OK)
+            return GEISTR_OK;
+    }
+    char                sum[65];
+    const geistr_status status = geistr_sha256_file(path, sum);
+    return status != GEISTR_OK ? status : strcmp(sum, sha256) ? GEISTR_FORMAT : GEISTR_OK;
 }
 
 geistr_status geistr_models_dir(char *out, size_t cap) {
