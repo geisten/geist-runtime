@@ -63,7 +63,22 @@ with tempfile.TemporaryDirectory() as directory:
     assert c['escalation'] == 'chat' and c['answered_by'] == 'chat', c
     assert c['answer_index'] == [b'left\n', b'right\n'].index(chat.stdout), c
     assert c['chat']['max_tokens'] == 4096 and c['chat']['output_tokens'] > 0 and c['chat']['input_tokens'] > 0, c
-    assert c['chat']['finish'] == 'stop' and c['escalation_ms'] >= c['chat']['total_ms'] > 0, c
+    assert c['escalation_ms'] >= c['chat']['total_ms'] > 0, c
+    # Early exit is the default of --escalate chat for the Bonsai 2 27B profile only (geistlib#286): it is
+    # probed every 128 tokens and may answer at a confident probe; every other model reasons to the end.
+    # (Probing needs a chat that thinks; a model given by path, not catalog id, is not marked as thinking.)
+    assert profile == 'bonsai2' or 'early_exit' not in c, c
+    if 'early_exit' in c:
+        e = c['early_exit']
+        assert e['interval'] == 128 and abs(e['threshold'] - 0.8) < 1e-9, c
+        assert c['chat']['finish'] == ('early_exit' if e['exited'] else 'stop'), c
+        assert not e['exited'] or (e['position'] % 128 == 0 and e['probability'] >= 0.8
+                                   and e['option_index'] == c['answer_index']), c
+    else:
+        assert c['chat']['finish'] == 'stop', c
+    full = subprocess.run(vague + ['--escalate', 'chat', '--no-early-exit'], capture_output=True, timeout=300)
+    f = record(full)
+    assert full.returncode == 0 and f['chat']['finish'] == 'stop' and 'early_exit' not in f, f
     # --max-tokens: the caller's cap on the chat answer, thinking included. One
     # token either names an option or the answer is cut there (exit 3).
     capped = subprocess.run(vague + ['--escalate', 'chat', '--max-tokens', '1'], capture_output=True, timeout=300)

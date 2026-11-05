@@ -164,19 +164,35 @@ def main():
     call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--max-tokens', '512'], 2)  # needs --escalate chat
     call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--threshold', '0.9', '--escalate', 'other.gguf',
                   '--max-tokens', '512'], 2)
-    # --early-exit (geistlib#236): only with --escalate chat; its two settings need it.
+    # Early exit (geistlib#236): --early-exit asks for it, --no-early-exit turns it off, for every model; all of
+    # them and the probe settings need --escalate chat. The default is on only for the profile geistlib#286
+    # validated (Bonsai 2 27B); every other model, verified or not, reasons to the end unless asked.
+    defaults = subprocess.run([str(binary), 'early-exit-default'], capture_output=True, timeout=20)
+    assert defaults.returncode == 0, defaults
+    rule = dict(line.split() for line in defaults.stdout.decode().splitlines())
+    assert rule.pop('bonsai2-27b-pq2-v1') == '1' and rule and set(rule.values()) == {'0'}, defaults.stdout
     call(binary, chat + ['--early-exit'], 1)
+    call(binary, chat + ['--no-early-exit'], 1)
     call(binary, chat + ['--early-exit', '--probe-interval', '64', '--exit-threshold', '0.9'], 1)
+    call(binary, chat + ['--probe-interval', '64'], 1)  # a setting of the default
+    call(binary, chat + ['--exit-threshold', '0.9'], 1)
     call(binary, chat + ['--early-exit', '--early-exit'], 2)
-    call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--early-exit'], 2)  # needs --escalate chat
-    call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--threshold', '0.9', '--escalate', 'other.gguf',
-                  '--early-exit'], 2)
-    call(binary, chat + ['--probe-interval', '64'], 2)  # needs --early-exit
-    call(binary, chat + ['--exit-threshold', '0.9'], 2)
+    call(binary, chat + ['--no-early-exit', '--no-early-exit'], 2)
+    call(binary, chat + ['--early-exit', '--no-early-exit'], 2)
+    call(binary, chat + ['--no-early-exit', '--early-exit'], 2)
+    call(binary, chat + ['--no-early-exit', '--probe-interval', '64'], 2)
+    call(binary, chat + ['--exit-threshold', '0.9', '--no-early-exit'], 2)
+    for flag in ['--early-exit', '--no-early-exit']:
+        call(binary, ['stub:echo', 'Q?', 'yes', 'no', flag], 2)  # needs --escalate chat
+        call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--threshold', '0.9', '--escalate', 'other.gguf', flag], 2)
+    call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--probe-interval', '64'], 2)
+    call(binary, ['stub:echo', 'Q?', 'yes', 'no', '--exit-threshold', '0.9'], 2)
     for value in ['0', '-1', '28673', 'x', '']:
         call(binary, chat + ['--early-exit', '--probe-interval', value], 2)
+        call(binary, chat + ['--probe-interval', value], 2)
     for value in ['0', '1', '-0.5', '1.5', 'x', '']:
         call(binary, chat + ['--early-exit', '--exit-threshold', value], 2)
+        call(binary, chat + ['--exit-threshold', value], 2)
     for bad in ['bad\nID', 'bad\rID', '\x1b[31m', '\x7f', '\u0085', '\u2028', '\u2029', 'x' * 129]:
         call(binary, base + ['--option', bad, 'invalid'], 2)
     with tempfile.TemporaryDirectory() as directory:
@@ -193,7 +209,7 @@ def main():
         args[2] = '-'
         call(binary, args, 2, b'q' * 65537)
         call(binary, args, 2, b'q\0q')
-    print('decide CLI: usage, feature-off, IDs, duplicate options, early-exit flags and bounded file/stdin input passed')
+    print('decide CLI: usage, feature-off, IDs, duplicate options, early-exit flags (default on for the Bonsai 2 27B profile only) and bounded file/stdin input passed')
     batch(binary)
     print('decide-batch CLI: flags, numeric bounds, request shape, IDs, limits, file/stdin and feature-off passed')
 

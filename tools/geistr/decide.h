@@ -22,6 +22,9 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
 /* decide-batch (#164): argv as above; one shared context, 1..32 questions,
  * stdout question_id TAB option_id LF in input order only on total success. */
 int geistr_decide_batch_command(size_t argc, const char *const *argv, const geistr_decide_host *host);
+/* Whether --escalate chat exits early by default for a verified decision
+ * profile: only where a declared validation established it (geistlib#286). */
+bool geistr_decide_early_exit_default(geistr_decision_profile profile);
 /* Shared bounded reader for catalog inspection and execution. */
 [[nodiscard]] geistr_status geistr_decide_config_read(size_t error_cap, const char *path,
                                                       geistr_decision_config **out, char *error);

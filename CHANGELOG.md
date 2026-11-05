@@ -139,6 +139,25 @@
 
 ### Changed
 
+- `geistr decide --escalate chat` exits early by default for the verified
+  Bonsai 2 27B profile (`bonsai2-27b-pq2-v1`) only (geistlib#286).
+  - Its answer is probed every 128 tokens, and the answer ends at the first
+    probe whose top option reaches 0.8.
+  - Every other model, verified or not, reasons to the end unless asked with
+    `--early-exit`. The evidence is Bonsai 2 only.
+  - `--early-exit` and the new `--no-early-exit` work for every model.
+    `--probe-interval` / `--exit-threshold` imply `--early-exit`.
+  - Evidence: the declared validation on Bonsai 2 27B, 3,500 held-out MMLU
+    questions at cap 8192. Early exit scored 84.6 % vs 82.8 % for full
+    reasoning, with 0.24x the generated tokens; the paired 95 % interval is
+    [+0.27, +3.27] pp, so the 2 pp non-inferiority margin is established.
+    Live, p95 latency was 285 s vs 1,178 s, with the same answers as the
+    offline evaluation.
+  - The cost: the gain comes from answers that full reasoning loses to the
+    cap. On questions it finishes within the cap, early exit is about
+    2.5 pp less accurate, and moral_scenarios lost 12.4 pp. Use
+    `--no-early-exit` for such tasks (docs/DECISIONS.md).
+  - The record and its verifier are in `tests/test_decision_evidence.py`.
 - Thinking follows the model's chat template by default (#266). Qwen3.5 and
   Gemma 4 answer at once unless asked to think, as their templates do; on,
   Qwen3.5 now really reasons: its generation prompt ends in `<think>\n`,
