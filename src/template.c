@@ -246,10 +246,15 @@ static size_t find(const char *s, size_t b, size_t e, const char *needle, bool l
  *   if '</think>' in content:
  *       reasoning = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n')
  *       content = content.split('</think>')[-1].lstrip('\n')
- *   in loop: '<think>\n' + reasoning|trim + '\n</think>\n\n' + content; else content */
+ *   in loop: '<think>\n' + reasoning|trim + '\n</think>\n\n' + content; else content
+ * and as Qwen3's does (#276): untrimmed, reasoning.strip('\n') (the split
+ * strips the line breaks already), and in the loop the block only where
+ * there is reasoning (or for the last message, which a send never is). */
 static void put_split_answer(struct out *o, const char *s, bool in_loop) {
-    size_t b = 0, e = strlen(s), rb = 0, re = 0;
-    trim_range(s, &b, &e);
+    const struct tpl_style *y = &o->extra.style;
+    size_t                  b = 0, e = strlen(s), rb = 0, re = 0;
+    if (y->trim)
+        trim_range(s, &b, &e);
     const size_t close = find(s, b, e, "</think>", false);
     if (close < e) {
         re = close;
@@ -259,12 +264,13 @@ static void put_split_answer(struct out *o, const char *s, bool in_loop) {
         rb                = open < re ? open + strlen("<think>") : b;
         while (rb < re && s[rb] == '\n')
             rb++;
-        trim_range(s, &rb, &re);
+        if (y->trim)
+            trim_range(s, &rb, &re);
         b = find(s, b, e, "</think>", true) + strlen("</think>");
         while (b < e && s[b] == '\n')
             b++;
     }
-    if (in_loop) {
+    if (in_loop && (!y->lean || re > rb)) {
         put(o, "<think>\n");
         put_body_n(o, s + rb, re - rb);
         put(o, "\n</think>\n\n");
@@ -283,19 +289,21 @@ static void put_answer(struct out *o, const char *content, bool in_loop) {
     put_body(o, content);
 }
 
-bool tpl_is_query(const geistr_message *m) {
+bool tpl_is_query(const struct tpl_style *y, const geistr_message *m) {
     if (is_role(m, "system") || is_role(m, "assistant") || is_role(m, "tool"))
         return false;
+    static const char head[] = "<tool_response>", tail[] = "</tool_response>";
+    if (y->lean) /* Qwen3: not('<tool_response>' in content and '</tool_response>' in content) */
+        return !(strstr(m->content, head) && strstr(m->content, tail));
     size_t b = 0, e = strlen(m->content);
     trim_range(m->content, &b, &e);
-    static const char head[] = "<tool_response>", tail[] = "</tool_response>";
-    const size_t      h = sizeof head - 1, t = sizeof tail - 1;
+    const size_t h = sizeof head - 1, t = sizeof tail - 1;
     return !(e - b >= h && !memcmp(m->content + b, head, h) && e - b >= t && !memcmp(m->content + e - t, tail, t));
 }
 
-bool tpl_has_query(size_t n, const geistr_message msgs[]) {
+bool tpl_has_query(const struct tpl_style *y, size_t n, const geistr_message msgs[]) {
     for (size_t i = 0; i < n; i++)
-        if (tpl_is_query(&msgs[i]))
+        if (tpl_is_query(y, &msgs[i]))
             return true;
     return false;
 }
@@ -334,10 +342,10 @@ static void render_turns(struct out            *o,
         }
         i = 1;
     }
-    /* Qwen3.5's tool loop (#269): the assistant messages after the last user query. */
+    /* The tool loop (#269, #276): the assistant messages after the last user query. */
     size_t query = SIZE_MAX;
     for (size_t k = i; y->loop && k < n; k++)
-        if (tpl_is_query(&msgs[k]))
+        if (tpl_is_query(y, &msgs[k]))
             query = k;
     for (; i < n; i++) {
         const bool asst = is_role(&msgs[i], "assistant");
@@ -487,19 +495,27 @@ struct tpl_thinking tpl_thinking_of(enum tpl_family family, const char *tpl) {
  *   bare:  Qwen3.6+ "{%- elif reasoning_instructions %}": no turn for an empty system message
  *   loop:  Qwen3.5 "'\n<think>\n' + reasoning_content + '\n</think>\n\n' + content" after
  *          "loop.index0 > ns.last_query_index", with the split at </think> and
- *          without preserve_thinking (Qwen3.6+ keeps the block everywhere: history) */
+ *          without preserve_thinking (Qwen3.6+ keeps the block everywhere: history);
+ *          Qwen3 (lean, #276) "'\n<think>\n' + reasoning_content.strip('\n') +
+ *          '\n</think>\n\n' + content.lstrip('\n')" there, under
+ *          "loop.last or (not loop.last and reasoning_content)" */
 struct tpl_style tpl_style_of(enum tpl_family family, const char *tpl) {
     if (tpl == nullptr)
         return (struct tpl_style) {};
     const bool chatml = family == TPL_CHATML;
+    const bool loop   = chatml && strstr(tpl, "loop.index0 > ns.last_query_index") &&
+                      strstr(tpl, "content.split('</think>')") && !strstr(tpl, "preserve_thinking");
+    const bool lean   = loop && strstr(tpl, "'\\n<think>\\n' + reasoning_content.strip('\\n') + "
+                                            "'\\n</think>\\n\\n' + content.lstrip('\\n')") &&
+                      strstr(tpl, "loop.last or (not loop.last and reasoning_content)");
     return (struct tpl_style) {
             .trim  = (chatml && strstr(tpl, "render_content(message.content, true)|trim")) ||
                      (family == TPL_GEMMA4 && strstr(tpl, "message['content'] | trim")),
             .tools = chatml && strstr(tpl, "message.role == \"tool\"") && strstr(tpl, "'\\n<tool_response>\\n'"),
             .bare  = chatml && strstr(tpl, "{%- elif reasoning_instructions %}"),
-            .loop  = chatml && strstr(tpl, "loop.index0 > ns.last_query_index") &&
-                    strstr(tpl, "content.split('</think>')") && !strstr(tpl, "preserve_thinking") &&
-                    strstr(tpl, "'\\n<think>\\n' + reasoning_content + '\\n</think>\\n\\n' + content"),
+            .loop  = lean ||
+                    (loop && strstr(tpl, "'\\n<think>\\n' + reasoning_content + '\\n</think>\\n\\n' + content")),
+            .lean  = lean,
     };
 }
 

@@ -188,7 +188,7 @@ the templates' own Jinja conditions) and renders what the template renders:
 
 | template | default | on (`THINK_TAGS`) | off (`THINK_OFF`) | earlier answers |
 |---|---|---|---|---|
-| Qwen3 | on | generation prompt as it is | + `<think>\n\n</think>\n\n` | text only |
+| Qwen3 | on | generation prompt as it is | + `<think>\n\n</think>\n\n` | text only; in a tool loop `<think>\n` reasoning `\n</think>\n\n` text where there is reasoning |
 | Qwen3.5 | off | + `<think>\n` | + `<think>\n\n</think>\n\n` | text only; in a tool loop `<think>\n` reasoning `\n</think>\n\n` text |
 | Qwen3.6+ (Qwen3.8, Bonsai 2) | on, effort `xhigh` | + `<think>\n`; the effort's instruction leads the system turn (a turn of its own without a system message) | + `<think>\n\n</think>\n\n`, no instruction | `<think>\n\n</think>\n\n` + text (`preserve_thinking`) |
 | Gemma 4 | off | `<\|think\|>\n` opens the system turn (a turn of its own without one) | as it is | text only |
@@ -241,15 +241,25 @@ the templates' own Jinja conditions) and renders what the template renders:
 - **Tool messages (#269).** In the Qwen3 family a message with role `tool`
   is a `<tool_response>` block in a user turn, consecutive ones in one turn,
   as the templates have it (before, a user turn of its own text).
-- **Qwen3.5's tool loop (#269).** After the last user query (a user message
-  that is not a `<tool_response>` block) Qwen3.5's template keeps each
-  answer's reasoning: `<think>\n` reasoning `\n</think>\n\n` answer. So while
-  tool results follow, the chat keeps the reasoning in the context (with
-  thinking off, the empty block it already holds); the next query takes it
-  out of every answer of the loop again (a rewind to the loop's first answer
-  and a prefill, #96). An assistant message sent by the caller is split at
-  `</think>` as the template splits it. Qwen3 and Qwen3.6+ need none of this:
-  without reasoning, Qwen3 renders text and Qwen3.6+ the empty block.
+- **The tool loop of Qwen3.5 (#269) and Qwen3 (#276).** After the last
+  user query (a user message that is not a `<tool_response>` block) the
+  templates of Qwen3.5 and Qwen3 keep each answer's reasoning: `<think>\n`
+  reasoning `\n</think>\n\n` answer. So while tool results follow, the chat
+  keeps the reasoning in the context; the next query takes it out of every
+  answer of the loop again (a rewind to the loop's first answer and a
+  prefill, #96). An assistant message sent by the caller is split at
+  `</think>` as the template splits it. The two templates differ in the
+  details, and the runtime follows each:
+  - Qwen3.5 trims the reasoning and keeps the block also for an answer
+    without reasoning, so with thinking off the context keeps the empty
+    block it already holds.
+  - Qwen3 strips only line breaks from the reasoning and renders an answer
+    without reasoning as its text alone, so with thinking off the empty
+    block leaves the context after each answer, as before a query. A user
+    message is no query for Qwen3 when it holds both `<tool_response>` and
+    `</tool_response>` anywhere (Qwen3.5: when it is one such block).
+  - Qwen3.6+ needs none of this: it keeps the empty block everywhere
+    (`preserve_thinking`).
 
 ## The runtime on geistlib (#4)
 

@@ -337,10 +337,11 @@ static uint32_t built(geistr_model *m, const geistr_chat_opts *o, size_t n, cons
 
 /* A tool loop (#269) and padded messages, per thinking mode: the continued
  * chat's context is what a fresh chat builds from the conversation as the
- * template sees it. Qwen3.5 keeps an answer's reasoning while tool results
- * follow ("<think>\n" reasoning "\n</think>\n\n" answer, after the last user
- * query) and drops it from all of them at the next query; the others never
- * keep it. Padded messages are trimmed where the template trims. */
+ * template sees it. Qwen3.5 and Qwen3 (#276) keep an answer's reasoning
+ * while tool results follow ("<think>\n" reasoning "\n</think>\n\n" answer,
+ * after the last user query) and drop it from all of them at the next query;
+ * the others never keep it. Padded messages are trimmed where the template
+ * trims. */
 static void tool_loop(const char *path) {
     struct geist_backend *be = nullptr;
     struct geist_model   *gm = nullptr;
@@ -378,7 +379,7 @@ static void tool_loop(const char *path) {
         CHECK(geistr_chat_open(m, &o, &c) == GEISTR_OK && ask_reason(c, 1, &q, a1, r1, sizeof a1) == GEISTR_OK &&
                       ask_reason(c, 1, &result, a2, r2, sizeof a2) == GEISTR_OK,
               "tool loop: a query, then a tool result");
-        /* Qwen3.5 has the first answer's reasoning in the context, the others its text */
+        /* Qwen3.5 and Qwen3 have the first answer's reasoning in the context, the others its text */
         snprintf(with, sizeof with, "<think>\n%s\n</think>\n\n%s", r1, a1);
         const geistr_message loop[] = {q, {"assistant", y.loop && *r1 ? with : a1}, result};
         const uint32_t       held   = c ? stats(c).context_tokens - stats(c).output_tokens : 0;

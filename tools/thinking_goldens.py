@@ -11,7 +11,7 @@ reasoning_effort also with low, medium and xhigh. Since #269 also
 whitespace-padded messages (the templates' |trim, also Unicode whitespace),
 a blank system message, and tool loops: tool results as role "tool" messages,
 an assistant's reasoning in its content (<think>...</think>, which Qwen3.5
-keeps after the last user query and drops before it). TEMPLATES_OF says which
+and Qwen3 (#276) keep after the last user query and drop before it). TEMPLATES_OF says which
 template renders which conversation. jinja2's sandbox with
 trim_blocks and lstrip_blocks, as transformers renders; bos_token is empty
 (the runtime adds BOS apart). tests/test_template.c checks that the runtime
@@ -70,12 +70,23 @@ CONVS = {
     'tool_done': [Q, {'role': 'assistant', 'content': THINK + CALL}, {'role': 'tool', 'content': '{"temperature": 21}'},
                   {'role': 'assistant', 'content': '<think>\nWarm.\n</think>\n\nIt is 21 degrees.'},
                   {'role': 'user', 'content': 'Thanks!'}],
+    # #276: Qwen3's loop: no block for an answer without reasoning (thinking off sends the empty one back),
+    # reasoning only stripped of line breaks, a user message quoting both tags is no query
+    'tool_empty': [Q, {'role': 'assistant', 'content': '<think>\n\n</think>\n\n' + CALL},
+                   {'role': 'tool', 'content': '{"temperature": 21}'},
+                   {'role': 'assistant', 'content': '<think>\nNow Lyon.\n</think>\n\n' + CALL2},
+                   {'role': 'tool', 'content': '{"temperature": 24}'}],
+    'tool_think_padded': [Q, {'role': 'assistant', 'content': '<think>\n\n Paris, \t\n\n</think>\n\n\n' + CALL + ' \n'},
+                          {'role': 'tool', 'content': '{"temperature": 21}'}],
+    'tool_quoted': [Q, {'role': 'assistant', 'content': THINK + CALL}, {'role': 'tool', 'content': '{"temperature": 21}'},
+                    {'role': 'assistant', 'content': '<think>\nWarm.\n</think>\n\nIt is 21 degrees.'},
+                    {'role': 'user', 'content': 'What do <tool_response> and </tool_response> mean?'}],
 }
 BASE = ['user', 'system', 'turns', 'turns_nosys', 'padded', 'padded_unicode', 'blank_system']
-TOOLS = ['tool', 'tool_two', 'tool_padded', 'tool_think', 'tool_steps', 'tool_done']
-# Qwen3's own split of an assistant's <think> (dropped before the last query) is not rendered:
-# the runtime gives its earlier answers without reasoning; Gemma 4's tool format is not rendered.
-TEMPLATES_OF = {'qwen3': BASE + ['tool', 'tool_two', 'tool_padded'], 'qwen35': BASE + TOOLS,
+TOOLS = ['tool', 'tool_two', 'tool_padded', 'tool_think', 'tool_steps', 'tool_done', 'tool_empty',
+         'tool_think_padded', 'tool_quoted']
+# Gemma 4's tool format is not rendered.
+TEMPLATES_OF = {'qwen3': BASE + TOOLS, 'qwen35': BASE + TOOLS,
                 'qwen38': BASE + TOOLS, 'bonsai2': BASE + TOOLS, 'gemma4': BASE}
 ASCII_TRIM = ['padded_unicode']  # llama.cpp's |trim keeps Unicode whitespace
 MODES = {'default': {}, 'on': {'enable_thinking': True}, 'off': {'enable_thinking': False}}

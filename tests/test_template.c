@@ -16,8 +16,9 @@
  *    enable_thinking unset, true, false and each reasoning_effort
  *    (tools/thinking_goldens.py, checked against llama.cpp's Jinja engine).
  *    Since #269 also messages padded with whitespace (the templates' |trim),
- *    a blank system message and tool loops (role "tool", Qwen3.5's reasoning
- *    kept after the last user query); message_style() the pieces of it.
+ *    a blank system message and tool loops (role "tool", Qwen3.5's and
+ *    Qwen3's reasoning kept after the last user query); message_style() the
+ *    pieces of it.
  */
 #include "template.h"
 #include "decision_profile.h"
@@ -450,16 +451,17 @@ static void thinking_goldens(void) {
 }
 
 /* How the templates render the messages themselves (#269): read from their
- * text; trimmed bodies keep their spans on the trimmed text; Qwen3.5's tool
- * loop; what an answer renders as. The bytes are checked by the goldens. */
+ * text; trimmed bodies keep their spans on the trimmed text; the tool loops
+ * of Qwen3.5 and Qwen3 (#276); what an answer renders as. The bytes are
+ * checked by the goldens. */
 static void message_style(void) {
     static const struct {
         const char *file;
-        bool        trim, tools, bare, loop;
+        bool        trim, tools, bare, loop, lean;
     } want[] = {
-            {"qwen3", false, true, false, false},  {"qwen35", true, true, false, true},
-            {"qwen38", true, true, true, false},   {"bonsai2", true, true, true, false},
-            {"gemma4", true, false, false, false},
+            {"qwen3", false, true, false, true, true},   {"qwen35", true, true, false, true, false},
+            {"qwen38", true, true, true, false, false},  {"bonsai2", true, true, true, false, false},
+            {"gemma4", true, false, false, false, false},
     };
     for (size_t i = 0; i < sizeof want / sizeof *want; i++) {
         char path[256];
@@ -470,20 +472,35 @@ static void message_style(void) {
             continue;
         const struct tpl_style y = tpl_style_of(tpl_family_detect(tpl, nullptr), tpl);
         free(tpl);
-        check(y.trim == want[i].trim && y.tools == want[i].tools && y.bare == want[i].bare && y.loop == want[i].loop,
+        check(y.trim == want[i].trim && y.tools == want[i].tools && y.bare == want[i].bare && y.loop == want[i].loop &&
+                      y.lean == want[i].lean,
               want[i].file);
     }
     const struct tpl_style none = tpl_style_of(TPL_CHATML, "{{ '<|im_start|>' + message.role }}");
-    check(!none.trim && !none.tools && !none.bare && !none.loop, "style: SmolLM2's ChatML renders messages as they are");
+    check(!none.trim && !none.tools && !none.bare && !none.loop && !none.lean,
+          "style: SmolLM2's ChatML renders messages as they are");
     check(!tpl_style_of(TPL_CHATML, nullptr).trim, "style: no template");
 
     /* user queries, as Qwen3.5's template finds the last one */
-    check(tpl_is_query(&(geistr_message) {"user", "Hi"}), "query: a user message");
-    check(!tpl_is_query(&(geistr_message) {"user", " <tool_response>\n21\n</tool_response>\n"}), "query: results");
-    check(tpl_is_query(&(geistr_message) {"user", "<tool_response>21"}), "query: an unclosed result is a query");
-    check(!tpl_is_query(&(geistr_message) {"tool", "21"}) && !tpl_is_query(&(geistr_message) {"assistant", "Hi"}) &&
-                  !tpl_is_query(&(geistr_message) {"system", "Hi"}),
+    const struct tpl_style q35 = {.trim = true, .tools = true, .loop = true};
+    const struct tpl_style q3  = {.tools = true, .loop = true, .lean = true}; /* Qwen3 (#276) */
+    check(tpl_is_query(&q35, &(geistr_message) {"user", "Hi"}), "query: a user message");
+    check(!tpl_is_query(&q35, &(geistr_message) {"user", " <tool_response>\n21\n</tool_response>\n"}),
+          "query: results");
+    check(tpl_is_query(&q35, &(geistr_message) {"user", "<tool_response>21"}), "query: an unclosed result is a query");
+    check(!tpl_is_query(&q35, &(geistr_message) {"tool", "21"}) &&
+                  !tpl_is_query(&q35, &(geistr_message) {"assistant", "Hi"}) &&
+                  !tpl_is_query(&q35, &(geistr_message) {"system", "Hi"}),
           "query: tool, assistant and system messages are none");
+    /* and as Qwen3's (#276): both tags anywhere make it none */
+    const geistr_message quoted = {"user", "What do <tool_response> and </tool_response> mean?"};
+    check(tpl_is_query(&q35, &quoted) && !tpl_is_query(&q3, &quoted), "query: Qwen3 looks for the tags anywhere");
+    check(tpl_is_query(&q3, &(geistr_message) {"user", "<tool_response>21"}) &&
+                  !tpl_is_query(&q3, &(geistr_message) {"tool", "21"}),
+          "query: Qwen3, an unclosed result and a tool message");
+    check(tpl_has_query(&q3, 2, (const geistr_message[]) {{"tool", "21"}, {"user", "Hi"}}) &&
+                  !tpl_has_query(&q3, 2, (const geistr_message[]) {{"tool", "21"}, quoted}),
+          "query: one of them");
 
     /* trimmed bodies: their spans hold the trimmed text; the split keeps reasoning and answer apart */
     const struct tpl_extra x = {.style = {.trim = true, .tools = true, .loop = true}};
@@ -525,6 +542,19 @@ static void message_style(void) {
     const struct tpl_extra plain = {};
     a = tpl_render_answer(&plain, " A\n", false);
     eq("answer as it is", " A\n", a);
+    free(a);
+
+    /* Qwen3's loop (#276): untrimmed, the reasoning stripped of line breaks
+     * only, no block without reasoning, the split before the last query too */
+    const struct tpl_extra x3 = {.style = q3};
+    a = tpl_render_answer(&x3, "<think>\n R \n</think>\n\n A ", true);
+    eq("Qwen3: answer in the loop", "<think>\n R \n</think>\n\n A ", a);
+    free(a);
+    a = tpl_render_answer(&x3, "<think>\n\n</think>\n\nA", true);
+    eq("Qwen3: no block without reasoning", "A", a);
+    free(a);
+    a = tpl_render_answer(&x3, "<think>\nR\n</think>\n\nA\n", false);
+    eq("Qwen3: answer before a query", "A\n", a);
     free(a);
 }
 
