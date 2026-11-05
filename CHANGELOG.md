@@ -2,54 +2,6 @@
 
 ## Unreleased
 
-### Fixes
-
-- Messages render as the templates of Qwen3.5, Qwen3.6+ and Gemma 4 have
-  them, also padded with whitespace and in tool loops (#269):
-  - Message contents are trimmed where the template trims them (`|trim`,
-    as Python's `str.strip()`, Unicode whitespace included), still
-    tokenized with special tokens off (#261). An answer ending in
-    whitespace comes back trimmed before the next turn. Qwen3.6+ renders no
-    system turn for a blank system message.
-  - Qwen3.5 keeps an answer's reasoning (`<think>\n` reasoning
-    `\n</think>\n\n` answer) while tool results follow, as its template
-    renders the assistant turns after the last user query; the next query
-    takes it out of the loop's answers again. With thinking off the context
-    keeps the empty block it has, instead of a rewind and prefill per tool
-    step.
-  - Role `tool` messages are `<tool_response>` blocks in one user turn in
-    the Qwen3 family, as the templates have them; before, each was a user
-    turn of its own text. `serve --http` sends tool results this way already.
-  - Checked byte for byte against the real templates (transformers-style
-    Jinja and llama.cpp's `/apply-template`): padded messages, Unicode
-    whitespace, a blank system message, tool loops with and without
-    reasoning.
-- Qwen3 keeps an answer's reasoning in a tool loop, as its template does
-  (#276): with thinking on (Qwen3's default), the answers after the last user
-  query stay `<think>\n` reasoning `\n</think>\n\n` answer while tool
-  results follow; the next query takes the reasoning out again. Before, the
-  runtime dropped it, so inside a loop the context differed from the
-  template's (64 vs 158 tokens on Qwen3 0.6B). It is #269's mechanism for
-  Qwen3.5, with Qwen3's details: an answer without reasoning stays its text
-  alone, the reasoning loses only its line breaks at the ends, and a user
-  message holding both `<tool_response>` and `</tool_response>` is no query.
-  An assistant message sent with `<think>…</think>` before the last query
-  now renders as its text alone, as the template splits it.
-- The catalog marks Gemma 4 (`gemma4-e2b`, `gemma4-e4b`) as thinking models
-  (#270). They think when asked since #266, but the catalog listed them as
-  not thinking: `geistr config gemma4-e2b.thinking off` was refused while
-  `on` worked, and `catalog --json` gave `"thinking": null`.
-  - New `reasoning_format` value `channel_tags` (Gemma 4's
-    `<|channel>thought … <channel|>`), beside `think_tags`; catalog revision 14.
-    A geistr up to 0.4.0 refuses a catalog file with it (`--catalog`).
-  - `geistr config <id>.thinking on|off` now takes both values for every
-    thinking model and refuses both for the others (before, `on` was taken
-    for any id). A stored `on` for a model that does not think is ignored.
-  - `geistr decide` is unchanged: only `think_tags` models decide with
-    their reasoning on.
-
-## 0.4.0
-
 ### Security
 
 - A chat message can no longer forge a turn. Before, a message containing
@@ -105,6 +57,121 @@
     same accuracy as full reasoning (85.6 %) at 0.23x the generated tokens.
     The paired interval is +/-4.74 pp, so a 2 pp non-inferiority margin is
     not established.
+- Ubuntu and Debian: a `.deb` per architecture with a GNOME launcher
+  (`geistr chat` in a terminal, and "New conversation") and the systemd user
+  service `geistr` (`geistr serve --http`, every installed model). Windows:
+  how to run geistr in WSL 2 (README).
+
+### Fixes
+
+- Messages render as the templates of Qwen3.5, Qwen3.6+ and Gemma 4 have
+  them, also padded with whitespace and in tool loops (#269):
+  - Message contents are trimmed where the template trims them (`|trim`,
+    as Python's `str.strip()`, Unicode whitespace included), still
+    tokenized with special tokens off (#261). An answer ending in
+    whitespace comes back trimmed before the next turn. Qwen3.6+ renders no
+    system turn for a blank system message.
+  - Qwen3.5 keeps an answer's reasoning (`<think>\n` reasoning
+    `\n</think>\n\n` answer) while tool results follow, as its template
+    renders the assistant turns after the last user query; the next query
+    takes it out of the loop's answers again. With thinking off the context
+    keeps the empty block it has, instead of a rewind and prefill per tool
+    step.
+  - Role `tool` messages are `<tool_response>` blocks in one user turn in
+    the Qwen3 family, as the templates have them; before, each was a user
+    turn of its own text. `serve --http` sends tool results this way already.
+  - Checked byte for byte against the real templates (transformers-style
+    Jinja and llama.cpp's `/apply-template`): padded messages, Unicode
+    whitespace, a blank system message, tool loops with and without
+    reasoning.
+- Qwen3 keeps an answer's reasoning in a tool loop, as its template does
+  (#276): with thinking on (Qwen3's default), the answers after the last user
+  query stay `<think>\n` reasoning `\n</think>\n\n` answer while tool
+  results follow; the next query takes the reasoning out again. Before, the
+  runtime dropped it, so inside a loop the context differed from the
+  template's (64 vs 158 tokens on Qwen3 0.6B). It is #269's mechanism for
+  Qwen3.5, with Qwen3's details: an answer without reasoning stays its text
+  alone, the reasoning loses only its line breaks at the ends, and a user
+  message holding both `<tool_response>` and `</tool_response>` is no query.
+  An assistant message sent with `<think>…</think>` before the last query
+  now renders as its text alone, as the template splits it.
+- The catalog marks Gemma 4 (`gemma4-e2b`, `gemma4-e4b`) as thinking models
+  (#270). They think when asked since #266, but the catalog listed them as
+  not thinking: `geistr config gemma4-e2b.thinking off` was refused while
+  `on` worked, and `catalog --json` gave `"thinking": null`.
+  - New `reasoning_format` value `channel_tags` (Gemma 4's
+    `<|channel>thought … <channel|>`), beside `think_tags`; catalog revision 14.
+    A geistr up to 0.4.0 refuses a catalog file with it (`--catalog`).
+  - `geistr config <id>.thinking on|off` now takes both values for every
+    thinking model and refuses both for the others (before, `on` was taken
+    for any id). A stored `on` for a model that does not think is ignored.
+  - `geistr decide` is unchanged: only `think_tags` models decide with
+    their reasoning on.
+
+- `install.sh` runs only once it has been downloaded completely (a `curl | sh`
+  that breaks off installs nothing), retries downloads and works with `wget`
+  when there is no `curl`.
+
+- `geistr serve --http` before the first `geistr pull` (a fresh systemd user
+  service) failed with "cannot listen on …/geistr.sock: No such file or
+  directory"; it creates the data folder (owner only) first.
+
+- The Linux release binary checks a pulled model at disk speed: SHA-256
+  through OpenSSL (SHA-NI, ARMv8 SHA), which the static build links for
+  libcurl anyway, instead of the portable code at ~20 MB/s. Verifying
+  bonsai2-27b-pq2 (7.2 GB) took about 6 minutes, now 19 s from a cold disk
+  (2.8 s of CPU). A build without OpenSSL keeps the portable code (#254).
+
+### Changed
+
+- Thinking follows the model's chat template by default (#266). Qwen3.5 and
+  Gemma 4 answer at once unless asked to think, as their templates do; on,
+  Qwen3.5 now really reasons: its generation prompt ends in `<think>\n`,
+  where before the model mostly wrote an empty block itself. Qwen3.8 and
+  Bonsai 2 get their template's effort instruction (`xhigh`) in the system
+  turn and `<think>\n` after the generation prompt, and earlier answers as
+  the template keeps them (an empty block before the text). The `thinking`
+  setting on means "as the template has it"; `geistr catalog --json` says
+  `default` where nothing set it. With thinking off, Qwen3's and Qwen3.5's
+  earlier answers leave the empty block behind (a small prefill per turn),
+  as the template renders them. `geistr` and the Python package open chats
+  with `GEISTR_REASONING_AUTO`, so a Qwen3 GGUF outside the catalog no
+  longer answers with `<think>…` in the text. `geistr decide --escalate
+  chat` keeps the prompt its early-exit evidence was measured with: no
+  effort instruction (Qwen3.6+'s `medium`).
+
+- The chat's default reasoning is `GEISTR_REASONING_AUTO` (#266):
+  `GEISTR_CHAT_OPTS_INIT` and nullptr options give the template's default,
+  with the reasoning as `GEISTR_PART_THINKING` (discarded without
+  `opts.thinking`) instead of `<think>…` in the answer. A caller that wants
+  the raw text sets `GEISTR_REASONING_NONE`.
+
+### Engine
+
+- geistlib `52ef042` (from `eedaae6`, 487 commits) brings
+  `geist_session_tokenize_plain` (geistlib#409, #413): the protection of
+  #261 above is now live (#263).
+  - Tokenizer parity with llama.cpp: Llama 3 byte-BPE uses the llama3
+    pretokenizer (geistlib#399), SmolLM2 and the other GPT-2-regex vocabularies
+    llama.cpp's GPT-2 regex (geistlib#403), control-looking vocab strings are
+    special tokens (geistlib#404). Ordinary chats keep their ids; text with
+    digit runs, `...`, whitespace runs or contractions can tokenize
+    differently, now as `llama-tokenize` does.
+  - Llama 3.x GGUFs without `add_bos_token` report `add_bos` true
+    (geistlib#385), so their chats now start with `<|begin_of_text|>`, as in
+    llama.cpp.
+  - Llama 3.1-3.3 apply `rope_freqs` (geistlib#379); greedy decode uses the
+    full output head except on BitNet (geistlib#384); Gemma 3 decodes with
+    the right embedding scale. Llama 3.2 and Gemma 3 answers change.
+  - Also: GPT-OSS, Llama 4, DeepSeek-V2, GraniteMoE, OLMoE and Mixtral
+    families; MXFP4; MoE prefill staging and batched MoE decode; Metal tensor
+    GEMM work.
+  - No runtime source change was needed.
+
+## 0.4.0
+
+### Features
+
 - Experimental: batched chats (geistlib#26).
   `geistr_chats_next(n, chats, pieces, statuses)` gives each of n chats of
   one model its next piece in one call.
@@ -115,10 +182,6 @@
     differ slightly from the chat alone (batched rounding).
   - Models the engine does not batch fall back to one chat at a time,
     identical to `geistr_chat_next`.
-- Ubuntu and Debian: a `.deb` per architecture with a GNOME launcher
-  (`geistr chat` in a terminal, and "New conversation") and the systemd user
-  service `geistr` (`geistr serve --http`, every installed model). Windows:
-  how to run geistr in WSL 2 (README).
 - Experimental: speculative decoding with a draft model (geistlib#192).
   `geistr_model_opts.draft_model` (CLI: the `GEISTR_DRAFT_MODEL` environment
   variable) loads a small model with the same vocabulary, such as Qwen3.5
@@ -191,20 +254,6 @@
 
 ### Fixes
 
-- `install.sh` runs only once it has been downloaded completely (a `curl | sh`
-  that breaks off installs nothing), retries downloads and works with `wget`
-  when there is no `curl`.
-
-- `geistr serve --http` before the first `geistr pull` (a fresh systemd user
-  service) failed with "cannot listen on …/geistr.sock: No such file or
-  directory"; it creates the data folder (owner only) first.
-
-- The Linux release binary checks a pulled model at disk speed: SHA-256
-  through OpenSSL (SHA-NI, ARMv8 SHA), which the static build links for
-  libcurl anyway, instead of the portable code at ~20 MB/s. Verifying
-  bonsai2-27b-pq2 (7.2 GB) took about 6 minutes, now 19 s from a cold disk
-  (2.8 s of CPU). A build without OpenSSL keeps the portable code (#254).
-
 - `scripts/retrieval-bench.py --rerank-gguf` (through llama-server) takes
   the exact log-probs of "yes" and "no": when one was not among the top 50
   tokens, the 50th one's stood in, which raised P(yes) of unrelated passages
@@ -261,28 +310,6 @@
   again for that. The engine runs any other count on slower kernels
   (geistlib#35). P(yes) moves by 0.002 at most. The CPU is unchanged (#201).
 
-- Thinking follows the model's chat template by default (#266). Qwen3.5 and
-  Gemma 4 answer at once unless asked to think, as their templates do; on,
-  Qwen3.5 now really reasons: its generation prompt ends in `<think>\n`,
-  where before the model mostly wrote an empty block itself. Qwen3.8 and
-  Bonsai 2 get their template's effort instruction (`xhigh`) in the system
-  turn and `<think>\n` after the generation prompt, and earlier answers as
-  the template keeps them (an empty block before the text). The `thinking`
-  setting on means "as the template has it"; `geistr catalog --json` says
-  `default` where nothing set it. With thinking off, Qwen3's and Qwen3.5's
-  earlier answers leave the empty block behind (a small prefill per turn),
-  as the template renders them. `geistr` and the Python package open chats
-  with `GEISTR_REASONING_AUTO`, so a Qwen3 GGUF outside the catalog no
-  longer answers with `<think>…` in the text. `geistr decide --escalate
-  chat` keeps the prompt its early-exit evidence was measured with: no
-  effort instruction (Qwen3.6+'s `medium`).
-
-- The chat's default reasoning is `GEISTR_REASONING_AUTO` (#266):
-  `GEISTR_CHAT_OPTS_INIT` and nullptr options give the template's default,
-  with the reasoning as `GEISTR_PART_THINKING` (discarded without
-  `opts.thinking`) instead of `<think>…` in the answer. A caller that wants
-  the raw text sets `GEISTR_REASONING_NONE`.
-
 ### Decisions (EXPERIMENTAL)
 
 - Preparation for several questions over one context (#162; the API follows
@@ -316,25 +343,6 @@
 
 ### Engine
 
-- geistlib `52ef042` (from `eedaae6`, 487 commits) brings
-  `geist_session_tokenize_plain` (geistlib#409, #413): the protection of
-  #261 above is now live (#263).
-  - Tokenizer parity with llama.cpp: Llama 3 byte-BPE uses the llama3
-    pretokenizer (geistlib#399), SmolLM2 and the other GPT-2-regex vocabularies
-    llama.cpp's GPT-2 regex (geistlib#403), control-looking vocab strings are
-    special tokens (geistlib#404). Ordinary chats keep their ids; text with
-    digit runs, `...`, whitespace runs or contractions can tokenize
-    differently, now as `llama-tokenize` does.
-  - Llama 3.x GGUFs without `add_bos_token` report `add_bos` true
-    (geistlib#385), so their chats now start with `<|begin_of_text|>`, as in
-    llama.cpp.
-  - Llama 3.1-3.3 apply `rope_freqs` (geistlib#379); greedy decode uses the
-    full output head except on BitNet (geistlib#384); Gemma 3 decodes with
-    the right embedding scale. Llama 3.2 and Gemma 3 answers change.
-  - Also: GPT-OSS, Llama 4, DeepSeek-V2, GraniteMoE, OLMoE and Mixtral
-    families; MXFP4; MoE prefill staging and batched MoE decode; Metal tensor
-    GEMM work.
-  - No runtime source change was needed.
 - geistlib `eedaae6` (from `36e335d`) brings
   `geist_session_decode_batch` / `geist_model_decode_batch_max`
   (geistlib#26, experimental): one decode step for several sessions of one
