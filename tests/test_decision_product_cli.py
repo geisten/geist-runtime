@@ -203,8 +203,9 @@ with tempfile.TemporaryDirectory() as directory:
     config.write_text(json.dumps({'schema': 1, 'models': [{'sha256': fixture['artifact_sha256'],
         'enabled': True, 'profile': profile_name}]}))
     cancelled = subprocess.Popen(base + ['--question', 'Q'] + options, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    # Install handler before scoring; SIGINT is remembered during artifact load.
-    time.sleep(0.25)
+    # Install handler before scoring; SIGINT is remembered during artifact load. Since #287 a verified
+    # profile opens without hashing: Gemma 4 E2B at 512 tokens decides in about 0.23 s, so 0.25 s came too late.
+    time.sleep(0.1)
     cancelled.send_signal(signal.SIGINT)
     stdout, stderr = cancelled.communicate(timeout=120)
     assert cancelled.returncode == 130 and not stdout and b'cancelled' in stderr, (cancelled.returncode, stdout, stderr)
