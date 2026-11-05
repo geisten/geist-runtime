@@ -139,6 +139,34 @@
 
 ### Changed
 
+- `geistr decide` needs fewer options (#288): `geistr decide MODEL
+  "QUESTION" OPTION…` now does what `--threshold P --escalate chat
+  --early-exit` did.
+  - **Escalating to chat is the default.** Below the threshold the same
+    model answers in chat. `--no-escalate` gives the old exit 3 instead;
+    `--escalate MODEL` stays.
+  - **Compatibility: scripts that relied on exit 3 (undecided) without
+    `--escalate` need `--no-escalate`.** Scripts that relied on a direct
+    answer without `--threshold` need `--threshold 0`, which now means
+    "never escalate".
+  - **The threshold** is the verified profile's. No profile carries a
+    calibrated one yet, so every model gets the documented default 0.78:
+    geistlib#204's precision-0.95 threshold for Bonsai 2 27B, which kept
+    always-reasoning's accuracy (78.8 % vs 79.0 % on 500 held-out MMLU
+    questions) at 0.97× its time. For other models it is a starting point,
+    not a calibration. `--threshold P` (0–1) overrides it.
+  - **Early exit:** `--early-exit[=P]` and `--no-early-exit` only. The
+    probe interval is fixed at the validated 128, and `--early-exit=P`
+    replaces `--exit-threshold P`. The default is unchanged: on for the
+    Bonsai 2 27B profile only.
+  - `--question TEXT|@FILE|-` replaces `--question-file FILE|-`.
+  - The context options are unchanged and listed under "Advanced" in
+    `--help`.
+  - `--question-file`, `--probe-interval` and `--exit-threshold` are
+    still accepted until the next release, with a warning on stderr.
+  - The diagnostics' `threshold` is the one applied (before: 0 without
+    `--threshold`).
+
 - `geistr decide` resolves a model the same way for a catalog id and a
   file path (#285). Before, Bonsai 2 27B given by path answered its
   `--escalate chat` without reasoning (no option named), and the early-exit

@@ -2,6 +2,7 @@
 #include "geistr_catalog.h"
 #include "geistr_decision.h"
 #include <stddef.h>
+#include <stdint.h>
 
 typedef void (*geistr_decide_active_fn)(geistr_decision *decision, void *context);
 typedef void (*geistr_decide_context_fn)(geistr_decision_context *context, void *host_context);
@@ -19,6 +20,33 @@ typedef struct geistr_decide_host {
 } geistr_decide_host;
 /* argv starts with <model>, not program/subcommand. No download is attempted. */
 int geistr_decide_command(size_t argc, const char *const *argv, const geistr_decide_host *host);
+/* geistr decide's options as given (#288). What a profile brings, the threshold
+ * and early exit, is applied after the model is loaded: geistr_decide_threshold
+ * and geistr_decide_early_exit_default. */
+typedef struct geistr_decide_args {
+    const char *question;      /* the text; nullptr when it is read from question_file */
+    const char *question_file; /* --question @FILE, --question - (stdin) */
+    const char *context, *config_file, *catalog_file, *models_dir, *profile;
+    const char *escalate; /* "chat" (the default), a model, or nullptr: --no-escalate */
+    geistr_processor processor;
+    geistr_decision_mode mode;
+    double threshold;        /* --threshold P in [0, 1]; < 0: the profile's (geistr_decide_threshold) */
+    double temperature;      /* --temperature T */
+    uint32_t max_tokens;     /* --max-tokens N: the chat answer's cap, thinking included */
+    int early_exit;          /* -1: the profile's default; 0: --no-early-exit; 1: --early-exit[=P] */
+    uint32_t probe_interval; /* fixed at the validated 128 (--probe-interval: deprecated alias) */
+    double exit_threshold;   /* --early-exit=P (0.8) */
+    size_t n_options;
+    geistr_decision_option options[GEISTR_DECISION_MAX_OPTIONS];
+} geistr_decide_args;
+/* argv as for geistr_decide_command. 0, or 2 after a message on stderr. The
+ * options #288 removed are still accepted for one release, with a warning on
+ * stderr. */
+int geistr_decide_parse(size_t argc, const char *const *argv, geistr_decide_args *out);
+/* The threshold below which decide escalates (or, with --no-escalate, exits 3)
+ * when --threshold is not given: the profile's calibrated one. No profile
+ * carries one yet, so every model gets GEISTR_DECIDE_DEFAULT_THRESHOLD (#288). */
+double geistr_decide_threshold(geistr_decision_profile profile);
 /* decide-batch (#164): argv as above; one shared context, 1..32 questions,
  * stdout question_id TAB option_id LF in input order only on total success. */
 int geistr_decide_batch_command(size_t argc, const char *const *argv, const geistr_decide_host *host);

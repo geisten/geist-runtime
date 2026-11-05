@@ -24,6 +24,28 @@ int main(int argc, char **argv) {
                    geistr_decide_early_exit_default((geistr_decision_profile)p));
         return 0;
     }
+    /* #288: decide's options as parsed, with what a profile brings (threshold, early exit) applied, as
+     * geistr_decide_command does after loading: args <profile> <model> <options…> */
+    if (argc >= 3 && !strcmp(argv[1], "args")) {
+        geistr_decision_profile profile = GEISTR_DECISION_PROFILE_NONE;
+        for (int p = GEISTR_DECISION_PROFILE_NONE; p < GEISTR_DECISION_MAX_POLICIES; ++p)
+            if (!strcmp(argv[2], geistr_decision_profile_name((geistr_decision_profile)p)))
+                profile = (geistr_decision_profile)p;
+        geistr_decide_args a;
+        const int code = geistr_decide_parse((size_t)(argc - 3), (const char *const *)(argv + 3), &a);
+        if (code)
+            return code;
+        const bool chat = a.escalate && !strcmp(a.escalate, "chat");
+        const bool early = chat && (a.early_exit < 0 ? geistr_decide_early_exit_default(profile) : a.early_exit);
+        printf("{\"threshold\":%g,\"escalate\":%s%s%s,\"early_exit\":%s,\"probe_interval\":%u,"
+               "\"exit_threshold\":%g,\"max_tokens\":%u,\"question\":\"%s\",\"question_file\":\"%s\","
+               "\"options\":%zu}\n",
+               a.threshold < 0 ? geistr_decide_threshold(profile) : a.threshold, a.escalate ? "\"" : "",
+               a.escalate ? a.escalate : "null", a.escalate ? "\"" : "", early ? "true" : "false",
+               a.probe_interval, a.exit_threshold, a.max_tokens, a.question ? a.question : "",
+               a.question_file ? a.question_file : "", a.n_options);
+        return 0;
+    }
     /* #285: a path's SHA (receipt; with --config, else hashed), and what it gets */
     if (argc == 3 && (!strcmp(argv[1], "receipt") || !strcmp(argv[1], "receipt-config"))) {
         char sha[65];

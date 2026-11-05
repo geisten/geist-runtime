@@ -168,8 +168,11 @@ static int load(struct loaded *l, const char *model, const char *config_file, co
     if (!strchr(model, '/') && !strstr(model, ".gguf")) {
         if (host && host->catalog)
             l->catalog = host->catalog(models_dir, catalog_file);
-        else if (catalog_file && read_bounded(&n, 1u << 20, catalog_file, &l->catalog_json) == GEISTR_OK)
-            status = geistr_catalog_parse(l->catalog_json, n, &l->catalog, error, sizeof error);
+        else if (catalog_file && read_bounded(&n, 1u << 20, catalog_file, &l->catalog_json) == GEISTR_OK) {
+            geistr_catalog *catalog = nullptr; /* not &l->catalog: the call would hide l->catalog_json's owner */
+            status = geistr_catalog_parse(l->catalog_json, n, &catalog, error, sizeof error);
+            l->catalog = catalog;
+        }
         if (!l->catalog)
             return failure(1, "catalog unreadable or invalid");
         const geistr_catalog_entry *entry = geistr_catalog_find(l->catalog, model);
@@ -259,13 +262,13 @@ static const char *answer_option(const char *answer, const geistr_decision_reque
  * (thinking included). Returns the chosen ID or nullptr; *stats describes the
  * answer (finish reason, tokens, timing) when the chat got that far. */
 /* Early exit (geistlib#236): probe settings for the chat escalation; the
- * result of the last escalated answer. The default of --escalate chat only
+ * result of the last escalated answer. The default of the chat escalation only
  * for the profiles its evidence names (geistlib#286). Asked for explicitly
- * (--early-exit or a probe setting), a model or options that cannot be probed
- * are an error; as the default, the chat then reasons to the end. */
+ * (--early-exit[=P]), a model or options that cannot be probed are an error;
+ * as the default, the chat then reasons to the end. */
 struct early_exit {
     bool                enabled;
-    bool                required; /* --early-exit, --probe-interval or --exit-threshold */
+    bool                required; /* --early-exit[=P] (or a removed probe setting) */
     uint32_t            interval;
     double              threshold;
     geistr_status       set; /* geistr_chat_probe_set */
@@ -377,24 +380,41 @@ static void show_table(const geistr_decision_request *r, const double *probabili
         printf("  %-*.*s  %.2f\n", width, (int)r->options[i].id_len, r->options[i].id, probabilities[i]);
 }
 
-int geistr_decide_command(size_t argc, const char *const *argv, const geistr_decide_host *host) {
+/* --threshold's default (#288). No verified profile carries a calibrated
+ * threshold yet. 0.78 is the one threshold fitted before a test: geistlib#204's
+ * primary policy for Bonsai 2 27B (0.7809, a direct-answer precision of 0.95
+ * on 250 calibration questions, at T 1.0546, on geistlib's MMLU prompt), which
+ * matched always-reasoning's accuracy on 500 held-out questions (78.8 % vs
+ * 79.0 %). For every other model it is a starting point, not a calibration:
+ * docs/DECISIONS.md "Choosing the threshold". OWNER DECISION PENDING (#288). */
+static const double GEISTR_DECIDE_DEFAULT_THRESHOLD = 0.78;
+double geistr_decide_threshold(geistr_decision_profile profile) {
+    (void)profile; /* a profile with its own calibrated threshold returns it here */
+    return GEISTR_DECIDE_DEFAULT_THRESHOLD;
+}
+
+/* A removed option (#288), still accepted for one release. */
+static void deprecated(const char *flag, const char *instead) {
+    fprintf(stderr, "geistr %s: %s is deprecated and goes away in the next release; %s\n", command, flag, instead);
+}
+static bool probability(const char *value, bool one, double *out) { /* (0, 1), or (0, 1] with one */
+    char *end = nullptr;
+    *out = strtod(value, &end);
+    return *value && !*end && *out > 0 && (*out < 1 || (one && *out == 1));
+}
+
+int geistr_decide_parse(size_t argc, const char *const *argv, geistr_decide_args *a) {
+    *a = (geistr_decide_args){.escalate = "chat", .processor = GEISTR_PROCESSOR_AUTO, .mode = GEISTR_DECISION_DEFAULT,
+                              .threshold = -1, .temperature = 1, .max_tokens = 4096, .early_exit = -1,
+                              .probe_interval = 128, .exit_threshold = 0.8}; /* geistlib#236, #286 */
+    enum : unsigned {
+        QUESTION = 1, CONTEXT = 2, CONFIG = 4, CATALOG = 8, MODELS = 16, PROFILE = 32, PROCESSOR = 64, MODE = 128,
+        THRESHOLD = 256, ESCALATE = 512, TEMPERATURE = 1024, MAX_TOKENS = 2048, EARLY_EXIT = 4096,
+        EXIT_THRESHOLD = 8192, PROBE_INTERVAL = 16384
+    };
     if (!argc || argc > 128 || !argv || !argv[0])
         return failure(2, "model and options required; see geistr help");
-    const double start = milliseconds();
-    const char *question = nullptr, *question_file = nullptr, *context = nullptr;
-    const char *config_file = nullptr, *catalog_file = host ? host->catalog_file : nullptr,
-               *models_dir = host ? host->models_dir : nullptr, *profile = nullptr;
-    geistr_processor processor = GEISTR_PROCESSOR_AUTO;
-    geistr_decision_mode mode = GEISTR_DECISION_DEFAULT;
-    geistr_decision_option options[GEISTR_DECISION_MAX_OPTIONS];
-    double threshold = 0;          /* --threshold: below it the decision is escalated or left open */
-    const char *escalate = nullptr; /* --escalate chat | <model> */
-    double temperature = 1;         /* --temperature: the probabilities the threshold compares (calibration) */
-    unsigned long max_tokens = 4096; /* --max-tokens: the chat escalation's answer cap, thinking included */
-    struct early_exit ee = {.interval = 128, .threshold = 0.8, .set = GEISTR_INVALID,
-                            .result = {.size = sizeof(geistr_probe_result), .exit_option = -1}}; /* geistlib#236, #286 */
-    bool no_early_exit = false;
-    size_t count = 0, serialized = 0;
+    size_t serialized = 0;
     unsigned seen = 0;
     for (size_t i = 0; i < argc; ++i) {
         if (!argv[i])
@@ -405,114 +425,125 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
         serialized += n;
     }
     for (size_t i = 1; i < argc; ++i) {
-        const char *value = nullptr;
+        const char *value = nullptr, *flag = argv[i];
         unsigned bit = 0;
-        if (strncmp(argv[i], "--", 2)) { /* short form: the question, then option IDs */
-            if (!(seen & 1)) {
-                seen |= 1;
-                question = argv[i];
-            } else if (count == GEISTR_DECISION_MAX_OPTIONS)
+        if (strncmp(flag, "--", 2)) { /* short form: the question, then option IDs */
+            if (!(seen & QUESTION)) {
+                seen |= QUESTION;
+                a->question = flag;
+            } else if (a->n_options == GEISTR_DECISION_MAX_OPTIONS)
                 return failure(2, "too many options");
             else {
-                const size_t n = strnlen(argv[i], GEISTR_DECISION_MAX_ID + 1);
-                options[count++] = (geistr_decision_option){n, n, argv[i], argv[i]};
+                const size_t n = strnlen(flag, GEISTR_DECISION_MAX_ID + 1);
+                a->options[a->n_options++] = (geistr_decision_option){n, n, flag, flag};
             }
             continue;
         }
-        if (!strcmp(argv[i], "--early-exit") || !strcmp(argv[i], "--no-early-exit")) {
-            if (ee.required || no_early_exit)
-                return failure(2, "duplicate/conflicting flag");
-            if (argv[i][2] == 'n')
-                no_early_exit = true;
-            else
-                ee.required = true;
-            continue;
-        }
-        if (!strcmp(argv[i], "--option")) {
-            if (count == GEISTR_DECISION_MAX_OPTIONS || !argument(argc, &i, argv, &value))
+        /* the flags without a value */
+        if (!strcmp(flag, "--early-exit") || !strncmp(flag, "--early-exit=", 13)) {
+            bit = EARLY_EXIT;
+            a->early_exit = 1;
+            if (flag[12] == '=') {
+                bit |= EXIT_THRESHOLD;
+                if (!probability(flag + 13, false, &a->exit_threshold))
+                    return failure(2, "--early-exit=P needs a probability in (0, 1)");
+            }
+        } else if (!strcmp(flag, "--no-early-exit")) {
+            bit = EARLY_EXIT;
+            a->early_exit = 0;
+        } else if (!strcmp(flag, "--no-escalate")) {
+            bit = ESCALATE;
+            a->escalate = nullptr;
+        } else if (!strcmp(flag, "--option")) {
+            if (a->n_options == GEISTR_DECISION_MAX_OPTIONS || !argument(argc, &i, argv, &value))
                 return failure(2, "--option requires a bounded ID and description");
             const char *description = nullptr;
             if (!argument(argc, &i, argv, &description))
                 return failure(2, "missing option description");
-            options[count++] = (geistr_decision_option){
-                strnlen(value, GEISTR_DECISION_MAX_ID + 1),
-                strnlen(description, GEISTR_DECISION_MAX_DESCRIPTION + 1), value, description};
+            a->options[a->n_options++] =
+                (geistr_decision_option){strnlen(value, GEISTR_DECISION_MAX_ID + 1),
+                                         strnlen(description, GEISTR_DECISION_MAX_DESCRIPTION + 1), value, description};
             continue;
-        }
-        if (!argument(argc, &i, argv, &value))
+        } else if (!argument(argc, &i, argv, &value))
             return failure(2, "missing flag value");
-        const char *flag = argv[i - 1];
-        if (!strcmp(flag, "--question")) {
-            bit = 1;
-            question = value;
+        else if (!strcmp(flag, "--question")) {
+            bit = QUESTION;
+            if (*value == '@' && !value[1])
+                return failure(2, "--question @FILE needs a file name");
+            if (*value == '@' || !strcmp(value, "-"))
+                a->question_file = *value == '@' ? value + 1 : value;
+            else
+                a->question = value;
         } else if (!strcmp(flag, "--question-file")) {
-            bit = 1;
-            question_file = value;
+            deprecated(flag, "use --question @FILE, or --question - for stdin");
+            bit = QUESTION;
+            a->question_file = value;
         } else if (!strcmp(flag, "--context")) {
-            bit = 2;
-            context = value;
+            bit = CONTEXT;
+            a->context = value;
         } else if (!strcmp(flag, "--config")) {
-            bit = 4;
-            config_file = value;
+            bit = CONFIG;
+            a->config_file = value;
         } else if (!strcmp(flag, "--catalog")) {
-            bit = 8;
-            catalog_file = value;
+            bit = CATALOG;
+            a->catalog_file = value;
         } else if (!strcmp(flag, "--models")) {
-            bit = 16;
-            models_dir = value;
+            bit = MODELS;
+            a->models_dir = value;
         } else if (!strcmp(flag, "--profile")) {
-            bit = 32;
-            profile = value;
+            bit = PROFILE;
+            a->profile = value;
         } else if (!strcmp(flag, "--processor")) {
-            bit = 64;
+            bit = PROCESSOR;
             if (!strcmp(value, "cpu"))
-                processor = GEISTR_PROCESSOR_CPU;
+                a->processor = GEISTR_PROCESSOR_CPU;
             else if (!strcmp(value, "gpu"))
-                processor = GEISTR_PROCESSOR_GPU;
+                a->processor = GEISTR_PROCESSOR_GPU;
             else if (!strcmp(value, "auto"))
-                processor = GEISTR_PROCESSOR_AUTO;
+                a->processor = GEISTR_PROCESSOR_AUTO;
             else
                 return failure(2, "unknown processor");
         } else if (!strcmp(flag, "--threshold")) {
-            bit = 256;
+            bit = THRESHOLD;
             char *end = nullptr;
-            threshold = strtod(value, &end);
-            if (!*value || *end || !(threshold > 0 && threshold <= 1))
-                return failure(2, "--threshold must be a probability in (0, 1]");
+            a->threshold = strtod(value, &end);
+            if (!*value || *end || !(a->threshold >= 0 && a->threshold <= 1))
+                return failure(2, "--threshold must be a probability in [0, 1]");
         } else if (!strcmp(flag, "--escalate")) {
-            bit = 512;
-            escalate = value;
+            bit = ESCALATE;
+            a->escalate = value;
         } else if (!strcmp(flag, "--temperature")) {
-            bit = 1024;
+            bit = TEMPERATURE;
             char *end = nullptr;
-            temperature = strtod(value, &end);
-            if (!*value || *end || !(temperature >= 0.01 && temperature <= 100))
+            a->temperature = strtod(value, &end);
+            if (!*value || *end || !(a->temperature >= 0.01 && a->temperature <= 100))
                 return failure(2, "--temperature must be a number in [0.01, 100]");
         } else if (!strcmp(flag, "--max-tokens")) {
-            bit = 2048;
+            bit = MAX_TOKENS;
             char *end = nullptr;
-            max_tokens = isdigit((unsigned char)*value) ? strtoul(value, &end, 10) : 0;
-            if (!end || *end || max_tokens < 1 || max_tokens > GEISTR_DECIDE_MAX_ESCALATION_TOKENS)
+            const unsigned long n = isdigit((unsigned char)*value) ? strtoul(value, &end, 10) : 0;
+            if (!end || *end || n < 1 || n > GEISTR_DECIDE_MAX_ESCALATION_TOKENS)
                 return failure(2, "--max-tokens must be an integer in [1, 28672]");
+            a->max_tokens = (uint32_t)n;
         } else if (!strcmp(flag, "--probe-interval")) {
-            bit = 4096;
+            deprecated(flag, "the interval is fixed at the validated 128");
+            bit = PROBE_INTERVAL;
             char *end = nullptr;
             const unsigned long n = isdigit((unsigned char)*value) ? strtoul(value, &end, 10) : 0;
             if (!end || *end || n < 1 || n > GEISTR_DECIDE_MAX_ESCALATION_TOKENS)
                 return failure(2, "--probe-interval must be an integer in [1, 28672]");
-            ee.interval = (uint32_t)n;
+            a->probe_interval = (uint32_t)n; /* honoured until it goes */
         } else if (!strcmp(flag, "--exit-threshold")) {
-            bit = 8192;
-            char *end = nullptr;
-            ee.threshold = strtod(value, &end);
-            if (!*value || *end || !(ee.threshold > 0 && ee.threshold < 1))
+            deprecated(flag, "use --early-exit=P");
+            bit = EXIT_THRESHOLD;
+            if (!probability(value, false, &a->exit_threshold))
                 return failure(2, "--exit-threshold must be a probability in (0, 1)");
         } else if (!strcmp(flag, "--mode")) {
-            bit = 128;
+            bit = MODE;
             if (!strcmp(value, "dense"))
-                mode = GEISTR_DECISION_DENSE;
+                a->mode = GEISTR_DECISION_DENSE;
             else if (!strcmp(value, "selected_rows"))
-                mode = GEISTR_DECISION_SELECTED_ROWS;
+                a->mode = GEISTR_DECISION_SELECTED_ROWS;
             else
                 return failure(2, "unknown numeric mode");
         } else
@@ -521,25 +552,42 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
             return failure(2, "duplicate/conflicting flag");
         seen |= bit;
     }
-    if (!question && !question_file)
-        return failure(2, "--question TEXT (or --question-file) required");
-    if (!count)
+    if (!a->question && !a->question_file)
+        return failure(2, "--question TEXT|@FILE|- required");
+    if (!a->n_options)
         return failure(2, "at least one --option ID DESC required");
-    if (escalate && threshold <= 0)
-        return failure(2, "--escalate needs --threshold");
-    if ((seen & 2048) && !(escalate && !strcmp(escalate, "chat")))
-        return failure(2, "--max-tokens needs --escalate chat");
-    const bool to_chat = escalate && !strcmp(escalate, "chat");
-    if ((ee.required || no_early_exit || (seen & (4096 | 8192))) && !to_chat)
-        return failure(2, "--early-exit, --no-early-exit and the probe settings need --escalate chat");
-    if ((seen & (4096 | 8192)) && no_early_exit)
-        return failure(2, "--probe-interval and --exit-threshold need early exit; not with --no-early-exit");
-    ee.required = ee.required || (seen & (4096 | 8192));
-    ee.enabled  = to_chat && ee.required; /* the profile's default is known after loading */
+    const bool to_chat = a->escalate && !strcmp(a->escalate, "chat");
+    if ((seen & MAX_TOKENS) && !to_chat)
+        return failure(2, "--max-tokens is the chat escalation's cap; not with --no-escalate or --escalate MODEL");
+    if ((seen & (EARLY_EXIT | EXIT_THRESHOLD | PROBE_INTERVAL)) && !to_chat)
+        return failure(2, "early exit is the chat escalation's; not with --no-escalate or --escalate MODEL");
+    if ((seen & (EXIT_THRESHOLD | PROBE_INTERVAL)) && !a->early_exit)
+        return failure(2, "--exit-threshold and --probe-interval need early exit; not with --no-early-exit");
+    if (seen & (EXIT_THRESHOLD | PROBE_INTERVAL))
+        a->early_exit = 1; /* the removed settings asked for it, as before */
+    return 0;
+}
+
+int geistr_decide_command(size_t argc, const char *const *argv, const geistr_decide_host *host) {
+    const double start = milliseconds();
+    geistr_decide_args a;
+    if (geistr_decide_parse(argc, argv, &a))
+        return 2;
+    if (!a.catalog_file && host)
+        a.catalog_file = host->catalog_file;
+    if (!a.models_dir && host)
+        a.models_dir = host->models_dir;
+    const geistr_decision_option *options = a.options;
+    const bool to_chat = a.escalate && !strcmp(a.escalate, "chat");
+    const char *question = a.question, *escalate = a.escalate;
+    double threshold = a.threshold; /* the profile's when not given, known after loading */
+    struct early_exit ee = {.required = a.early_exit == 1, .interval = a.probe_interval,
+                            .threshold = a.exit_threshold, .set = GEISTR_INVALID,
+                            .result = {.size = sizeof(geistr_probe_result), .exit_option = -1}};
     char *owned_question = nullptr;
     size_t question_len = question ? strnlen(question, GEISTR_DECISION_MAX_QUESTION + 1) : 0;
-    if (question_file && read_bounded(&question_len, GEISTR_DECISION_MAX_QUESTION, question_file,
-                                      &owned_question) != GEISTR_OK)
+    if (a.question_file && read_bounded(&question_len, GEISTR_DECISION_MAX_QUESTION, a.question_file,
+                                        &owned_question) != GEISTR_OK)
         return failure(2, "question file/stdin unreadable or too large");
     if (owned_question)
         question = owned_question;
@@ -547,10 +595,10 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
                                        .operation = GEISTR_OPERATION_DECISION,
                                        .question_len = question_len,
                                        .context_len =
-                                           context ? strnlen(context, GEISTR_DECISION_MAX_CONTEXT + 1) : 0,
-                                       .n_options = count,
+                                           a.context ? strnlen(a.context, GEISTR_DECISION_MAX_CONTEXT + 1) : 0,
+                                       .n_options = a.n_options,
                                        .question = question,
-                                       .context = context,
+                                       .context = a.context,
                                        .options = options};
     char error[256];
     int code = 1;
@@ -576,20 +624,22 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
     }
     /* A chat escalation writes, and a thinking model thinks: room for the
      * prompt (4096 tokens) and the answer cap. */
-    code = load(&loaded, argv[0], config_file, profile, models_dir, catalog_file, host, processor,
-                to_chat ? 4096 + (uint32_t)max_tokens : 512);
+    code = load(&loaded, argv[0], a.config_file, a.profile, a.models_dir, a.catalog_file, host, a.processor,
+                to_chat ? 4096 + a.max_tokens : 512);
     if (code)
         goto done;
     code = 1;
     const geistr_decision_policy *policy = loaded.policy;
-    if (to_chat && !no_early_exit && !ee.required)
-        ee.enabled = geistr_decide_early_exit_default(policy->profile); /* geistlib#286 */
+    if (threshold < 0) /* #288: the profile's, or the documented default */
+        threshold = geistr_decide_threshold(policy->profile);
+    if (to_chat) /* the profile's default unless asked (geistlib#286) */
+        ee.enabled = a.early_exit < 0 ? geistr_decide_early_exit_default(policy->profile) : a.early_exit == 1;
     geistr_model *model = loaded.model;
     char sha[67] = "null"; /* JSON: the artifact's SHA-256, or null for a path without a receipt (#285) */
     if (*loaded.sha)
         snprintf(sha, sizeof sha, "\"%s\"", loaded.sha);
     geistr_decision_opts opts = GEISTR_DECISION_OPTS_INIT;
-    opts.mode = mode;
+    opts.mode = a.mode;
     status = geistr_decision_open(model, sizeof error, &opts, &decision, error);
     if (status != GEISTR_OK) {
         code = failure(1, error);
@@ -614,11 +664,11 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
     /* The probabilities the threshold compares: softmax over the options of
      * logits / T. T = 1 is the engine's own selection probabilities; the argmax
      * never changes. */
-    double first[GEISTR_DECISION_MAX_OPTIONS];
-    if (temperature == 1)
+    double first[GEISTR_DECISION_MAX_OPTIONS] = {};
+    if (a.temperature == 1)
         memcpy(first, result.selection_probabilities, result.n_options * sizeof *first);
     else
-        calibrated(result.n_options, temperature, result.logits, first);
+        calibrated(result.n_options, a.temperature, result.logits, first);
     const size_t direct_index = result.best_index;
     const double top = first[direct_index];
     const bool unsure = threshold > 0 && top < threshold;
@@ -637,9 +687,9 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
                 "3f,\"top_probability\":%.6f,\"threshold\":%.6f,\"escalation\":\"%s\",\"temperature\":%.6f,"
                 "\"direct_index\":%zu,\"direct_probabilities\":[",
                 geistr_decision_profile_name(policy->profile), sha, plan.template_sha256, geistr_version(),
-                capability.engine_revision, capability.engine_version, capability.backend, mode, result.mode,
+                capability.engine_revision, capability.engine_version, capability.backend, a.mode, result.mode,
                 result.prompt_tokens, result.model_calls, ready - start, result.preparation_ms, result.scoring_ms,
-                milliseconds() - start, top, threshold, outcome, temperature, direct_index);
+                milliseconds() - start, top, threshold, outcome, a.temperature, direct_index);
             for (size_t i = 0; i < result.n_options; ++i)
                 fprintf(f, "%s%.9g", i ? "," : "", first[i]);
             fputc(']', f);
@@ -662,7 +712,7 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
         geistr_decision_close(decision);
         decision = nullptr;
         if (!escalate) {
-            code = failure(3, "below the threshold; no --escalate: left undecided");
+            code = failure(3, "below the threshold; --no-escalate: left undecided");
             goto done;
         }
         escalation_start = milliseconds();
@@ -679,7 +729,7 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
                 }
                 ee.enabled = false; /* the default: a model that does not think answers as before */
             }
-            const char *id = ask_in_chat(model, loaded.reasoning, &request, (uint32_t)max_tokens, &ee, &chat_stats,
+            const char *id = ask_in_chat(model, loaded.reasoning, &request, a.max_tokens, &ee, &chat_stats,
                                          answer, sizeof answer);
             if (ee.enabled && ee.set != GEISTR_OK) {
                 code = failure(2, "--early-exit: the options cannot be probed (each must start with its own token)");
@@ -699,7 +749,7 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
         } else {
             /* One model in memory at a time: the first goes before the second loads. */
             unload(&loaded);
-            code = load(&loaded, escalate, config_file, nullptr, models_dir, catalog_file, host, processor, 512);
+            code = load(&loaded, escalate, a.config_file, nullptr, a.models_dir, a.catalog_file, host, a.processor, 512);
             if (code)
                 goto done;
             code = 1;
@@ -716,12 +766,12 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
                 code = failure(status == GEISTR_CANCELLED ? 130 : 1, geistr_decision_error(decision));
                 goto done;
             }
-            double second_probabilities[GEISTR_DECISION_MAX_OPTIONS];
-            if (temperature == 1)
+            double second_probabilities[GEISTR_DECISION_MAX_OPTIONS] = {};
+            if (a.temperature == 1)
                 memcpy(second_probabilities, result.selection_probabilities,
                        result.n_options * sizeof *second_probabilities);
             else
-                calibrated(result.n_options, temperature, result.logits, second_probabilities);
+                calibrated(result.n_options, a.temperature, result.logits, second_probabilities);
             second_top = second_probabilities[result.best_index];
             if (shown) {
                 printf("asked %s: %.2f\n", escalate, second_top);
@@ -767,10 +817,10 @@ done:
             fprintf(stderr, ",\"escalation_ms\":%.3f", milliseconds() - escalation_start);
         if (asked_chat)
             fprintf(stderr,
-                    ",\"chat\":{\"max_tokens\":%lu,\"finish\":\"%s\",\"input_tokens\":%" PRIu32
+                    ",\"chat\":{\"max_tokens\":%" PRIu32 ",\"finish\":\"%s\",\"input_tokens\":%" PRIu32
                     ",\"output_tokens\":%" PRIu32 ",\"prefill_ms\":%.3f,\"generation_ms\":%.3f,\"total_ms\":%.3f,"
                     "\"thinking\":%s}",
-                    max_tokens, finish_name(chat_stats.finish), chat_stats.input_tokens, chat_stats.output_tokens,
+                    a.max_tokens, finish_name(chat_stats.finish), chat_stats.input_tokens, chat_stats.output_tokens,
                     chat_stats.prefill_ms, chat_stats.generation_ms, chat_stats.total_ms,
                     loaded.reasoning == GEISTR_REASONING_THINK_TAGS ? "true" : "false");
         if (asked_chat && ee.enabled && ee.set == GEISTR_OK) {
