@@ -374,46 +374,60 @@ most 64 KiB); the short form's question is always text.
 `--catalog` accept one value each. Repeated/conflicting flags are errors;
 `--option ID DESCRIPTION` is the only repeatable flag. Profile override must
 match the configured exact artifact. The model is opened with a context of
-4096 + `--max-tokens` tokens for the chat escalation, or 512 with
-`--no-escalate` or `--escalate MODEL`. C/Python callers may choose a checked
+4096 + `--max-tokens` tokens when a chat escalation can happen (a threshold
+above 0), else 512 (threshold 0, `--no-escalate`, `--escalate MODEL`). C/Python callers may choose a checked
 larger capacity within the loaded model context.
 
 **The options (#288).** Without options, `geistr decide MODEL "QUESTION"
-OPTION…` scores the options; below the threshold the same model answers in
-chat, with early exit where its profile has it. What used to take
-`--threshold P --escalate chat --early-exit` is the default.
+OPTION…` scores the options and takes the defaults the model's verified
+profile carries (`src/decision_profile.c`). For Bonsai 2 27B
+(`bonsai2-27b-pq2-v1`) that is what `--threshold 0.78 --escalate chat
+--early-exit --max-tokens 8192` used to take: below 0.78 the same model
+answers in chat. Every other model, verified (Gemma 4) or not, carries no
+threshold: it answers directly, as before, unless `--threshold` is given.
 
 | option | default | |
 |---|---|---|
-| `--threshold P` (0–1) | the verified profile's; none has its own yet, so **0.78** for every model | 0: never escalate, every answer direct |
+| `--threshold P` (0–1) | Bonsai 2 27B: **0.78**; every other model: **0** | 0: never escalate, every answer direct |
 | `--no-escalate` | off | below the threshold: exit 3, nothing on stdout |
 | `--escalate MODEL` | `chat` | below the threshold MODEL decides; `--escalate chat` is the default spelled out |
-| `--max-tokens N` | 4096 | the chat answer's cap |
+| `--max-tokens N` | Bonsai 2 27B: **8192**; every other model: 4096 | the chat answer's cap |
 | `--early-exit[=P]` / `--no-early-exit` | on (P 0.8) for the Bonsai 2 27B profile only | probes every 128 tokens |
 | `--temperature T` | 1 | calibration |
 | Advanced: `--context TEXT`; decide-batch's `--shared-context`, `--context-tokens`, `--snapshot-budget-mib` | | unchanged |
 
-**Where 0.78 comes from.** No verified profile carries a calibrated
-threshold. 0.78 is geistlib#204's primary threshold for Bonsai 2 27B (0.7809),
-the only one fitted before a test: the smallest calibration confidence whose
-accepted questions keep a direct-answer precision of 0.95 on 250 calibration
-questions (calibrated with T 1.0546, on geistlib's MMLU prompt, not this
-command's). On 500 held-out questions it answered 31 % directly and routed
-69 % to reasoning, and matched always-reasoning (78.8 % vs 79.0 %, −0.2 pp
-[−2.36, +1.97]) at 0.97× its time. So the default keeps reasoning's accuracy
-and saves little; for Gemma 4 and every unverified model it is a starting
-point, not a calibration. A lower threshold is faster and less accurate; fit
-your own as in "Choosing the threshold and the cap" below. The value is one
-constant (`GEISTR_DECIDE_DEFAULT_THRESHOLD`, tools/geistr/decide.c); a
-profile that gets its own calibration returns it from
-`geistr_decide_threshold`.
+**Where Bonsai 2 27B's 0.78 comes from** (owner decision, #288). It is
+geistlib#204's primary threshold (0.7809), fitted before the test: the
+smallest calibration confidence whose accepted questions keep a direct-answer
+precision of 0.95 on 250 calibration questions. On 500 held-out five-shot
+classic-MMLU questions it answered 31 % directly and routed 69 % to reasoning
+(cap 2048), and matched always-reasoning: 78.8 % vs 79.0 %, −0.2 pp
+[−2.36, +1.97] (the 2 pp margin narrowly not established), at **0.97× its
+time**. So the default keeps reasoning's accuracy and saves little time; it
+avoids reasoning on the questions the direct scores are sure of. Its limits:
+
+- **Fitted on geistlib's MMLU prompt, not this command's,** with a calibration
+  temperature of 1.0546; `geistr decide` compares at T 1 unless
+  `--temperature` says otherwise.
+- **One task family and one model.** On another task the trade sits
+  elsewhere: a lower threshold is faster and less accurate (geistlib#210's
+  curve below). Fit your own as in "Choosing the threshold and the cap".
+- **Measured with reasoning to the end,** at cap 2048; the default chat
+  additionally exits early (geistlib#286), whose evidence was measured at
+  cap 8192, hence that profile's `--max-tokens` default of 8192.
+
+Gemma 4 and unverified models have no threshold evidence, so they get none.
+A profile gains its own defaults (`decide_threshold`, `decide_max_tokens` in
+`src/decision_profile.c`, read by `geistr_decide_threshold` and
+`geistr_decide_max_tokens`) only from its own declared evidence.
 
 **Removed options, accepted until the next release** with a warning on
 stderr: `--question-file FILE|-` (now `--question @FILE` or `--question -`),
 `--exit-threshold P` (now `--early-exit=P`) and `--probe-interval N` (fixed at
 the validated 128; until it goes, the value is still used). Scripts that
-relied on exit 3 without `--escalate` need `--no-escalate`, and scripts that
-relied on a direct answer without `--threshold` need `--threshold 0`.
+relied on exit 3 with `--threshold` and without `--escalate` need
+`--no-escalate`, and scripts that relied on Bonsai 2 27B's direct answer
+without `--threshold` need `--threshold 0`.
 
 **Threshold and escalation (a two-stage policy).** The threshold P
 (`--threshold P`, 0 ≤ P ≤ 1, default above) is compared with the chosen
@@ -425,7 +439,8 @@ option's probability. At or above P nothing changes. Below P:
   allowed labels (thinking on for a model whose chat template thinks in
   `<think>` tags). The
   answer, thinking included, is limited to `--max-tokens N` tokens (default
-  4096, 1–28672); the model is opened with a context of 4096 + N tokens. The
+  8192 for the Bonsai 2 27B profile, else 4096; 1–28672); the model is opened
+  with a context of 4096 + N tokens. The
   answer is read exactly (the trimmed answer is an ID, any case) or as the
   only ID that occurs as a whole word; otherwise exit 3, also when the answer
   was cut at N before naming an option. The printed ID has no probability;

@@ -198,13 +198,15 @@ def options(binary):
                 (argv, out.stderr)
         return json.loads(out.stdout)
     short = ['Q?', 'yes', 'no']
-    # Without options: the chat escalation below the profile's threshold; no profile carries one yet, so every
-    # model gets the documented default 0.78 (geistlib#204's precision-0.95 threshold for Bonsai 2).
-    # Early exit at 0.8, every 128 tokens, by default for Bonsai 2 27B only (geistlib#286).
-    for profile in ['none', 'bonsai2-27b-pq2-v1', 'gemma4-e2b-q4-v1']:
+    # Without options, what the verified profile carries (src/decision_profile.c): Bonsai 2 27B escalates to chat
+    # below 0.78 (geistlib#204) with a cap of 8192 and early exit at 0.8 every 128 tokens (geistlib#286). Every
+    # other model, verified (Gemma 4) or not, has threshold 0: the direct answer, never an escalation; its chat
+    # cap, should --threshold ask for one, is 4096.
+    for profile, threshold, cap in [('none', 0, 4096), ('gemma4-e2b-q4-v1', 0, 4096),
+                                    ('bonsai2-27b-pq2-v1', 0.78, 8192)]:
         assert parsed(profile, *short) == {
-            'threshold': 0.78, 'escalate': 'chat', 'early_exit': profile == 'bonsai2-27b-pq2-v1',
-            'probe_interval': 128, 'exit_threshold': 0.8, 'max_tokens': 4096, 'question': 'Q?',
+            'threshold': threshold, 'escalate': 'chat', 'early_exit': profile == 'bonsai2-27b-pq2-v1',
+            'probe_interval': 128, 'exit_threshold': 0.8, 'max_tokens': cap, 'question': 'Q?',
             'question_file': '', 'options': 2}, profile
     bonsai = 'bonsai2-27b-pq2-v1'
     assert parsed(bonsai, *short, '--escalate', 'chat') == parsed(bonsai, *short)  # the default, spelled out
@@ -213,6 +215,11 @@ def options(binary):
     assert parsed(bonsai, *short, '--no-escalate')['early_exit'] is False
     other = parsed(bonsai, *short, '--escalate', 'other.gguf')
     assert other['escalate'] == 'other.gguf' and other['early_exit'] is False and other['threshold'] == 0.78
+    # --threshold and --max-tokens override the profile's, in both directions
+    assert parsed('gemma4-e2b-q4-v1', *short, '--threshold', '0.9')['threshold'] == 0.9
+    assert parsed(bonsai, *short, '--threshold', '0')['threshold'] == 0
+    assert parsed(bonsai, *short, '--max-tokens', '2048')['max_tokens'] == 2048
+    assert parsed('none', *short, '--max-tokens', '8192')['max_tokens'] == 8192
     # --threshold overrides the default; 0 never escalates (every answer direct, the old default)
     for value, expected in [('0.9', 0.9), ('1', 1), ('0', 0), ('0.5', 0.5)]:
         assert parsed('none', *short, '--threshold', value)['threshold'] == expected

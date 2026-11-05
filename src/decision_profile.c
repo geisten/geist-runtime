@@ -11,11 +11,15 @@ static const struct decision_profile profiles[] = {
                                          "3907dc1658db1f78a9826bf8d5bcb8dc65db0d466388937af57f2294fae62ec1",
                                          "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041", "",
                                          "<|im_start|>system\n", "<|im_end|>\n<|im_start|>user\n",
-                                         "<|im_end|>\n<|im_start|>assistant\n", "<think>\n\n</think>\n\n"},
+                                         "<|im_end|>\n<|im_start|>assistant\n", "<think>\n\n</think>\n\n",
+                                         /* geistlib#204's precision-0.95 threshold (0.7809), held out: 78.8 % vs
+                                          * 79.0 % always-reasoning at 0.97x its time; geistlib#286's cap */
+                                         .decide_threshold = 0.78, .decide_max_tokens = 8192},
     [GEISTR_DECISION_GEMMA4_E2B_Q4] = {"gemma4-e2b-q4-v1",
                                        "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
                                        "241c50d86bdfe5e43307da87f559cd2416aacd67a8de46c15acc0105ef2200b7", "<bos>",
-                                       "<|turn>system\n", "<turn|>\n<|turn>user\n", "<turn|>\n<|turn>model\n", ""}};
+                                       "<|turn>system\n", "<turn|>\n<|turn>user\n", "<turn|>\n<|turn>model\n", "",
+                                       0, 0 /* no threshold evidence: the direct answer; the cap 4096 */}};
 
 const struct decision_profile *decision_profile_get(geistr_decision_profile p) {
     return p > GEISTR_DECISION_PROFILE_NONE && (size_t)p < sizeof profiles / sizeof profiles[0] ? &profiles[p]

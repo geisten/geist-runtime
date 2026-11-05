@@ -42,7 +42,7 @@ int main(int argc, char **argv) {
                "\"options\":%zu}\n",
                a.threshold < 0 ? geistr_decide_threshold(profile) : a.threshold, a.escalate ? "\"" : "",
                a.escalate ? a.escalate : "null", a.escalate ? "\"" : "", early ? "true" : "false",
-               a.probe_interval, a.exit_threshold, a.max_tokens, a.question ? a.question : "",
+               a.probe_interval, a.exit_threshold, a.max_tokens ? a.max_tokens : geistr_decide_max_tokens(profile), a.question ? a.question : "",
                a.question_file ? a.question_file : "", a.n_options);
         return 0;
     }

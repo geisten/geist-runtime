@@ -1,4 +1,5 @@
 #include "decide.h"
+#include "decision_profile.h"
 #include "geistr_catalog.h"
 #include "geistr_decision.h"
 #include <inttypes.h>
@@ -156,7 +157,7 @@ static void unload(struct loaded *l) {
 static const char UNKNOWN_SHA[] = "0000000000000000000000000000000000000000000000000000000000000000";
 static int load(struct loaded *l, const char *model, const char *config_file, const char *profile,
                 const char *models_dir, const char *catalog_file, const geistr_decide_host *host,
-                geistr_processor processor, uint32_t context) {
+                geistr_processor processor, uint32_t context, geistr_decide_args *a) {
     char error[256];
     size_t n = 0;
     geistr_status status = config_file ? geistr_decide_config_read(sizeof error, config_file, &l->config, error)
@@ -207,6 +208,14 @@ static int load(struct loaded *l, const char *model, const char *config_file, co
         return failure(1, "decision permission absent or disabled for this artifact");
     if (profile && strcmp(profile, geistr_decision_profile_name(l->policy->profile)))
         return failure(1, "profile override does not match the immutable artifact policy");
+    if (a) { /* decide: what the profile brings (#288), and room for a chat escalation that can happen */
+        if (a->threshold < 0)
+            a->threshold = geistr_decide_threshold(l->policy->profile);
+        if (!a->max_tokens)
+            a->max_tokens = geistr_decide_max_tokens(l->policy->profile);
+        if (a->escalate && !strcmp(a->escalate, "chat") && a->threshold > 0)
+            context = 4096 + a->max_tokens; /* the prompt and the answer, thinking included */
+    }
     geistr_model_opts mo = GEISTR_MODEL_OPTS_INIT;
     mo.decision = l->policy;
     mo.processor = processor;
@@ -380,17 +389,17 @@ static void show_table(const geistr_decision_request *r, const double *probabili
         printf("  %-*.*s  %.2f\n", width, (int)r->options[i].id_len, r->options[i].id, probabilities[i]);
 }
 
-/* --threshold's default (#288). No verified profile carries a calibrated
- * threshold yet. 0.78 is the one threshold fitted before a test: geistlib#204's
- * primary policy for Bonsai 2 27B (0.7809, a direct-answer precision of 0.95
- * on 250 calibration questions, at T 1.0546, on geistlib's MMLU prompt), which
- * matched always-reasoning's accuracy on 500 held-out questions (78.8 % vs
- * 79.0 %). For every other model it is a starting point, not a calibration:
- * docs/DECISIONS.md "Choosing the threshold". OWNER DECISION PENDING (#288). */
-static const double GEISTR_DECIDE_DEFAULT_THRESHOLD = 0.78;
+/* geistr decide's defaults that a verified profile carries (#288,
+ * src/decision_profile.c): the threshold below which it escalates, 0 (never)
+ * without one, and the chat escalation's cap, 4096 without one. Only Bonsai 2
+ * 27B has its own: 0.78 (geistlib#204) and 8192 (geistlib#286). */
 double geistr_decide_threshold(geistr_decision_profile profile) {
-    (void)profile; /* a profile with its own calibrated threshold returns it here */
-    return GEISTR_DECIDE_DEFAULT_THRESHOLD;
+    const struct decision_profile *p = decision_profile_get(profile);
+    return p ? p->decide_threshold : 0;
+}
+uint32_t geistr_decide_max_tokens(geistr_decision_profile profile) {
+    const struct decision_profile *p = decision_profile_get(profile);
+    return p && p->decide_max_tokens ? p->decide_max_tokens : 4096;
 }
 
 /* A removed option (#288), still accepted for one release. */
@@ -405,7 +414,7 @@ static bool probability(const char *value, bool one, double *out) { /* (0, 1), o
 
 int geistr_decide_parse(size_t argc, const char *const *argv, geistr_decide_args *a) {
     *a = (geistr_decide_args){.escalate = "chat", .processor = GEISTR_PROCESSOR_AUTO, .mode = GEISTR_DECISION_DEFAULT,
-                              .threshold = -1, .temperature = 1, .max_tokens = 4096, .early_exit = -1,
+                              .threshold = -1, .temperature = 1, .early_exit = -1,
                               .probe_interval = 128, .exit_threshold = 0.8}; /* geistlib#236, #286 */
     enum : unsigned {
         QUESTION = 1, CONTEXT = 2, CONFIG = 4, CATALOG = 8, MODELS = 16, PROFILE = 32, PROCESSOR = 64, MODE = 128,
@@ -580,7 +589,6 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
     const geistr_decision_option *options = a.options;
     const bool to_chat = a.escalate && !strcmp(a.escalate, "chat");
     const char *question = a.question, *escalate = a.escalate;
-    double threshold = a.threshold; /* the profile's when not given, known after loading */
     struct early_exit ee = {.required = a.early_exit == 1, .interval = a.probe_interval,
                             .threshold = a.exit_threshold, .set = GEISTR_INVALID,
                             .result = {.size = sizeof(geistr_probe_result), .exit_option = -1}};
@@ -622,16 +630,12 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
         code = failure(1, "linked decision engine is disabled; no fallback");
         goto done;
     }
-    /* A chat escalation writes, and a thinking model thinks: room for the
-     * prompt (4096 tokens) and the answer cap. */
-    code = load(&loaded, argv[0], a.config_file, a.profile, a.models_dir, a.catalog_file, host, a.processor,
-                to_chat ? 4096 + a.max_tokens : 512);
+    code = load(&loaded, argv[0], a.config_file, a.profile, a.models_dir, a.catalog_file, host, a.processor, 512, &a);
     if (code)
         goto done;
     code = 1;
     const geistr_decision_policy *policy = loaded.policy;
-    if (threshold < 0) /* #288: the profile's, or the documented default */
-        threshold = geistr_decide_threshold(policy->profile);
+    const double threshold = a.threshold; /* the profile's unless given (#288), resolved by load */
     if (to_chat) /* the profile's default unless asked (geistlib#286) */
         ee.enabled = a.early_exit < 0 ? geistr_decide_early_exit_default(policy->profile) : a.early_exit == 1;
     geistr_model *model = loaded.model;
@@ -749,7 +753,8 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
         } else {
             /* One model in memory at a time: the first goes before the second loads. */
             unload(&loaded);
-            code = load(&loaded, escalate, a.config_file, nullptr, a.models_dir, a.catalog_file, host, a.processor, 512);
+            code = load(&loaded, escalate, a.config_file, nullptr, a.models_dir, a.catalog_file, host, a.processor, 512,
+                        nullptr);
             if (code)
                 goto done;
             code = 1;
@@ -1180,7 +1185,7 @@ int geistr_decide_batch_command(size_t argc, const char *const *argv, const geis
         goto done;
     }
     if ((code = load(&loaded, argv[0], config_file, profile, models_dir, catalog_file, host, processor,
-                     tokens ? (uint32_t)tokens : 512)))
+                     tokens ? (uint32_t)tokens : 512, nullptr)))
         goto done;
     code = 1;
     loaded_ms = milliseconds();

@@ -219,9 +219,9 @@ billing
 Piped, it prints only the chosen option, for scripts. The probabilities are
 the model's own, read from the option keys; nothing else can come out.
 
-Below a threshold (0.78, or `--threshold P`) the decision is not taken from
-the probabilities: the same model writes the answer in chat (thinking, if it
-can), or with `--escalate bonsai2-27b-pq2` a larger model decides, or with
+Below a threshold (`--threshold P`; by default 0.78 for Bonsai 2 27B and none
+for other models) the decision is not taken from the probabilities: the same
+model writes the answer in chat (thinking, if it can), or with `--escalate bonsai2-27b-pq2` a larger model decides, or with
 `--no-escalate` `geistr decide` exits with 3. `--max-tokens N` caps the chat
 answer and `--temperature T` applies your calibration. Where to set the threshold and the cap is your
 application's trade between speed and quality, and it depends on the task and

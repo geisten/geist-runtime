@@ -29,10 +29,11 @@ with tempfile.TemporaryDirectory() as directory:
     assert d['schema'] == 1 and d['artifact_sha256'] == fixture['artifact_sha256']
     assert d['profile'] == profile_name and d['template_sha256'] == fixture['template_sha256']
     assert d['operation'] == 'decision' and d['model_calls'] == 1 and d['resolved_mode'] == 1
-    # #288: without --threshold the profile's threshold applies; no profile has its own yet: the default 0.78.
-    # Below it the same model answers in chat; at or above it the direct answer stands.
-    assert abs(d['threshold'] - 0.78) < 1e-9 and d['answered_by'] == ('chat' if d['top_probability'] < 0.78
-                                                                       else 'direct'), d
+    # #288: without --threshold the profile's threshold applies: 0.78 for Bonsai 2 27B (geistlib#204), below it
+    # the same model answers in chat; 0 for Gemma 4, whose answer is always the direct one.
+    threshold = 0.78 if profile == 'bonsai2' else 0
+    assert abs(d['threshold'] - threshold) < 1e-9 and d['answered_by'] == ('chat' if d['top_probability'] < threshold
+                                                                            else 'direct'), d
     pinned = re.search(r'^GEIST_REF\s*\?=\s*([0-9a-f]{40})', (Path(__file__).parents[1] / 'Makefile').read_text(), re.M)
     assert pinned and d['engine_revision'] == pinned.group(1), (d['engine_revision'], pinned)  # the Makefile's pin
     assert d['backend'] == 'metal' if processor == 'gpu' else d['backend'].startswith('cpu'), d['backend']
@@ -66,7 +67,7 @@ with tempfile.TemporaryDirectory() as directory:
     c = record(chat)
     assert c['escalation'] == 'chat' and c['answered_by'] == 'chat', c
     assert c['answer_index'] == [b'left\n', b'right\n'].index(chat.stdout), c
-    assert c['chat']['max_tokens'] == 4096 and c['chat']['output_tokens'] > 0 and c['chat']['input_tokens'] > 0, c
+    assert c['chat']['max_tokens'] == (8192 if profile == 'bonsai2' else 4096) and c['chat']['output_tokens'] > 0 and c['chat']['input_tokens'] > 0, c
     assert c['escalation_ms'] >= c['chat']['total_ms'] > 0, c
     # Whether the chat thinks is its template's, for a catalog id and a path alike (#285): only in <think>
     # tags, so Bonsai 2 does and Gemma 4 (<|think|>) does not (#270).
