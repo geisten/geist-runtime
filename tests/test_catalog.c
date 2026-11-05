@@ -1,8 +1,10 @@
 /* test_catalog.c — catalog parsing, SHA-256, install states and receipts (#5).
+ * Also the verified-profile artifact check by receipt (#287).
  * Usage: test_catalog [catalog.json]   (default models/catalog.json)
  *        test_catalog --validate        catalog on stdin; "ok" or the reason,
  *                                       exit 1 on refusal (tests/test_catalog.py) */
 #include "geistr_catalog.h"
+#include "common.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -156,6 +158,90 @@ static void install_states(const char *dir) {
     geistr_catalog_free(c);
 }
 
+static void copy_file(const char *to, const char *from) {
+    FILE *in = fopen(from, "rb"), *out = fopen(to, "wb");
+    for (int ch; in && out && (ch = fgetc(in)) != EOF;)
+        fputc(ch, out);
+    if (in)
+        fclose(in);
+    if (out)
+        fclose(out);
+}
+
+/* The receipt geistr_catalog_check writes for entry, copied under the claimed
+ * SHA-256 (in its name and its stamp). */
+static void forge_receipt(const geistr_catalog_entry *entry, const char *dir, const char *real, const char *forged,
+                          const char *claimed) {
+    geistr_install state;
+    char           text[256] = "";
+    CHECK(geistr_catalog_check(entry, dir, true, &state) == GEISTR_OK && state == GEISTR_INSTALL_OK);
+    FILE *f = fopen(real, "r");
+    CHECK(f && fread(text, 1, sizeof text - 1, f) > 70);
+    if (f)
+        fclose(f);
+    CHECK(!strncmp(text, "v1 ", 3) && !strncmp(text + 3, entry->sha256, 64));
+    memcpy(text + 3, claimed, 64);
+    write_file(forged, text);
+}
+
+/* A verified profile's file (#287): a receipt matching the file's identity
+ * stands for its hash; a changed, swapped or receipt-less file is hashed and
+ * a wrong one refused. The receipt is forged here (the stamp of a real check,
+ * its SHA-256 replaced), so a hash would refuse: GEISTR_OK proves none ran. */
+static void artifact_receipts(const char *dir) {
+    char path[512], swap[512], receipts[512], real[600], forged[600], sum[65];
+    const char claimed[] = "b0c1d2e3f405162738495a6b7c8d9eafb0c1d2e3f405162738495a6b7c8d9eaf";
+    snprintf(path, sizeof path, "%s/artifact.gguf", dir);
+    snprintf(swap, sizeof swap, "%s/swap.gguf", dir);
+    snprintf(receipts, sizeof receipts, "%s/.verified", dir);
+    write_file(path, "GGUF artifact bytes");
+    CHECK(geistr_sha256_file(path, sum) == GEISTR_OK);
+
+    /* No receipt: hashed. Its own hash passes, another is refused. */
+    CHECK(artifact_verify(path, sum) == GEISTR_OK);
+    CHECK(artifact_verify(path, claimed) == GEISTR_FORMAT);
+    CHECK(artifact_verify(path, "not a hash") == GEISTR_INVALID);
+    CHECK(artifact_verify(nullptr, sum) == GEISTR_INVALID);
+
+    /* A real check leaves the receipt; forge one for the claimed hash. */
+    const geistr_catalog_entry entry = {.file = "artifact.gguf", .sha256 = sum, .bytes = 19};
+    snprintf(real, sizeof real, "%s/%s", receipts, sum);
+    snprintf(forged, sizeof forged, "%s/%s", receipts, claimed);
+    forge_receipt(&entry, dir, real, forged, claimed);
+    CHECK(artifact_verify(path, claimed) == GEISTR_OK); /* the receipt: not hashed */
+    CHECK(artifact_verify(path, sum) == GEISTR_OK);     /* its real receipt */
+
+    /* Swapped: another file (same size) renamed into place. */
+    write_file(swap, "GGUF artifact BYTES");
+    CHECK(rename(swap, path) == 0);
+    CHECK(artifact_verify(path, claimed) == GEISTR_FORMAT);
+    CHECK(artifact_verify(path, sum) == GEISTR_FORMAT);
+
+    /* Changed in place after its receipt (a stale receipt), here back to the
+     * right bytes: the receipt no longer counts, the hash decides. */
+    write_file(path, "GGUF artifact bytes");
+    forge_receipt(&entry, dir, real, forged, claimed);
+    CHECK(artifact_verify(path, claimed) == GEISTR_OK);
+    sleep(1); /* coarse-ctime file systems */
+    write_file(path, "GGUF artifact bytes");
+    CHECK(artifact_verify(path, claimed) == GEISTR_FORMAT);
+    CHECK(artifact_verify(path, sum) == GEISTR_OK);
+
+    /* A copy elsewhere carries no receipt; a symlink never counts. */
+    char other[512], link[512];
+    snprintf(other, sizeof other, "%s/copy", dir);
+    CHECK(mkdir(other, 0700) == 0);
+    snprintf(other, sizeof other, "%s/copy/artifact.gguf", dir);
+    copy_file(other, path);
+    CHECK(artifact_verify(other, claimed) == GEISTR_FORMAT);
+    snprintf(link, sizeof link, "%s/link.gguf", dir);
+    CHECK(symlink(path, link) == 0);
+    CHECK(artifact_verify(link, sum) == GEISTR_IO);
+    unlink(link), unlink(other), unlink(path), unlink(real), unlink(forged);
+    snprintf(other, sizeof other, "%s/copy", dir);
+    rmdir(other);
+}
+
 static void models_dir(void) {
     char  out[512];
     char *saved = getenv("GEISTEN_HOME") ? strdup(getenv("GEISTEN_HOME")) : nullptr;
@@ -189,6 +275,7 @@ int main(int argc, char **argv) {
     sha256_vectors(dir);
     shipped(argc > 1 ? argv[1] : "models/catalog.json");
     install_states(dir);
+    artifact_receipts(dir);
     models_dir();
 
     geistr_catalog *c = (geistr_catalog *) 1;

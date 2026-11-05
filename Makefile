@@ -66,8 +66,8 @@ $(BUILD)/test_stream: tests/test_stream.c $(TEXT)
 $(BUILD)/test_window: tests/test_window.c src/window.h | $(BUILD)
 	$(CC) $(CFLAGS) -Isrc $< $(LDFLAGS) -o $@
 
-$(BUILD)/test_catalog: tests/test_catalog.c $(TEXT)
-	$(CC) $(CFLAGS) $< $(TEXT) $(LDFLAGS) $(LDLIBS) -o $@
+$(BUILD)/test_catalog: tests/test_catalog.c src/common.h $(TEXT)
+	$(CC) $(CFLAGS) -Isrc $< $(TEXT) $(LDFLAGS) $(LDLIBS) -o $@
 
 $(BUILD)/test_fit: tests/test_fit.c tests/fit_golden.h $(TEXT)
 	$(CC) $(CFLAGS) $< $(TEXT) $(LDFLAGS) $(LDLIBS) -o $@

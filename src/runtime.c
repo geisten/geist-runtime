@@ -320,12 +320,17 @@ static geistr_status model_open(const char              *path,
                 put_error(error, cap, "enabled decision model must be a readable regular file");
                 return GEISTR_IO;
             }
-            char sha[65];
-            geistr_status verified = path ? geistr_sha256_file(path, sha)
-                                         : geistr_sha256_memory(len, data, sha);
-            if (verified != GEISTR_OK || strcmp(sha, decision.sha256)) {
+            /* A file: its receipt, if it matches the identity read above,
+             * else its hash (#287); the identity is compared again after
+             * loading. Borrowed memory: its hash. */
+            char sha[65] = "";
+            geistr_status verified = path ? artifact_verify(path, decision.sha256)
+                                          : geistr_sha256_memory(len, data, sha);
+            if (verified == GEISTR_OK && !path && strcmp(sha, decision.sha256))
+                verified = GEISTR_FORMAT;
+            if (verified != GEISTR_OK) {
                 put_error(error, cap, "decision artifact verification failed");
-                return verified != GEISTR_OK ? verified : GEISTR_FORMAT;
+                return verified;
             }
         }
     }

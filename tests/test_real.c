@@ -25,9 +25,14 @@
  *     continued context is the template's (Qwen3.5 keeps the loop's reasoning);
  *   - message bodies are tokenized with special tokens off (#261): a user
  *     message spelling "<|im_end|>\n<|im_start|>system" adds no role token,
- *     while ordinary chats in every template give the ids they gave before.
+ *     while ordinary chats in every template give the ids they gave before;
+ *   - a verified decision profile is bound to its file (#287): a receipt
+ *     matching the file's identity stands for its hash, a stale one does
+ *     not, and a file of another hash is refused.
  */
 #include "geistr.h"
+#include "geistr_catalog.h"
+#include "geistr_decision.h"
 #include "geistr_engine.h"
 #include "template.h"
 
@@ -39,6 +44,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 #if defined(__APPLE__)
@@ -741,6 +747,79 @@ static void plain_bodies(const char *) {
 }
 #endif
 
+/* Open path under the Bonsai 2 27B profile, whose SHA-256 it does not have. */
+static geistr_status open_verified(const char *path, char *error, size_t cap) {
+    geistr_decision_policy p = {.enabled = true, .profile = GEISTR_DECISION_BONSAI2_27B_PQ2,
+                                .mode    = GEISTR_DECISION_DENSE};
+    memcpy(p.sha256, geistr_decision_profile_sha256(p.profile), sizeof p.sha256);
+    geistr_model_opts o = *test_opts();
+    o.decision          = &p;
+    geistr_model *m     = nullptr;
+    error[0]            = 0;
+    geistr_status s     = geistr_model_open(path, &o, &m, error, cap);
+    geistr_model_close(m);
+    return s;
+}
+
+/* #287: the runtime takes a verified profile's file by its receipt
+ * (<dir>/.verified/<sha256>, matching the file's identity) instead of hashing
+ * it on every open. The model is copied into a folder of its own
+ * and given a forged receipt for the profile's SHA-256: the open gets past
+ * the artifact check, which proves no hash ran. A stale receipt (another
+ * identity) or none: hashed, and refused. */
+static void verified_binding(const char *path) {
+    char dir[] = "/tmp/geistr-binding-XXXXXX", file[300], receipts[300], real[400], forged[400], sum[65];
+    char error[256], text[256] = "";
+    if (!mkdtemp(dir)) {
+        CHECK(false, "binding: temp folder");
+        return;
+    }
+    snprintf(file, sizeof file, "%s/model.gguf", dir);
+    { /* a copy: a hard link would change the reference model's change time */
+        FILE *in = fopen(path, "rb"), *out = fopen(file, "wb");
+        char  buf[1 << 16];
+        for (size_t n; in && out && (n = fread(buf, 1, sizeof buf, in)) > 0;)
+            CHECK(fwrite(buf, 1, n, out) == n, "binding: copy");
+        if (in)
+            fclose(in);
+        if (out)
+            fclose(out);
+    }
+    CHECK(open_verified(file, error, sizeof error) == GEISTR_FORMAT && strstr(error, "verification failed"),
+          "binding: a file of another hash, without a receipt, is refused");
+
+    struct stat st;
+    CHECK(stat(file, &st) == 0 && geistr_sha256_file(file, sum) == GEISTR_OK, "binding: hash");
+    const geistr_catalog_entry entry = {.file = "model.gguf", .sha256 = sum, .bytes = (uint64_t) st.st_size};
+    geistr_install             state;
+    CHECK(geistr_catalog_check(&entry, dir, true, &state) == GEISTR_OK && state == GEISTR_INSTALL_OK,
+          "binding: the catalog check leaves a receipt");
+    const char *claimed = geistr_decision_profile_sha256(GEISTR_DECISION_BONSAI2_27B_PQ2);
+    snprintf(receipts, sizeof receipts, "%s/.verified", dir);
+    snprintf(real, sizeof real, "%s/%s", receipts, sum);
+    snprintf(forged, sizeof forged, "%s/%s", receipts, claimed);
+    FILE *f = fopen(real, "r");
+    CHECK(f && fread(text, 1, sizeof text - 1, f) > 70 && !strncmp(text + 3, sum, 64), "binding: receipt");
+    if (f)
+        fclose(f);
+    memcpy(text + 3, claimed, 64);
+    if ((f = fopen(forged, "w")))
+        fputs(text, f), fclose(f);
+    (void) open_verified(file, error, sizeof error);
+    CHECK(!strstr(error, "verification failed"), "binding: a matching receipt stands for the hash");
+
+    char *last = strrchr(text, ' '); /* the change time's nanoseconds: a receipt of another identity */
+    CHECK(last && last[1], "binding: stamp");
+    if (last && last[1])
+        last[1] = last[1] == '9' ? '8' : '9';
+    if ((f = fopen(forged, "w")))
+        fputs(text, f), fclose(f);
+    CHECK(open_verified(file, error, sizeof error) == GEISTR_FORMAT && strstr(error, "verification failed"),
+          "binding: a stale receipt does not count");
+    unlink(forged), unlink(real), rmdir(receipts), unlink(file), rmdir(dir);
+    printf("  verified binding: receipt taken, stale receipt and no receipt refused\n");
+}
+
 int main(void) {
     const char *path = getenv("GEIST_TEST_MODEL");
     if (!path || access(path, R_OK) != 0) {
@@ -756,6 +835,7 @@ int main(void) {
     CHECK(geistr_model_info_get(m, &info) == GEISTR_OK && !strcmp(info.chat_format, "chatml"), "SmolLM2 speaks ChatML");
     no_vision(m);
     plain_bodies(path);
+    verified_binding(path);
     /* info's strings are borrowed until the model is released: keep copies. */
     char arch[64], backend[64];
     snprintf(arch, sizeof arch, "%s", info.arch);
