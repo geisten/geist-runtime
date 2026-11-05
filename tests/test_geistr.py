@@ -346,7 +346,7 @@ def section_run():
 # ---- the conversation across runs (in a terminal only) ------------------------
 def section_resume():
     chats = os.path.join(env['GEISTEN_HOME'], 'chats')
-    def terminal_chat(message, *flags):
+    def terminal_chat(message, *flags, info=False):
         pid, fd = pty.fork()
         if pid == 0:
             os.execve(geistr, [geistr, 'chat', 'ref', *flags, *base], {**env, 'TERM': 'xterm'})
@@ -354,6 +354,8 @@ def section_resume():
         time.sleep(.3)
         os.write(fd, message.encode() + b'\r')
         seen += until(fd, 'tok/s', 180)  # a whole answer: slow on a busy machine
+        if info:
+            os.write(fd, b'/info\r'); seen += until(fd, ' tokens (')
         os.write(fd, b'\x03'); until(fd, 'Ctrl-C again to exit')   # right after the answer: still counts
         os.write(fd, b'\x03')
         deadline, status, tail = time.time() + 30, None, b''
@@ -463,10 +465,11 @@ def section_resume():
         for i in range(40):
             f.write(json.dumps({'role': 'user', 'content': f'Question {i}: ' + 'tell me more ' * 15}) + '\n')
             f.write(json.dumps({'role': 'assistant', 'content': f'Answer {i}: ' + 'here is more ' * 15}) + '\n')
-    started = time.time()
-    out = terminal_chat('Say OK.')
+    out = terminal_chat('Say OK.', info=True)
     assert '↻ 80 · ' in out and 'resumes the last' in out, out[-400:]
-    assert time.time() - started < 60, time.time() - started
+    # what was read, not how long it took (#280): the budget (2048) and the answer; all of it is over 4000
+    used = int(re.search(r'context (\d+) of', out).group(1))
+    assert used < 3072, used
     # resume_tokens: a smaller budget re-reads fewer of the newest messages; invalid values are refused (#173)
     import re as _re
     budget = lambda text: int(_re.search(r'resumes the last (\d+)', text).group(1))
@@ -787,8 +790,8 @@ def section_serve():
     service.send_signal(signal.SIGTERM)
     last = [json.loads(l) for l in lines][-1]
     s.close()
-    assert service.wait(30) == 0 and time.time() - t0 < 5 and not os.path.exists(sock), time.time() - t0
-    assert last.get('finish') == 'cancelled', last
+    assert service.wait(30) == 0 and not os.path.exists(sock), time.time() - t0
+    assert last.get('finish') == 'cancelled', last  # not run to its end: what a time limit guarded (#280)
     r = geistr_run('chat', '--socket=' + sock)
     assert r.returncode == 1 and 'no service' in r.stderr, r.stderr
     # a data folder too long for a socket path: the socket goes to the private runtime folder
@@ -819,8 +822,8 @@ def section_serve():
     service.send_signal(signal.SIGTERM)
     reply = s.makefile(encoding='utf-8').read()
     s.close()
-    assert service.wait(30) == 0 and time.time() - t0 < 5 and not os.path.exists(sock2), time.time() - t0
-    assert 'done' not in reply, reply[:200]  # cut off in the prefill: no answer
+    assert service.wait(30) == 0 and not os.path.exists(sock2), time.time() - t0
+    assert 'done' not in reply, reply[:200]  # cut off in the prefill: no answer, not a time limit (#280)
     # --max-request: a request over the limit is refused at once, naming the flag (#147)
     home = tempfile.mkdtemp(prefix='gr-mr-')
     port = 20000 + os.getpid() % 20000
@@ -832,7 +835,7 @@ def section_serve():
         assert service.poll() is None and time.time() < deadline, service.stderr.read()
         time.sleep(0.1)
     time.sleep(0.5)
-    for path in ('/v1/chat/completions', '/api/chat'):  # in under 1 s; OpenAI's error format on /v1, Ollama's on /api
+    for path in ('/v1/chat/completions', '/api/chat'):  # not after 30 s waiting for the body; OpenAI's error format on /v1, Ollama's on /api
         t0 = time.time()
         c = unix.create_connection(('127.0.0.1', port))
         c.sendall(f'POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2000000\r\n\r\n'.encode())
@@ -840,7 +843,7 @@ def section_serve():
         while chunk := c.recv(4096):
             reply += chunk
         c.close()
-        assert time.time() - t0 < 1, (path, time.time() - t0)
+        assert time.time() - t0 < 10, (path, time.time() - t0)
         assert reply.startswith(b'HTTP/1.1 413'), reply
         error = json.loads(reply.split(b'\r\n\r\n', 1)[1])['error']
         message = error['message'] if path.startswith('/v1/') else error
@@ -857,7 +860,7 @@ def section_serve():
     refused = json.loads(s.makefile(encoding='utf-8').readline())  # the limit named, as over HTTP (#207)
     assert refused == {'error': 'the request is over the limit of 1 MiB (geistr serve --max-request=MiB)', 'status': 'too_large'}, refused
     s.close()
-    assert time.time() - t0 < 5, time.time() - t0
+    assert time.time() - t0 < 10, time.time() - t0  # not after the 30 s a silent client is waited for
     body = json.dumps({'messages': [{'role': 'user', 'content': 'Hi'}], 'max_tokens': 3}).encode()  # under the limit: answered
     c = unix.create_connection(('127.0.0.1', port))
     c.sendall(b'POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n'
@@ -989,9 +992,8 @@ def section_http():
     assert call('POST', '/api/chat', {'messages': [{'role': 'user', 'content': 'Hi'}], 'stream': False,
                 'options': {'num_predict': 2}})[0] == 200 and time.time() - t0 < 60
     # a client that goes away while a long prompt is processed frees the service at once (#146): the next
-    # request is answered within three times what a prompt a sixth of that size takes, measured here, so a
-    # slow runner slows both (#202); the dropped prompt to its end takes over six times as long. Not once:
-    # the next request's own prompt and tokens cost about as much as the small one under coverage (#202)
+    # request waits (its time less its own total_duration) less than a prompt a sixth of that size takes,
+    # measured here, so a slow runner slows both (#202, #280); the dropped prompt to its end: over six times
     s = unix.socket(unix.AF_UNIX); s.connect(sock); s.sendall(b'{"op":"info"}\n')
     ctx = json.loads(s.makefile(encoding='utf-8').readline())['context']; s.close()
     t0 = time.time()  # another word: not the dropped prompt's cache
@@ -1004,8 +1006,10 @@ def section_http():
               b'Content-Length: %d\r\n\r\n' % len(big) + big)
     time.sleep(0.5); c.close()
     t0 = time.time()
-    assert call('POST', '/v1/chat/completions', {'model': 'ref', 'messages': ask, 'max_tokens': 4})[0] == 200
-    assert time.time() - t0 < 3 * sixth, (time.time() - t0, sixth)
+    status, _, body = call('POST', '/api/chat', {'model': 'ref', 'messages': [{'role': 'user', 'content': 'Hi'}],
+                                                 'stream': False, 'options': {'num_predict': 4}})
+    waited = time.time() - t0 - json.loads(body)['total_duration'] / 1e9
+    assert status == 200 and waited < sixth, (waited, sixth)
     # tools (#92): a model without a tool format refuses them, clearly (400), in both APIs
     weather = [{'type': 'function', 'function': {'name': 'get_weather', 'parameters': {'type': 'object',
                 'properties': {'city': {'type': 'string'}}}}}]
