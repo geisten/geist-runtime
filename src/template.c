@@ -243,48 +243,76 @@ static size_t find(const char *s, size_t b, size_t e, const char *needle, bool l
 
 /* An assistant message as Qwen3.5's template renders it (#269):
  *   content = content|trim
- *   if '</think>' in content:
+ *   if reasoning_content is string: reasoning = reasoning_content (#282)
+ *   elif '</think>' in content:
  *       reasoning = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n')
  *       content = content.split('</think>')[-1].lstrip('\n')
  *   in loop: '<think>\n' + reasoning|trim + '\n</think>\n\n' + content; else content
  * and as Qwen3's does (#276): untrimmed, reasoning.strip('\n') (the split
  * strips the line breaks already), and in the loop the block only where
- * there is reasoning (or for the last message, which a send never is). */
-static void put_split_answer(struct out *o, const char *s, bool in_loop) {
+ * there is reasoning (or for the last message, which a send never is);
+ * there content.lstrip('\n'), which the split did already. reasoning: the
+ * message's reasoning_content, nullptr for none. */
+static void put_split_answer(struct out *o, const char *s, const char *reasoning, bool in_loop) {
     const struct tpl_style *y = &o->extra.style;
     size_t                  b = 0, e = strlen(s), rb = 0, re = 0;
+    const char             *r = reasoning ? reasoning : s; /* the reasoning is r[rb, re) */
+    bool                    has;                           /* Qwen3: the reasoning is not empty */
     if (y->trim)
         trim_range(s, &b, &e);
-    const size_t close = find(s, b, e, "</think>", false);
-    if (close < e) {
-        re = close;
-        while (re > b && s[re - 1] == '\n')
-            re--;
-        const size_t open = find(s, b, re, "<think>", true);
-        rb                = open < re ? open + strlen("<think>") : b;
-        while (rb < re && s[rb] == '\n')
-            rb++;
-        if (y->trim)
-            trim_range(s, &rb, &re);
-        b = find(s, b, e, "</think>", true) + strlen("</think>");
-        while (b < e && s[b] == '\n')
-            b++;
+    if (reasoning) { /* given: the content is not split */
+        re  = strlen(reasoning);
+        has = re > 0;
+        if (y->lean) {
+            while (rb < re && r[rb] == '\n')
+                rb++;
+            while (re > rb && r[re - 1] == '\n')
+                re--;
+            while (in_loop && has && b < e && s[b] == '\n')
+                b++;
+        } else
+            trim_range(r, &rb, &re);
+    } else {
+        const size_t close = find(s, b, e, "</think>", false);
+        if (close < e) {
+            re = close;
+            while (re > b && s[re - 1] == '\n')
+                re--;
+            const size_t open = find(s, b, re, "<think>", true);
+            rb                = open < re ? open + strlen("<think>") : b;
+            while (rb < re && s[rb] == '\n')
+                rb++;
+            if (y->trim)
+                trim_range(s, &rb, &re);
+            b = find(s, b, e, "</think>", true) + strlen("</think>");
+            while (b < e && s[b] == '\n')
+                b++;
+        }
+        has = re > rb;
     }
-    if (in_loop && (!y->lean || re > rb)) {
+    if (in_loop && (!y->lean || has)) {
         put(o, "<think>\n");
-        put_body_n(o, s + rb, re - rb);
+        put_body_n(o, r + rb, re - rb);
         put(o, "\n</think>\n\n");
     }
     put_body_n(o, s + b, e - b);
 }
 
-/* An assistant message's text after its role line, before the close. */
-static void put_answer(struct out *o, const char *content, bool in_loop) {
+/* An assistant message's text after its role line, before the close.
+ * Qwen3.6+ (history, preserve_thinking): '<think>\n' + reasoning_content|trim
+ * + '\n</think>\n\n' + content, the empty block without reasoning (#282). */
+static void put_answer(struct out *o, const char *content, const char *reasoning, bool in_loop) {
     if (o->extra.style.loop) {
-        put_split_answer(o, content, in_loop);
+        put_split_answer(o, content, reasoning, in_loop);
         return;
     }
-    if (o->extra.history)
+    if (reasoning && o->extra.history && *o->extra.history) {
+        size_t rb = 0, re = strlen(reasoning);
+        trim_range(reasoning, &rb, &re);
+        put(o, "<think>\n");
+        put_body_n(o, reasoning + rb, re - rb);
+        put(o, "\n</think>\n\n");
+    } else if (o->extra.history)
         put(o, o->extra.history);
     put_body(o, content);
 }
@@ -314,7 +342,8 @@ static void render_turns(struct out            *o,
                          bool                   started,
                          const char           **folded,
                          size_t                 n,
-                         const geistr_message   msgs[]) {
+                         const geistr_message   msgs[],
+                         const char *const      reasoning[]) {
     size_t                  i      = 0;
     const char             *lead   = f->sys_role ? o->extra.lead : nullptr;
     const struct tpl_style *y      = &o->extra.style;
@@ -370,7 +399,7 @@ static void render_turns(struct out            *o,
             *folded = nullptr;
         }
         if (asst)
-            put_answer(o, msgs[i].content, query == SIZE_MAX || i > query);
+            put_answer(o, msgs[i].content, reasoning ? reasoning[i] : nullptr, query == SIZE_MAX || i > query);
         else
             put_body(o, msgs[i].content);
         put(o, f->close);
@@ -380,10 +409,10 @@ static void render_turns(struct out            *o,
     put(o, f->role_end);
 }
 
-char *tpl_render_answer(const struct tpl_extra *extra, const char *content, bool in_loop) {
+char *tpl_render_answer(const struct tpl_extra *extra, const char *content, const char *reasoning, bool in_loop) {
     struct out o = {.extra = *extra};
     put(&o, "");
-    put_answer(&o, content, in_loop);
+    put_answer(&o, content, reasoning, in_loop);
     if (o.oom) {
         free(o.p);
         return nullptr;
@@ -405,10 +434,14 @@ static void render_bitnet(struct out *o, size_t n, const geistr_message msgs[]) 
 }
 
 char *tpl_render_send(struct tpl_state *st, size_t n, const geistr_message msgs[]) {
-    return tpl_render_send_spans(st, n, msgs, nullptr);
+    return tpl_render_send_spans(st, n, msgs, nullptr, nullptr);
 }
 
-char *tpl_render_send_spans(struct tpl_state *st, size_t n, const geistr_message msgs[], struct tpl_spans *spans) {
+char *tpl_render_send_spans(struct tpl_state    *st,
+                            size_t               n,
+                            const geistr_message msgs[],
+                            const char *const    reasoning[],
+                            struct tpl_spans    *spans) {
     struct out             o      = {.spans = spans, .extra = st->extra};
     const size_t           n0     = spans ? spans->n : 0;
     const struct turn_fmt *f      = turn_fmt(st->family);
@@ -416,7 +449,7 @@ char *tpl_render_send_spans(struct tpl_state *st, size_t n, const geistr_message
     if (st->family == TPL_BITNET)
         render_bitnet(&o, n, msgs);
     else if (f)
-        render_turns(&o, f, st->started, &folded, n, msgs);
+        render_turns(&o, f, st->started, &folded, n, msgs, reasoning);
     else
         return nullptr;
     /* Commit the state only once the text exists: a failed send changes nothing. */

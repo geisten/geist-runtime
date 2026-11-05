@@ -11,6 +11,7 @@
  *   geistr bench [model…]            measure tokens/s on CPU and GPU (shown by catalog)
  *   geistr bench --compare [A [B]]   two engines' bench speeds side by side, the change in %
  *   geistr serve <model> [--socket=PATH] [--chats N] [--http[=ADDR:PORT]] [--max-request=MiB] [--thinking=on|off]
+ *                [--client-reasoning=use|ignore]
  *                                    the model as a service on a Unix socket (service.h)
  *   geistr serve --http[=ADDR:PORT] …  every installed model, the one a request names loaded
  *   geistr chat --socket[=PATH]      chat with that service
@@ -100,6 +101,7 @@ static int usage(void) {
           "       geistr pull [id]               a model, or: update the installed ones to this catalog\n"
           "       geistr config [key [value]]   keys: model processor temperature system markdown stats\n"
           "                                     intro resume history resume_tokens threads thinking\n"
+          "                                     client_reasoning\n"
           "       geistr config <model>.thinking [on|off]\n"
           "                                     a thinking model's own; off: it answers without reasoning\n"
           "       geistr bench [model…]          tokens/s on ⚙ CPU and ⚡ GPU, shown in geistr catalog\n"
@@ -107,7 +109,9 @@ static int usage(void) {
           "       geistr serve <model> [--socket=PATH] [--chats N] [--http[=ADDR:PORT]] [--max-request=MiB]\n"
           "                                       (--http: OpenAI and Ollama APIs, default 127.0.0.1:11434;\n"
           "                                        --max-request: one request's size, default 16 MiB, larger: 413;\n"
-          "                                        --thinking=on|off: for requests that do not say, over the settings)\n"
+          "                                        --thinking=on|off: for requests that do not say, over the settings;\n"
+          "                                        --client-reasoning=use|ignore: the reasoning clients send back\n"
+          "                                        with earlier answers, default: the client_reasoning setting, use)\n"
           "       geistr serve --http[=ADDR:PORT] [...]  every installed model; a request's model is loaded\n"
           "                                       in place of the one before (one in memory)\n"
           "       geistr chat --socket[=PATH]\n"
@@ -547,7 +551,7 @@ static bool serve_load(struct svc_options *o, const char *id) {
 
 /* name: one model; nullptr: every installed one, one loaded at a time (#195). */
 static int serve(const char *name, const char *processor, const char *socket, const char *http, size_t chats,
-                 size_t max_request, int thinking) {
+                 size_t max_request, int thinking, bool ignore_reasoning) {
     serving         = true; /* an embedding model too (#91) */
     serve_processor = processor;
     int rc          = name ? session_open(&served, name, processor, 0, true) : OK;
@@ -561,7 +565,8 @@ static int serve(const char *name, const char *processor, const char *socket, co
     struct svc_options o = {.model = served.model, .reasoning = served.reasoning, .name = served.name, .socket = socket,
                             .http = http, .chats = chats, .max_request = max_request, .stop = &stopping,
                             .embedding = served.embedding, .installed = name ? nullptr : serve_installed,
-                            .load = name ? nullptr : serve_load, .think = thinking};
+                            .load = name ? nullptr : serve_load, .think = thinking,
+                            .ignore_reasoning = ignore_reasoning};
     rc = service_run(&o) ? ERROR : OK;
     session_close(&served);
     return rc;
@@ -798,6 +803,7 @@ int main(int argc, char **argv) {
     long        chats = 2;
     long        max_request = 16; /* serve --max-request=MiB */
     int         thinking    = 0; /* serve --thinking=on|off (#266): 1, 2; for requests without their own */
+    const char *client_reasoning = nullptr; /* serve --client-reasoning=use|ignore (#282), over the setting */
     long        threads_opt = 0; /* --threads N: this run's engine threads, over the setting */
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--models") && i + 1 < argc)
@@ -828,6 +834,8 @@ int main(int argc, char **argv) {
                 return usage();
         } else if (!strcmp(argv[i], "--thinking=on") || !strcmp(argv[i], "--thinking=off")) {
             thinking = argv[i][12] == 'n' ? 1 : 2;
+        } else if (!strcmp(argv[i], "--client-reasoning=use") || !strcmp(argv[i], "--client-reasoning=ignore")) {
+            client_reasoning = argv[i] + strlen("--client-reasoning=");
         } else if (!strcmp(argv[i], "--chats") && i + 1 < argc) {
             char *end;
             chats = strtol(argv[++i], &end, 10);
@@ -905,10 +913,13 @@ int main(int argc, char **argv) {
         }
         socket = socket_path;
     }
+    const bool ignore_reasoning = !strcmp(client_reasoning ? client_reasoning : cfg.client_reasoning, "ignore");
     if (!strcmp(command, "serve") && n == 2)
-        return serve(args[1], processor, socket, http, (size_t) chats, (size_t) max_request << 20, thinking);
+        return serve(args[1], processor, socket, http, (size_t) chats, (size_t) max_request << 20, thinking,
+                     ignore_reasoning);
     if (!strcmp(command, "serve") && n == 1 && http) /* every installed model (#195) */
-        return serve(nullptr, processor, socket, http, (size_t) chats, (size_t) max_request << 20, thinking);
+        return serve(nullptr, processor, socket, http, (size_t) chats, (size_t) max_request << 20, thinking,
+                     ignore_reasoning);
     if (!strcmp(command, "chat") && socket)
         return n == 1 ? chat("", processor, socket, fresh) : usage();
     if (!strcmp(command, "chat") && n == 1) { /* the last model, else the geisten app's */

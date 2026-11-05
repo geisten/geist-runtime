@@ -208,9 +208,10 @@ the templates' own Jinja conditions) and renders what the template renders:
   behaviour for callers that want the raw text: no switch rendered, the
   generated text as it is, so a thinking model's `<think>` arrives as
   answer text.
-- **Earlier answers.** The runtime keeps no reasoning, so an earlier answer
-  is what the template renders for an assistant message without
-  `reasoning_content`. Where the context holds something else after an
+- **Earlier answers.** By default an earlier answer is what the template
+  renders for an assistant message without `reasoning_content` (except in
+  the tool loop below; with a caller's reasoning, see "Reasoning sent
+  back"). Where the context holds something else after an
   answer (its reasoning; Qwen3's and Qwen3.5's empty block of thinking
   off), the next send takes the answer out of the context and puts it back
   as the template has it (a prefill of the answer, #96). Qwen3.6+ with
@@ -260,6 +261,34 @@ the templates' own Jinja conditions) and renders what the template renders:
     `</tool_response>` anywhere (Qwen3.5: when it is one such block).
   - Qwen3.6+ needs none of this: it keeps the empty block everywhere
     (`preserve_thinking`).
+- **Reasoning sent back (#282).** `geistr_chat_send_reasoning(chat, count,
+  messages, reasoning)` is `geistr_chat_send` with each message's
+  reasoning, as a client sends an earlier answer back with it (OpenAI
+  `reasoning_content`, Ollama `thinking`): `reasoning[i]` belongs to
+  `messages[i]`, nullptr for none. The template gets it as
+  `reasoning_content`, and the rendering is the template's for those
+  messages:
+  - Qwen3 and Qwen3.5 render it in the tool loop and drop it before the
+    last query; the content is then not split at `</think>`, also for an
+    empty string. Qwen3 strips only line breaks from it and renders no
+    block for empty reasoning; Qwen3.5 trims it.
+  - Qwen3.6+ renders it, trimmed, in every earlier answer
+    (`preserve_thinking`), in place of the empty block.
+  - Gemma 4 renders it only after the last user message, which needs its
+    tool format (not rendered); other templates have none. There, and with
+    `GEISTR_REASONING_NONE`, it is ignored.
+  - It is text: tokenized with special tokens off, as message contents are.
+
+  `geistr_chat_opts.keep_reasoning` makes the chat's own answers stay as the
+  template renders them sent back with their reasoning, which changes only
+  Qwen3.6+ (it keeps each answer's reasoning; default: the empty block, as
+  #266 decided). `geistr serve` sets it unless `--client-reasoning=ignore`, and
+  keeps each answer with its reasoning to match the next request against.
+  Checked by goldens (`tests/test_template.c`: conversations with
+  `reasoning_content` in tool loops, padded, empty and null, for the real
+  templates), and on the real models by `test_real`'s tool loop: the
+  continued context equals a fresh chat's of the messages with their
+  reasoning sent apart.
 
 ## The runtime on geistlib (#4)
 

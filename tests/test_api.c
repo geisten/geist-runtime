@@ -534,12 +534,40 @@ static void test_lifetime(void) {
     geistr_chat_close(chat);
 }
 
+/* geistr_chat_send_reasoning (#282): an assistant message's reasoning
+ * reaches the chat (the stub counts it as tokens), nullptr is send. */
+static void test_reasoning_sent(void) {
+    geistr_model        *model = open_model("stub:echo", 0);
+    const geistr_message msgs[] = {{"user", "hi"}, {"assistant", "hello"}, {"user", "and?"}};
+    const char *const    with[] = {nullptr, "some careful words", nullptr};
+    const char *const    user[] = {"words on a user message count for nothing", nullptr, nullptr};
+    uint32_t             in[4]  = {};
+    for (size_t k = 0; k < 4; k++) {
+        geistr_chat     *chat = open_chat(model, (geistr_chat_opts) GEISTR_CHAT_OPTS_INIT);
+        struct collected got;
+        geistr_stats     st = {.size = sizeof st};
+        const geistr_status s = k == 0 ? geistr_chat_send(chat, 3, msgs)
+                                : geistr_chat_send_reasoning(chat, 3, msgs, k == 1 ? nullptr : k == 2 ? with : user);
+        CHECK(s == GEISTR_OK && drain(chat, &got) == GEISTR_OK && geistr_chat_stats(chat, &st) == GEISTR_OK,
+              "send with reasoning");
+        in[k] = st.input_tokens;
+        geistr_chat_close(chat);
+    }
+    CHECK(in[1] == in[0] && in[2] > in[0] && in[3] == in[0],
+          "an assistant message's reasoning arrives; none, or a user message's, changes nothing");
+    CHECK(geistr_chat_send_reasoning(nullptr, 3, msgs, with) == GEISTR_INVALID, "no chat");
+    geistr_chat_opts o = GEISTR_CHAT_OPTS_INIT;
+    CHECK(!o.keep_reasoning, "keep_reasoning is off by default");
+    geistr_model_close(model);
+}
+
 int main(void) {
     test_basics();
     test_abi();
     test_answer();
     test_thinking();
     test_reasoning();
+    test_reasoning_sent();
     test_limits();
     test_stop_strings();
     test_conversation();
@@ -551,6 +579,6 @@ int main(void) {
         fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;
     }
-    puts("geistr API: basics, ABI sizes, answer, thinking, reasoning protocol, limits, stop strings, conversation, rewind, cancellation, batched chats, answer probes, lifetime passed");
+    puts("geistr API: basics, ABI sizes, answer, thinking, reasoning protocol, reasoning sent back, limits, stop strings, conversation, rewind, cancellation, batched chats, answer probes, lifetime passed");
     return 0;
 }

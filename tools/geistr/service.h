@@ -10,6 +10,7 @@
  *   ← {"model":"gemma4-e2b","backend":"metal","chat_format":"gemma4","context":8192,"chats":2}
  *   → {"op":"chat","messages":[{"role":"user","content":"…"},…],"max":0,"temperature":0,
  *      "think":false,"effort":"low","thinking":true}
+ *     (an assistant message may carry its "reasoning", as the thinking lines brought it, #282)
  *   ← {"part":"answer","text":"…"}            (as often as the answer has pieces)
  *   ← {"part":"thinking","text":"…"}          (only if the request asked: "thinking":true)
  *   ← {"done":true,"finish":"stop","input_tokens":14,"context_tokens":52,"output_tokens":7,
@@ -23,7 +24,14 @@
  * N conversations (KV caches) and continues the one that matches best: it
  * goes back to where the request differs and processes only the rest. A
  * client that disconnects stops its answer. Requests are served one at a
- * time. */
+ * time.
+ *
+ * The reasoning a client sends back with an earlier answer (#282: OpenAI
+ * reasoning_content or reasoning, Ollama thinking, the socket's reasoning)
+ * goes to the template as reasoning_content, unless the service ignores it
+ * (serve --client-reasoning=ignore). An answer is held with its reasoning, so
+ * a request matches it only with the same reasoning, or none for an answer
+ * without. */
 #pragma once
 #include "geistr.h"
 #include <signal.h>
@@ -57,6 +65,8 @@ struct svc_options {
     bool (*load)(struct svc_options *o, const char *id);
     int think; /* serve --thinking (#266), for requests without their own: 0 the settings' reasoning
                   above, 1 on, 2 off; a model that does not think, or cannot stop, ignores it */
+    bool ignore_reasoning; /* serve --client-reasoning=ignore (#282): the reasoning clients send back
+                              is dropped, as before; else it goes to the template */
 };
 
 /* Serve until *stop is set. Returns a geistr exit code (0 ok, 1 error). */
@@ -67,6 +77,8 @@ int service_run(struct svc_options *o);
 /* The request, its strings malloc'd (svc_free_request frees them). */
 struct svc_request {
     geistr_message     *messages;
+    char              **reasoning; /* messages[i]'s reasoning_content (#282), nullptr: none; the
+                                      list may be nullptr: none has any */
     size_t              n;
     double              temperature; /* 0 to 2 */
     unsigned            max;         /* answer tokens; 0 = the rest of the context */

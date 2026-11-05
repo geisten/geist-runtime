@@ -10,7 +10,7 @@
 #include <unistd.h>
 
 struct settings cfg = {.processor = "auto", .markdown = true, .stats = true, .intro = true, .resume = true, .history = true, .thinking = true,
-                       .resume_tokens = 2048};
+                       .resume_tokens = 2048, .client_reasoning = "use"};
 char            config_path[4200], data_dir[4096];
 static char     config_dir[4096];
 
@@ -35,6 +35,8 @@ static const struct setting {
         {.key = "resume_tokens", .kind = NUMBER, .at = &cfg.resume_tokens, .max = 1e6},
         {.key = "threads", .kind = NUMBER, .at = &cfg.threads, .max = 1024},
         {.key = "thinking", .kind = SWITCH, .at = &cfg.thinking},
+        {.key = "client_reasoning", .kind = CHOICE, .at = cfg.client_reasoning, .cap = sizeof cfg.client_reasoning,
+         .choices = "use ignore"},
 };
 enum { N_SETTINGS = sizeof settings / sizeof *settings };
 

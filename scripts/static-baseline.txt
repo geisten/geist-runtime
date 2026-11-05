@@ -61,7 +61,7 @@
 1	tools/geistr/geistr.c	clang-analyzer-security.ArrayBound	Potential out of bound access to 'selected' with tainted index
 1	tools/geistr/geistr.c	clang-analyzer-unix.Stream	File position of the stream might be 'indeterminate' after a failed operation. Can cause undefined behavior
 1	tools/geistr/geistr.c	clang-analyzer-unix.Stream	Read function called when stream is in EOF state. Function has no effect
-4	tools/geistr/http.c	bugprone-assignment-in-if-condition	an assignment within an 'if' condition is bug-prone
+3	tools/geistr/http.c	bugprone-assignment-in-if-condition	an assignment within an 'if' condition is bug-prone
 1	tools/geistr/http.c	bugprone-casting-through-void	do not cast 'const struct sockaddr *' to 'const struct sockaddr_in *' through 'const void *'; use reinterpret_cast instead
 1	tools/geistr/http.c	bugprone-casting-through-void	do not cast 'const struct sockaddr *' to 'const struct sockaddr_in6 *' through 'const void *'; use reinterpret_cast instead
 1	tools/geistr/http.c	bugprone-multi-level-implicit-pointer-conversion	multilevel pointer conversion from 'void *' to 'char **', please use explicit cast

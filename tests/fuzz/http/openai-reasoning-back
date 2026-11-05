@@ -1,0 +1,6 @@
+POST /v1/chat/completions HTTP/1.1
+Host: localhost:11434
+Content-Type: application/json
+Content-Length: 354
+
+{"messages":[{"role":"user","content":"Hi"},{"role":"assistant","content":null,"reasoning_content":"Greet.","tool_calls":[{"id":"c1","type":"function","function":{"name":"f","arguments":"{}"}}]},{"role":"tool","tool_call_id":"c1","content":"1"},{"role":"assistant","content":"x","reasoning":"r","reasoning_content":null},{"role":"user","content":"Bye"}]}
