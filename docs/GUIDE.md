@@ -619,7 +619,8 @@ the template renders for those messages (transformers, llama.cpp's
 An answer sent back without its reasoning is rendered as its text, as before.
 The server keeps each answer with its reasoning, so a conversation sent back
 with it continues where it was (only the new messages are processed); one
-sent back without it goes back to that answer and processes it again.
+sent back without it goes back to that answer and processes it again (so
+does an answer cut off inside its reasoning, by `max_tokens`).
 `geistr serve --client-reasoning=ignore` (or `geistr config client_reasoning
 ignore`) drops the reasoning clients send, as before #282. There is no
 per-request switch: no client sends one.

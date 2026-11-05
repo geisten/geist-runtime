@@ -1417,11 +1417,14 @@ def section_reasoning():
     _, _, held = line(sock, {'messages': [q, back, result], 'max': 1})
     # a fresh chat (another temperature: another conversation) of the same messages
     _, _, fresh = line(sock, {'messages': [q, back, result], 'max': 1, 'temperature': 0.001})
-    assert prompt(held) == prompt(fresh) and held['input_tokens'] < fresh['input_tokens'] / 2, (held, fresh)
+    assert prompt(held) == prompt(fresh), (held, fresh)
+    # (an answer cut inside its reasoning is processed again: the context has no close there)
+    assert first['finish'] != 'stop' or held['input_tokens'] < fresh['input_tokens'] / 2, (first, held, fresh)
     # without it: Qwen3 renders the answer's text alone, the held answer does not match
     plain = {'role': 'assistant', 'content': answer}
     _, _, bare = line(sock, {'messages': [q, plain, result], 'max': 1})
-    assert prompt(bare) < prompt(held) and bare['input_tokens'] > held['input_tokens'], (bare, held)
+    assert prompt(bare) < prompt(held) and (first['finish'] != 'stop' or bare['input_tokens'] > held['input_tokens']), \
+        (bare, held)
     # the HTTP routes, the same conversation: OpenAI reasoning_content and reasoning, Ollama thinking
     for path, field in (('/v1/chat/completions', 'reasoning_content'), ('/v1/chat/completions', 'reasoning'),
                         ('/api/chat', 'thinking')):
