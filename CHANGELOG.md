@@ -242,6 +242,15 @@
 
 ### Engine
 
+- geistlib `49ffbf5` (from `52ef042`, 136 commits, #292). No change to the
+  public API beyond attributes; relevant for the runtime:
+  - SentencePiece symbols are sized as llama.cpp sizes them (geistlib#454),
+    and a malformed UTF-8 byte tokenizes as U+FFFD (geistlib#427).
+  - Metal DeltaNet (Qwen3.5 family): decode checks the pipeline's thread
+    limit (geistlib#266), and the verify scan is split by column (geistlib#469).
+  - The rest is the engine's C23 migration (typed handles, constexpr,
+    backend tables) with no behaviour change.
+
 - geistlib `52ef042` (from `eedaae6`, 487 commits) brings
   `geist_session_tokenize_plain` (geistlib#409, #413): the protection of
   #261 above is now live (#263).
