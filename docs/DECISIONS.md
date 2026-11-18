@@ -392,7 +392,7 @@ threshold: it answers directly, as before, unless `--threshold` is given.
 | `--no-escalate` | off | below the threshold: exit 3, nothing on stdout |
 | `--escalate MODEL` | `chat` | below the threshold MODEL decides; `--escalate chat` is the default spelled out |
 | `--max-tokens N` | Bonsai 2 27B: **8192**; every other model: 4096 | the chat answer's cap |
-| `--early-exit[=P]` / `--no-early-exit` | on (P 0.8) for the Bonsai 2 27B profile only | probes every 128 tokens |
+| `--early-exit[=P]` / `--no-early-exit` | on for the Bonsai 2 27B profile only; P: Bonsai 2 27B **0.9**, every other model 0.8 | probes every 128 tokens |
 | `--temperature T` | 1 | calibration |
 | Advanced: `--context TEXT`; decide-batch's `--shared-context`, `--context-tokens`, `--snapshot-budget-mib` | | unchanged |
 
@@ -417,9 +417,10 @@ avoids reasoning on the questions the direct scores are sure of. Its limits:
   cap 8192, hence that profile's `--max-tokens` default of 8192.
 
 Gemma 4 and unverified models have no threshold evidence, so they get none.
-A profile gains its own defaults (`decide_threshold`, `decide_max_tokens` in
-`src/decision_profile.c`, read by `geistr_decide_threshold` and
-`geistr_decide_max_tokens`) only from its own declared evidence.
+A profile gains its own defaults (`decide_threshold`, `decide_max_tokens`,
+`decide_exit_threshold` in `src/decision_profile.c`, read by
+`geistr_decide_threshold`, `geistr_decide_max_tokens` and
+`geistr_decide_exit_threshold`) only from its own declared evidence.
 
 **Removed options, accepted until the next release** with a warning on
 stderr: `--question-file FILE|-` (now `--question @FILE` or `--question -`),
@@ -470,7 +471,8 @@ add up the cost of both stages from these fields: one decision call
 time. There is no cap on the escalated share: a single command cannot see
 one; callers that run many decisions should cap it themselves.
 
-**Early exit from the chat answer (experimental; geistlib#236, geistlib#286).**
+**Early exit from the chat answer (experimental; geistlib#236, geistlib#286,
+geistlib#467).**
 In the chat escalation, with `--early-exit[=P]`, the thinking model's answer is
 probed while it reasons; with `--no-early-exit` the model reasons to the end.
 Both work for every model; with `--no-escalate` or `--escalate MODEL` they are
@@ -482,10 +484,14 @@ errors.
   `--early-exit`. The evidence is Bonsai 2 only; another model gets the
   default only after its own declared validation. A catalog id and a file
   path get the same default (#285, see "Which model, which profile" above).
+- **At which probability:** P of `--early-exit=P`. Without P, the profile's:
+  **0.9 for Bonsai 2 27B** (geistlib#467, below), 0.8 for every other model
+  (geistlib#236's threshold; no other model has evidence of its own).
 - **What the default costs:** on Bonsai 2, early exit is non-inferior to
   full reasoning overall, but the gain comes from answers that full
   reasoning loses to the cap. **On questions that full reasoning finishes
-  within the cap, early exit is about 2.5 pp less accurate** (geistlib#286:
+  within the cap, early exit is about 2.5 pp less accurate** (geistlib#286,
+  measured at 0.8:
   −2.45 pp [−3.56, −1.33] on 3,223 such questions). Some tasks lose much
   more: moral_scenarios 147 → 119 of 225 (−12.4 pp), most of it at the first
   probe. If your task's reasoning usually finishes within `--max-tokens`, or
@@ -499,8 +505,8 @@ still thinking, a probe does four things:
 4. it restores the state.
 
 The answer stops at the first probe whose top probability (softmax over the
-options) reaches P of `--early-exit=P` (default 0.8), and that option is the
-answer. Without such a probe the chat answers as before.
+options) reaches P of `--early-exit=P` (default 0.9 for Bonsai 2 27B, 0.8 for every
+other model), and that option is the answer. Without such a probe the chat answers as before.
 - **Probes are transparent:** a probe that does not exit leaves the generation
   token for token the same.
 - **Requirements:** each option ID must start with its own token, and the
@@ -567,6 +573,30 @@ threshold, frozen; both arms from one recorded generation):
 - **Scope:** one model (Bonsai 2 27B) and one task family, measured with
   geistlib's MMLU prompts, not this command's prompt. That is why the
   default is keyed on that profile and no other model.
+
+**The default threshold for Bonsai 2 27B is 0.9** (geistlib#467, declared
+before any inference: 3,000 further held-out classic-MMLU questions, the same
+model, cap 8192, probes every 128 tokens; geistlib
+`benchmark/results/DECISION_EARLY_EXIT_TAU09_2026-11-18.md`):
+
+| early exit at | accuracy against full reasoning | generated tokens | |
+|---|---|---|---|
+| **0.9** | +2.53 pp, conservative 95 % interval [+1.17, +3.88] pp | 0.35× | the declared test |
+| 0.8 | +1.37 pp | 0.24× | the same sample, descriptive only |
+
+- **Non-inferiority at 2 pp: established for 0.9.** It exits later than 0.8,
+  so it generates more (0.35× of full reasoning instead of 0.24×) and scored
+  higher on this sample.
+- **Bonsai 2 27B only** (owner decision, 2026-11-18): the profile carries
+  0.9; every other model keeps 0.8 until it has evidence of its own.
+  `--early-exit=0.8` gives the earlier default back.
+- **Not measured live at 0.9:** none was declared. geistlib#286's live check
+  (above) showed the live answers identical to the offline evaluation at 0.8.
+- **What was measured at 0.8 stays as measured:** the tables above and the
+  cost on questions that full reasoning finishes within the cap are
+  geistlib#236's and geistlib#286's, at 0.8.
+- **Scope:** as for geistlib#286: one model, one task family, geistlib's MMLU
+  prompts.
 
 **Choosing the threshold and the cap.** These two settings trade speed
 against quality, and the trade-off belongs to the application, not to the

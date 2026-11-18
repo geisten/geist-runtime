@@ -73,14 +73,15 @@ with tempfile.TemporaryDirectory() as directory:
     # tags, so Bonsai 2 does and Gemma 4 (<|think|>) does not (#270).
     assert c['chat']['thinking'] is (profile == 'bonsai2'), c
     # Early exit is the default of --escalate chat for the Bonsai 2 27B profile only (geistlib#286): it is
-    # probed every 128 tokens and may answer at a confident probe; every other model reasons to the end.
-    # By path the profile comes from the file's receipt (#285); MODEL may be either.
+    # probed every 128 tokens and may answer at a probe that reaches the profile's 0.9 (geistlib#467); every
+    # other model reasons to the end. By path the profile comes from the file's receipt (#285); MODEL may be
+    # either.
     assert (profile == 'bonsai2') == ('early_exit' in c), c
     if 'early_exit' in c:
         e = c['early_exit']
-        assert e['interval'] == 128 and abs(e['threshold'] - 0.8) < 1e-9, c
+        assert e['interval'] == 128 and abs(e['threshold'] - 0.9) < 1e-9, c
         assert c['chat']['finish'] == ('early_exit' if e['exited'] else 'stop'), c
-        assert not e['exited'] or (e['position'] % 128 == 0 and e['probability'] >= 0.8
+        assert not e['exited'] or (e['position'] % 128 == 0 and e['probability'] >= 0.9
                                    and e['option_index'] == c['answer_index']), c
     else:
         assert c['chat']['finish'] == 'stop', c

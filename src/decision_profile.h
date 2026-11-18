@@ -11,10 +11,11 @@ struct decision_profile {
     const char *bos, *system, *user, *assistant; /* native BOS/role markers */
     const char *thinking_off;              /* after the assistant role */
     /* geistr decide's defaults (#288), each only from this profile's own
-     * evidence; 0 where there is none: no escalation below a threshold, and
-     * the chat escalation's default cap */
+     * evidence; 0 where there is none: no escalation below a threshold, the
+     * chat escalation's default cap, and the early-exit default (0.8) */
     double decide_threshold;
     uint32_t decide_max_tokens;
+    double decide_exit_threshold;
 };
 const struct decision_profile *decision_profile_get(geistr_decision_profile profile); /* nullptr: unknown */
 /* An unverified profile from a chat template family (enum tpl_family): the
