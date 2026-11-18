@@ -79,6 +79,9 @@
 
 ### Fixes
 
+- The Python wheel built on a Mac installs again where the SDK's minimum
+  macOS has a minor version (macOS 27.2): its tag is `macosx_<major>_0` from
+  macOS 11 on, the only form pip accepts there (#296).
 - Messages render as the templates of Qwen3.5, Qwen3.6+ and Gemma 4 have
   them, also padded with whitespace and in tool loops (#269):
   - Message contents are trimmed where the template trims them (`|trim`,

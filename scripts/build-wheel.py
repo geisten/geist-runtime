@@ -17,7 +17,9 @@ if sys.platform == "darwin":
     # The oldest macOS the library loads on: its LC_BUILD_VERSION minos.
     minos = re.search(r"minos (\d+)\.(\d+)", subprocess.run(["otool", "-l", str(lib)], capture_output=True,
                                                              text=True, check=True).stdout)
-    tag = f"macosx_{minos.group(1)}_{minos.group(2)}_{machine}"
+    # From macOS 11 on installers only know macosx_<major>_0 (pip refuses macosx_27_2).
+    minor = minos.group(2) if int(minos.group(1)) < 11 else "0"
+    tag = f"macosx_{minos.group(1)}_{minor}_{machine}"
 else:
     tag = f"linux_{machine}"
 name = f"geistr-{version}-py3-none-{tag}.whl"
