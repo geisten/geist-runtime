@@ -13,13 +13,17 @@ static const struct decision_profile profiles[] = {
                                          "<|im_start|>system\n", "<|im_end|>\n<|im_start|>user\n",
                                          "<|im_end|>\n<|im_start|>assistant\n", "<think>\n\n</think>\n\n",
                                          /* geistlib#204's precision-0.95 threshold (0.7809), held out: 78.8 % vs
-                                          * 79.0 % always-reasoning at 0.97x its time; geistlib#286's cap */
-                                         .decide_threshold = 0.78, .decide_max_tokens = 8192},
+                                          * 79.0 % always-reasoning at 0.97x its time; geistlib#286's cap;
+                                          * early exit at 0.9 (geistlib#467): +2.53 pp [+1.17, +3.88] against
+                                          * full reasoning on 3,000 held-out questions, 0.35x its tokens */
+                                         .decide_threshold = 0.78, .decide_max_tokens = 8192,
+                                         .decide_exit_threshold = 0.9},
     [GEISTR_DECISION_GEMMA4_E2B_Q4] = {"gemma4-e2b-q4-v1",
                                        "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
                                        "241c50d86bdfe5e43307da87f559cd2416aacd67a8de46c15acc0105ef2200b7", "<bos>",
                                        "<|turn>system\n", "<turn|>\n<|turn>user\n", "<turn|>\n<|turn>model\n", "",
-                                       0, 0 /* no threshold evidence: the direct answer; the cap 4096 */}};
+                                       0, 0, 0 /* no evidence of its own: the direct answer; the cap 4096;
+                                                * early exit, when asked for, at 0.8 */}};
 
 const struct decision_profile *decision_profile_get(geistr_decision_profile p) {
     return p > GEISTR_DECISION_PROFILE_NONE && (size_t)p < sizeof profiles / sizeof profiles[0] ? &profiles[p]

@@ -18,13 +18,15 @@ int main(int argc, char **argv) {
     const bool cancel = getenv("GEISTR_TEST_CANCEL");
     const geistr_decide_host host = {.active = cancel ? cancel_at_start : nullptr,
                                      .context_active = cancel ? cancel_context : nullptr};
-    if (argc == 2 && !strcmp(argv[1], "early-exit-default")) { /* geistlib#286: the default per profile */
+    /* geistlib#286, #467: per profile, whether early exit is the default, and at which probability it exits */
+    if (argc == 2 && !strcmp(argv[1], "early-exit-default")) {
         for (int p = GEISTR_DECISION_PROFILE_NONE; p <= GEISTR_DECISION_GEMMA4_E2B_Q4; ++p)
-            printf("%s %d\n", geistr_decision_profile_name((geistr_decision_profile)p),
-                   geistr_decide_early_exit_default((geistr_decision_profile)p));
+            printf("%s %d %g\n", geistr_decision_profile_name((geistr_decision_profile)p),
+                   geistr_decide_early_exit_default((geistr_decision_profile)p),
+                   geistr_decide_exit_threshold((geistr_decision_profile)p));
         return 0;
     }
-    /* #288: decide's options as parsed, with what a profile brings (threshold, early exit) applied, as
+    /* #288: decide's options as parsed, with what a profile brings (threshold, cap, early exit) applied, as
      * geistr_decide_command does after loading: args <profile> <model> <options…> */
     if (argc >= 3 && !strcmp(argv[1], "args")) {
         geistr_decision_profile profile = GEISTR_DECISION_PROFILE_NONE;
@@ -42,7 +44,8 @@ int main(int argc, char **argv) {
                "\"options\":%zu}\n",
                a.threshold < 0 ? geistr_decide_threshold(profile) : a.threshold, a.escalate ? "\"" : "",
                a.escalate ? a.escalate : "null", a.escalate ? "\"" : "", early ? "true" : "false",
-               a.probe_interval, a.exit_threshold, a.max_tokens ? a.max_tokens : geistr_decide_max_tokens(profile), a.question ? a.question : "",
+               a.probe_interval, a.exit_threshold < 0 ? geistr_decide_exit_threshold(profile) : a.exit_threshold,
+               a.max_tokens ? a.max_tokens : geistr_decide_max_tokens(profile), a.question ? a.question : "",
                a.question_file ? a.question_file : "", a.n_options);
         return 0;
     }

@@ -205,7 +205,8 @@
 - `geistr decide --escalate chat` exits early by default for the verified
   Bonsai 2 27B profile (`bonsai2-27b-pq2-v1`) only (geistlib#286).
   - Its answer is probed every 128 tokens, and the answer ends at the first
-    probe whose top option reaches 0.8.
+    probe whose top option reaches the threshold (0.8 in that validation;
+    the Bonsai 2 27B default is now 0.9, see the next entry).
   - Every other model, verified or not, reasons to the end unless asked with
     `--early-exit`. The evidence is Bonsai 2 only.
   - `--early-exit` and the new `--no-early-exit` work for every model.
@@ -221,6 +222,23 @@
     2.5 pp less accurate, and moral_scenarios lost 12.4 pp. Use
     `--no-early-exit` for such tasks (docs/DECISIONS.md).
   - The record and its verifier are in `tests/test_decision_evidence.py`.
+- `geistr decide`: early exit ends the chat answer at 0.9 by default for the
+  verified Bonsai 2 27B profile (`bonsai2-27b-pq2-v1`), before 0.8 (#294,
+  geistlib#467).
+  - Evidence: declared before the run, 3,000 held-out MMLU questions at cap
+    8192, probes every 128 tokens. Early exit at 0.9 is non-inferior to
+    full reasoning at the 2 pp margin: +2.53 pp, conservative 95 % interval
+    [+1.17, +3.88] pp, with 0.35x the generated tokens. At 0.8 on the same
+    sample, descriptive only: +1.37 pp at 0.24x.
+  - **Compatibility: Bonsai 2 27B answers that exit early now reason
+    longer (0.35x instead of 0.24x of full reasoning's tokens).
+    `--early-exit=0.8` gives the earlier behaviour.**
+  - Every other model keeps 0.8 when `--early-exit` asks for early exit;
+    which models exit early by default, the probe interval and the cap are
+    unchanged. `--early-exit=P` overrides the threshold for every model.
+  - The threshold is the profile's (`decide_exit_threshold` in
+    `src/decision_profile.c`), like the decide threshold and the cap.
+  - Not measured live at 0.9.
 - Thinking follows the model's chat template by default (#266). Qwen3.5 and
   Gemma 4 answer at once unless asked to think, as their templates do; on,
   Qwen3.5 now really reasons: its generation prompt ends in `<think>\n`,

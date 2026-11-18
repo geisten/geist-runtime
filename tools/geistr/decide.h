@@ -22,8 +22,8 @@ typedef struct geistr_decide_host {
 int geistr_decide_command(size_t argc, const char *const *argv, const geistr_decide_host *host);
 /* geistr decide's options as given (#288). What a profile brings, the threshold,
  * the chat cap and early exit, is applied once the model's profile is known:
- * geistr_decide_threshold, geistr_decide_max_tokens and
- * geistr_decide_early_exit_default. */
+ * geistr_decide_threshold, geistr_decide_max_tokens,
+ * geistr_decide_exit_threshold and geistr_decide_early_exit_default. */
 typedef struct geistr_decide_args {
     const char *question;      /* the text; nullptr when it is read from question_file */
     const char *question_file; /* --question @FILE, --question - (stdin) */
@@ -36,7 +36,7 @@ typedef struct geistr_decide_args {
     uint32_t max_tokens;     /* --max-tokens N: the chat answer's cap, thinking included; 0: the profile's */
     int early_exit;          /* -1: the profile's default; 0: --no-early-exit; 1: --early-exit[=P] */
     uint32_t probe_interval; /* fixed at the validated 128 (--probe-interval: deprecated alias) */
-    double exit_threshold;   /* --early-exit=P (0.8) */
+    double exit_threshold;   /* --early-exit=P; < 0: the profile's (geistr_decide_exit_threshold) */
     size_t n_options;
     geistr_decision_option options[GEISTR_DECISION_MAX_OPTIONS];
 } geistr_decide_args;
@@ -47,14 +47,19 @@ int geistr_decide_parse(size_t argc, const char *const *argv, geistr_decide_args
 /* What a verified profile brings to decide (#288, src/decision_profile.c):
  * the threshold below which it escalates (or, with --no-escalate, exits 3)
  * when --threshold is not given, 0 (never) for a profile without one and for
- * no profile; and the chat escalation's --max-tokens default, else 4096. */
+ * no profile; the chat escalation's --max-tokens default, else 4096; and the
+ * probability at which early exit ends the chat answer when --early-exit=P
+ * does not give one: 0.9 for Bonsai 2 27B (geistlib#467), else 0.8
+ * (geistlib#236). */
 double geistr_decide_threshold(geistr_decision_profile profile);
 uint32_t geistr_decide_max_tokens(geistr_decision_profile profile);
+double geistr_decide_exit_threshold(geistr_decision_profile profile);
 /* decide-batch (#164): argv as above; one shared context, 1..32 questions,
  * stdout question_id TAB option_id LF in input order only on total success. */
 int geistr_decide_batch_command(size_t argc, const char *const *argv, const geistr_decide_host *host);
 /* Whether --escalate chat exits early by default for a verified decision
- * profile: only where a declared validation established it (geistlib#286). */
+ * profile: only where a declared validation established it (geistlib#286).
+ * At which probability: geistr_decide_exit_threshold. */
 bool geistr_decide_early_exit_default(geistr_decision_profile profile);
 /* A model given by path (#285): its SHA-256 from the receipt geistr pull or a
  * catalog check left next to it (<dir>/.verified/<sha256>, bound to the

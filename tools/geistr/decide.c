@@ -213,6 +213,8 @@ static int load(struct loaded *l, const char *model, const char *config_file, co
             a->threshold = geistr_decide_threshold(l->policy->profile);
         if (!a->max_tokens)
             a->max_tokens = geistr_decide_max_tokens(l->policy->profile);
+        if (a->exit_threshold < 0)
+            a->exit_threshold = geistr_decide_exit_threshold(l->policy->profile);
         if (a->escalate && !strcmp(a->escalate, "chat") && a->threshold > 0)
             context = 4096 + a->max_tokens; /* the prompt and the answer, thinking included */
     }
@@ -286,8 +288,9 @@ struct early_exit {
 
 bool geistr_decide_early_exit_default(geistr_decision_profile profile) {
     /* geistlib#286 validated it on Bonsai 2 27B PQ2_0 only (3,500 held-out
-     * MMLU questions, cap 8192): every other model reasons to the end unless
-     * asked. A new entry needs its own declared validation. */
+     * MMLU questions, cap 8192, at 0.8; geistlib#467 then 0.9 on 3,000, the
+     * profile's geistr_decide_exit_threshold): every other model reasons to
+     * the end unless asked. A new entry needs its own declared validation. */
     return profile == GEISTR_DECISION_BONSAI2_27B_PQ2;
 }
 
@@ -391,8 +394,10 @@ static void show_table(const geistr_decision_request *r, const double *probabili
 
 /* geistr decide's defaults that a verified profile carries (#288,
  * src/decision_profile.c): the threshold below which it escalates, 0 (never)
- * without one, and the chat escalation's cap, 4096 without one. Only Bonsai 2
- * 27B has its own: 0.78 (geistlib#204) and 8192 (geistlib#286). */
+ * without one, the chat escalation's cap, 4096 without one, and the
+ * probability at which early exit ends the chat answer, 0.8 without one
+ * (geistlib#236). Only Bonsai 2 27B has its own: 0.78 (geistlib#204), 8192
+ * (geistlib#286) and 0.9 (geistlib#467). */
 double geistr_decide_threshold(geistr_decision_profile profile) {
     const struct decision_profile *p = decision_profile_get(profile);
     return p ? p->decide_threshold : 0;
@@ -400,6 +405,10 @@ double geistr_decide_threshold(geistr_decision_profile profile) {
 uint32_t geistr_decide_max_tokens(geistr_decision_profile profile) {
     const struct decision_profile *p = decision_profile_get(profile);
     return p && p->decide_max_tokens ? p->decide_max_tokens : 4096;
+}
+double geistr_decide_exit_threshold(geistr_decision_profile profile) {
+    const struct decision_profile *p = decision_profile_get(profile);
+    return p && p->decide_exit_threshold > 0 ? p->decide_exit_threshold : 0.8;
 }
 
 /* A removed option (#288), still accepted for one release. */
@@ -415,7 +424,7 @@ static bool probability(const char *value, bool one, double *out) { /* (0, 1), o
 int geistr_decide_parse(size_t argc, const char *const *argv, geistr_decide_args *a) {
     *a = (geistr_decide_args){.escalate = "chat", .processor = GEISTR_PROCESSOR_AUTO, .mode = GEISTR_DECISION_DEFAULT,
                               .threshold = -1, .temperature = 1, .early_exit = -1,
-                              .probe_interval = 128, .exit_threshold = 0.8}; /* geistlib#236, #286 */
+                              .probe_interval = 128, .exit_threshold = -1}; /* geistlib#236, #286 */
     enum : unsigned {
         QUESTION = 1, CONTEXT = 2, CONFIG = 4, CATALOG = 8, MODELS = 16, PROFILE = 32, PROCESSOR = 64, MODE = 128,
         THRESHOLD = 256, ESCALATE = 512, TEMPERATURE = 1024, MAX_TOKENS = 2048, EARLY_EXIT = 4096,
@@ -589,8 +598,7 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
     const geistr_decision_option *options = a.options;
     const bool to_chat = a.escalate && !strcmp(a.escalate, "chat");
     const char *question = a.question, *escalate = a.escalate;
-    struct early_exit ee = {.required = a.early_exit == 1, .interval = a.probe_interval,
-                            .threshold = a.exit_threshold, .set = GEISTR_INVALID,
+    struct early_exit ee = {.required = a.early_exit == 1, .interval = a.probe_interval, .set = GEISTR_INVALID,
                             .result = {.size = sizeof(geistr_probe_result), .exit_option = -1}};
     char *owned_question = nullptr;
     size_t question_len = question ? strnlen(question, GEISTR_DECISION_MAX_QUESTION + 1) : 0;
@@ -636,6 +644,7 @@ int geistr_decide_command(size_t argc, const char *const *argv, const geistr_dec
     code = 1;
     const geistr_decision_policy *policy = loaded.policy;
     const double threshold = a.threshold; /* the profile's unless given (#288), resolved by load */
+    ee.threshold = a.exit_threshold;      /* likewise (geistlib#467) */
     if (to_chat) /* the profile's default unless asked (geistlib#286) */
         ee.enabled = a.early_exit < 0 ? geistr_decide_early_exit_default(policy->profile) : a.early_exit == 1;
     geistr_model *model = loaded.model;

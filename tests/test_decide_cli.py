@@ -199,15 +199,22 @@ def options(binary):
         return json.loads(out.stdout)
     short = ['Q?', 'yes', 'no']
     # Without options, what the verified profile carries (src/decision_profile.c): Bonsai 2 27B escalates to chat
-    # below 0.78 (geistlib#204) with a cap of 8192 and early exit at 0.8 every 128 tokens (geistlib#286). Every
-    # other model, verified (Gemma 4) or not, has threshold 0: the direct answer, never an escalation; its chat
-    # cap, should --threshold ask for one, is 4096.
-    for profile, threshold, cap in [('none', 0, 4096), ('gemma4-e2b-q4-v1', 0, 4096),
-                                    ('bonsai2-27b-pq2-v1', 0.78, 8192)]:
+    # below 0.78 (geistlib#204) with a cap of 8192 and early exit (geistlib#286) at 0.9 (geistlib#467) every 128
+    # tokens. Every other model, verified (Gemma 4) or not, has threshold 0: the direct answer, never an
+    # escalation; its chat cap, should --threshold ask for one, is 4096, and its early exit, should
+    # --early-exit ask for it, is at 0.8 (geistlib#236).
+    for profile, threshold, cap, exit_at in [('none', 0, 4096, 0.8), ('gemma4-e2b-q4-v1', 0, 4096, 0.8),
+                                             ('bonsai2-27b-pq2-v1', 0.78, 8192, 0.9)]:
         assert parsed(profile, *short) == {
             'threshold': threshold, 'escalate': 'chat', 'early_exit': profile == 'bonsai2-27b-pq2-v1',
-            'probe_interval': 128, 'exit_threshold': 0.8, 'max_tokens': cap, 'question': 'Q?',
+            'probe_interval': 128, 'exit_threshold': exit_at, 'max_tokens': cap, 'question': 'Q?',
             'question_file': '', 'options': 2}, profile
+        # --early-exit without P keeps the profile's; P, also from the removed --exit-threshold, replaces it
+        assert parsed(profile, *short, '--early-exit')['exit_threshold'] == exit_at, profile
+        for given in ['0.8', '0.9', '0.65']:
+            assert parsed(profile, *short, '--early-exit=' + given)['exit_threshold'] == float(given), profile
+            assert parsed(profile, *short, '--exit-threshold', given,
+                          warns='--early-exit=P')['exit_threshold'] == float(given), profile
     bonsai = 'bonsai2-27b-pq2-v1'
     assert parsed(bonsai, *short, '--escalate', 'chat') == parsed(bonsai, *short)  # the default, spelled out
     # --no-escalate: below the threshold exit 3 (what no --escalate did); no chat, so no early exit
@@ -307,8 +314,10 @@ def main():
     # (Bonsai 2 27B); every other model, verified or not, reasons to the end unless asked.
     defaults = subprocess.run([str(binary), 'early-exit-default'], capture_output=True, timeout=20)
     assert defaults.returncode == 0, defaults
-    rule = dict(line.split() for line in defaults.stdout.decode().splitlines())
-    assert rule.pop('bonsai2-27b-pq2-v1') == '1' and rule and set(rule.values()) == {'0'}, defaults.stdout
+    rule = {name: (on, at) for name, on, at in map(str.split, defaults.stdout.decode().splitlines())}
+    # on, and at 0.9 (geistlib#467), for Bonsai 2 27B only; elsewhere off, and at 0.8 when asked for
+    assert rule.pop('bonsai2-27b-pq2-v1') == ('1', '0.9') and rule and set(rule.values()) == {('0', '0.8')}, \
+        defaults.stdout
     for extra in [['--early-exit'], ['--no-early-exit'], ['--early-exit=0.9'], ['--early-exit', '--exit-threshold', '0.9'],
                   ['--probe-interval', '64'], ['--exit-threshold', '0.9'], ['--early-exit=0.5', '--probe-interval', '64']]:
         call(binary, chat + extra, 1)
